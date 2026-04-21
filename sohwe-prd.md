@@ -225,7 +225,7 @@ Grouped by release phase (see [Release Plan](#12-release-plan) for timing).
 ### 9.3 Phase 3 — Stateful Apps
 
 - As a **developer**, I want to mount a persistent volume so my app's data survives redeploys.
-- As a **developer**, I want to store environment variables securely, so credentials are encrypted at rest and never visible in logs or UI after being set.
+- As a **developer**, I want to **view and edit** environment variables in the dashboard (similar to Railway or Vercel)—with optional show/hide for values—so I can manage configuration without using the CLI, while knowing values remain **encrypted at rest** and are **never written to build logs, runtime logs, or public responses**.
 - As the **owner**, I want to cap memory and CPU per app, so one runaway container can't take down the entire server.
 
 ### 9.4 Phase 4 — Observability
@@ -268,7 +268,7 @@ Each requirement is tagged with `[P<n>]` for the phase in which it must ship.
 - `[P2]` Configure build mode (`auto` / `dockerfile` / `nixpacks`) per app.
 - `[P2]` Override build command and start command.
 - `[P2]` Attach a custom domain with automatic Let's Encrypt certificate.
-- `[P3]` Configure environment variables (encrypted at rest).
+- `[P3]` Configure environment variables: **encrypted at rest** (e.g. AES-256-GCM); **list, view, add, edit, and remove** key/value pairs in the dashboard for **authorized** org members (owner/admin per RBAC); values may use a **reveal/mask** pattern in the UI; API returns decrypted values **only** to authenticated, authorized callers on dedicated env endpoints—not embedded in generic deployment payloads.
 - `[P3]` Configure persistent volumes (mount path + optional size hint).
 - `[P3]` Configure resource limits (memory MB, CPU).
 - `[P5]` Configure a tracked branch and "auto-deploy on push" toggle.
@@ -346,6 +346,8 @@ Each requirement is tagged with `[P<n>]` for the phase in which it must ship.
 ### 11.3 Security
 
 - All secrets (env vars, tokens, webhook secrets) encrypted at rest with AES-256-GCM.
+- Environment variable **values** are decrypted **only** server-side for (1) authorized dashboard/API access and (2) injecting into user containers at deploy/start. They must **never** appear in build logs, aggregated audit log lines, error traces, or responses to unauthenticated clients.
+- **Audit trail** records env changes (who, which app, when, which keys touched) **without** storing or displaying secret values in audit entries.
 - Passwords hashed with Argon2id (64 MB memory, 3 iterations minimum).
 - Sessions stored server-side, HttpOnly + SameSite=Lax cookies, no JWTs in browser.
 - Rate limiting on login (5 attempts / minute / IP) and webhook endpoints.
