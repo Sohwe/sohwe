@@ -1,0 +1,35 @@
+{
+    "name": "@sohwe/api",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "scripts": {
+      "dev": "tsx watch src/index.ts",
+      "build": "tsc",
+      "start": "node dist/index.js",
+      "typecheck": "tsc --noEmit"
+    },
+    "dependencies": {
+      "@sohwe/db": "workspace:*",
+      "@sohwe/types": "workspace:*",
+      "@fastify/cookie": "^9.3.0",
+      "@fastify/cors": "^9.0.0",
+      "@fastify/sensible": "^5.6.0",
+      "argon2": "^0.40.0",
+      "bullmq": "^5.8.0",
+      "dockerode": "^4.0.2",
+      "dotenv": "^16.4.0",
+      "fastify": "^4.28.0",
+      "fastify-type-provider-zod": "^2.0.0",
+      "zod": "^3.23.0"
+    },
+    "devDependencies": {
+      "@types/dockerode": "^3.3.29",
+      "@types/node": "^24.0.0",
+      "tsx": "^4.15.0",
+      "typescript": "^5.5.0"
+    },
+    "engines": {
+      "node": ">=24"
+    }
+  }

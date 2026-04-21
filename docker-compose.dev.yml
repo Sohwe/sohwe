@@ -1,0 +1,52 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: sohwe-db-dev
+    environment:
+      POSTGRES_DB: sohwe_dev
+      POSTGRES_USER: sohwe
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      # Without -d, pg_isready defaults to a DB named like the user ("sohwe"), which we don't create.
+      test: ["CMD-SHELL", "pg_isready -U sohwe -d sohwe_dev"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: sohwe-redis-dev
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  traefik:
+    image: traefik:v3.1
+    container_name: sohwe-traefik-dev
+    command:
+      - --api.insecure=true
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+    ports:
+      - "80:80"
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - sohwe_proxy
+
+networks:
+  sohwe_proxy:
+    name: sohwe_proxy
+
+volumes:
+  postgres_data:

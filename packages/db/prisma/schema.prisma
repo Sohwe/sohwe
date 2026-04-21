@@ -1,0 +1,98 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Organization {
+  id           String        @id @default(uuid())
+  name         String
+  slug         String        @unique
+  createdAt    DateTime      @default(now()) @map("created_at")
+  users        User[]
+  applications Application[]
+
+  @@map("organizations")
+}
+
+model User {
+  id             String       @id @default(uuid())
+  email          String       @unique
+  passwordHash   String       @map("password_hash")
+  name           String?
+  role           String       @default("owner") // owner | admin | member
+  organizationId String       @map("organization_id")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdAt      DateTime     @default(now()) @map("created_at")
+  sessions       Session[]
+
+  @@map("users")
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("sessions")
+}
+
+model Application {
+  id                String       @id @default(uuid())
+  organizationId    String       @map("organization_id")
+  organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name              String
+  slug              String
+  gitRepo           String       @map("git_repository")
+  gitBranch         String       @default("main") @map("git_branch")
+  buildMode         String       @default("auto") @map("build_mode") // auto | dockerfile | nixpacks
+  buildCmd          String?      @map("build_command")
+  startCmd          String?      @map("start_command")
+  port              Int          @default(3000)
+  domain            String?
+  envVarsEncrypted  Bytes?       @map("env_vars_encrypted")
+  memoryLimitMb     Int?         @map("memory_limit_mb")
+  cpuLimit          Float?       @map("cpu_limit")
+  status            String       @default("idle") // idle | deploying | running | crashed | stopped
+  createdAt         DateTime     @default(now()) @map("created_at")
+  updatedAt         DateTime     @updatedAt @map("updated_at")
+  deployments       Deployment[]
+  volumes           Volume[]
+
+  @@unique([organizationId, slug])
+  @@map("applications")
+}
+
+model Deployment {
+  id            String      @id @default(uuid())
+  applicationId String      @map("application_id")
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  commitSha     String?     @map("commit_sha")
+  imageTag      String?     @map("image_tag")
+  status        String      @default("pending") // pending | building | running | success | failed | cancelled
+  buildLogs     String?     @map("build_logs") @db.Text
+  errorMessage  String?     @map("error_message") @db.Text
+  startedAt     DateTime?   @map("started_at")
+  finishedAt    DateTime?   @map("finished_at")
+  createdAt     DateTime    @default(now()) @map("created_at")
+
+  @@index([applicationId, createdAt])
+  @@map("deployments")
+}
+
+model Volume {
+  id            String      @id @default(uuid())
+  applicationId String      @map("application_id")
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  mountPath     String      @map("mount_path")
+  sizeBytes     BigInt?     @map("size_bytes")
+  createdAt     DateTime    @default(now()) @map("created_at")
+
+  @@unique([applicationId, mountPath])
+  @@map("volumes")
+}
