@@ -73,6 +73,7 @@ model Deployment {
   applicationId String      @map("application_id")
   application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
   commitSha     String?     @map("commit_sha")
+  commitMessage String?     @map("commit_message") @db.Text
   imageTag      String?     @map("image_tag")
   status        String      @default("pending") // pending | building | running | success | failed | cancelled
   buildLogs     String?     @map("build_logs") @db.Text

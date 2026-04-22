@@ -14,6 +14,8 @@ import {
   FirstRunSetupSchema,
   LoginSchema
 } from "@sohwe/types";
+import { registerAppFilesystemRoutes } from "./routes/app-filesystem";
+import { registerApplicationRoutes } from "./routes/applications";
 
 const app = Fastify({ logger: true }).withTypeProvider<ZodTypeProvider>();
 app.setValidatorCompiler(validatorCompiler);
@@ -128,6 +130,9 @@ app.get("/api/me", async (req, reply) => {
     }
   };
 });
+
+await registerApplicationRoutes(app);
+await registerAppFilesystemRoutes(app);
 
 const port = Number(process.env.PORT ?? 3001);
 await app.listen({ port, host: "0.0.0.0" });

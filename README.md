@@ -6,7 +6,7 @@ This repository is a **pnpm + Turborepo** monorepo. The detailed bootstrap and p
 
 ## Current status
 
-**Phase 0 (foundation)** is in place: monorepo, Postgres schema (Prisma), Fastify API with first-run setup and session auth, a minimal dashboard (setup → login → empty shell), and Docker Compose for Postgres, Redis, and Traefik. Deploy pipelines and the worker arrive in later phases.
+**v0.1.0** covers **Phase 0 (foundation)** and **Phase 1 (first deploy)** on a single machine: the worker, BullMQ deploy jobs, `docker build` + container lifecycle, Traefik routing, and a dashboard where you can create apps, run deploys with live build logs, **browse past deployments** (short id, **Current** on the live build, status, branch, commit line, Log, **Roll back**), and **browse files** in the running container. See [`CHANGELOG.md`](./CHANGELOG.md) for details. Later phases (Nixpacks, git-push deploys, and more) are in [`sohwe-getting-started.md`](./sohwe-getting-started.md).
 
 ## Requirements
 
@@ -63,10 +63,10 @@ Use strong, unique values for secrets in any shared or deployed environment. The
 | --- | --- |
 | `apps/api` | Fastify HTTP API |
 | `apps/dashboard` | Vite + React control plane UI |
-| `apps/worker` | Worker placeholder (used in later phases) |
+| `apps/worker` | BullMQ consumer: git clone, build, dockerode, Traefik labels, log pub/sub |
 | `packages/db` | Prisma schema and client |
 | `packages/types` | Shared Zod schemas and types |
-| `packages/queue` | Queue definitions placeholder (later phases) |
+| `packages/queue` | BullMQ deploy job types and queue config (API + worker) |
 | `docker-compose.dev.yml` | Local Postgres, Redis, Traefik |
 
 ## Scripts

@@ -4,6 +4,8 @@ An open-source, self-hostable deployment platform — a spiritual cousin to Cool
 
 Licensed **AGPL-3.0** (open-core friendly, prevents closed-source forks).
 
+**Release notes:** [CHANGELOG.md](./CHANGELOG.md) (e.g. **v0.1.0** — Phase 0 + Phase 1 on `main`).
+
 ---
 
 ## Table of Contents
@@ -48,6 +50,7 @@ Sohwe lets you:
 - Persistent volumes (simple, one mount per path)
 - Encrypted environment variables
 - Live log tail + build logs + basic CPU/memory
+- **Dashboard file browser** for the **running** app container (list directories, preview files) so users can inspect the filesystem without SSH or CLI
 - Single owner user at setup, invitable members afterwards
 
 ### Explicitly deferred to v2+
@@ -73,7 +76,7 @@ Sohwe lets you:
 | **4. Observability** | Live logs, build logs, CPU/mem, basic alerts | 2 weeks |
 | **4.5. Portable Bundles** | Config export/restore, S3-compatible destinations, scheduled exports | 1 week |
 | **5. Git-Push Deploys** | GitHub App, webhooks, auto-deploy | 1 week |
-| **6. Multi-User** | Invites, roles, org scoping UI | 1 week |
+| **6. Multi-User** | Invites, roles, org scoping UI, audit log; optional **instance host** file browser (owner/admin, allowlisted paths — distinct from v0.1 **container** Browse files) | 1 week |
 
 Total: roughly 2 months of focused side-project effort to a public-beta-worthy v1.
 
@@ -188,6 +191,8 @@ sohwe/
 | **Container control** | dockerode (Node Docker SDK) | Direct Docker Engine API access |
 | **Log streaming** | Server-Sent Events + Redis pub/sub | Simpler than WebSockets for one-way streams |
 | **Secrets** | AES-256-GCM with `SOHWE_ENCRYPTION_KEY` | Env vars encrypted at rest |
+
+Nixpacks produces a **container image** from the repo checkout; it does not require a `Dockerfile` in the app’s repository unless the user opts into Dockerfile build mode.
 
 ### Rejected options (for the record)
 
@@ -892,6 +897,8 @@ You should see Turborepo launch the API (`:3001`) and dashboard (`:3000`) in par
 
 ### Phase 0 Checklist
 
+Use this to verify a **new clone** or clean machine. (The `main` branch in this repository already implements the items below; your install must still pass them end-to-end.)
+
 - [ ] Monorepo builds with `pnpm install` + `pnpm build`
 - [ ] `docker compose` brings up Postgres + Redis + Traefik
 - [ ] `/health` on the API returns `ok`
@@ -927,6 +934,8 @@ Goal: the user can paste a public Git repo URL that contains a Dockerfile, hit *
 6. **Dashboard**:
    - Create-app form
    - App detail page with Deploy button and a live log panel (EventSource API)
+   - **Deployments** list (one target environment in v1): each row shows a short deployment id, a **Current** badge on the deployment that is running production traffic, build status and duration, branch, a single-line **git SHA + commit subject**, relative time, **Log** (SSE to that deployment’s build logs), and **Roll back** on older successful rows
+   - **Browse files** (v0.1.0): read-only list + text/binary preview of the **running** container’s filesystem (API normalizes paths; no `..`). Same UI later applies under `mountPath` when Phase 3 volumes exist
 
 ### Key Design Decisions for Phase 1
 
@@ -937,8 +946,12 @@ Goal: the user can paste a public Git repo URL that contains a Dockerfile, hit *
 
 ### Phase 1 Checklist
 
+Run these on your environment after Phase 0 is green. **v0.1.0** on `main` is intended to satisfy them (Dockerfile-based deploy, streaming logs, Traefik on `sohwe.localhost`, stop/replace on redeploy, delete cleans up; see [CHANGELOG.md](./CHANGELOG.md) for extras such as **rollback** and a read-only **file browser** for the running container).
+
 - [ ] Create an application via the dashboard
 - [ ] Click Deploy, see live build logs
+- [ ] **Deployments** table shows the new row; the successful live deployment has the **Current** badge; you can open **Log** and use **Roll back** to an older successful build
+- [ ] With the app **running**, **Browse files** lists directories and previews a file (no SSH)
 - [ ] App is reachable at `<slug>.sohwe.localhost` via Traefik
 - [ ] Second deploy replaces the first container cleanly
 - [ ] Deleting the app removes the container and DB row
@@ -965,7 +978,9 @@ Goal: users can deploy Next.js, Python, Go, Rust, static sites — without writi
 
 ## Phase 3 — Stateful Apps
 
-Goal: apps can store data that survives redeploys.
+Goal: apps can store data that survives redeploys, with secrets and limits managed in the dashboard.
+
+**Already shipped in v0.1.0 (Phase 1):** read-only **Browse files** for the **running** container (list + preview). Phase 3 does *not* re-build that feature—it adds **named volumes** and then you use the same browser under `mountPath` to inspect persisted data.
 
 - Add **persistent volumes**: one named Docker volume per `Volume` row, mounted at `mountPath` on container start. Volume name convention: `sohwe_app_<app-id>_<volume-id>`.
 - **Encrypted env vars**: encrypt with AES-256-GCM using `SOHWE_ENCRYPTION_KEY`. Store ciphertext in `envVarsEncrypted`. Decrypt only when composing the `docker run` config.
@@ -977,6 +992,7 @@ Goal: apps can store data that survives redeploys.
 - [ ] Redeploy an app and verify data in its volume persists
 - [ ] Env vars round-trip correctly and aren't readable as plaintext in the DB
 - [ ] Setting a memory limit actually caps the container (verify with `docker stats`)
+- [ ] **Browse files** to a path under a **mounted volume** and confirm the same data is visible after redeploy
 
 ---
 
@@ -1317,18 +1333,20 @@ Goal: push to the tracked branch → it deploys.
 
 ## Phase 6 — Multi-User
 
-Goal: the owner can invite teammates.
+Goal: the owner can invite teammates, and the platform can safely offer **power tools** that need strong roles and audit (see **Instance host** below).
 
 - **Invitations**: `Invitation` table (email, role, token, expiresAt). Send via email (Resend / Postmark / SMTP).
 - **Roles**: `owner` / `admin` / `member`. Enforce in API with a `requireRole(...)` plugin.
 - **Org switcher**: even though users currently belong to one org, ship the UI affordance — makes multi-org work trivial later.
 - **Audit log**: record who did what (created app, deployed, deleted, rotated secret). Essential for any commercial product.
+- **Instance host file access** (self-hosted, **owner** / **admin** only): browse **paths on the Sohwe server** (outside any app container), distinct from the v0.1.0 **Browse files** feature which only lists the **running container** filesystem. Ship with a **strict allowlist** of root paths (e.g. Sohwe data dir, configured backup locations — never “whole disk” for members), `..` rejected, and **every list/read** attributed in the audit log. Members have no access. This is optional complexity; skip in early Phase 6 if you need to ship invites first, but keep the security model here when you add it.
 
 ### Phase 6 Checklist
 
 - [ ] Owner can invite a member by email
 - [ ] Member can log in and see the org's apps
 - [ ] Member cannot delete the org or change billing (future)
+- [ ] **Instance host** (optional): allowlisted path browse for owner/admin only; members denied; actions audited
 
 ---
 

@@ -1,5 +1,5 @@
 {
-  "name": "@sohwe/api",
+  "name": "@sohwe/worker",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -10,25 +10,16 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@fastify/cookie": "^9.3.0",
-    "@fastify/cors": "^9.0.0",
-    "@fastify/sensible": "^5.6.0",
+    "@sohwe/builder": "workspace:*",
     "@sohwe/db": "workspace:*",
     "@sohwe/queue": "workspace:*",
-    "@sohwe/types": "workspace:*",
-    "argon2": "^0.40.0",
     "dockerode": "^4.0.2",
     "dotenv": "^16.4.0",
-    "fastify": "^4.28.0",
-    "fastify-type-provider-zod": "^2.0.0",
-    "ioredis": "^5.4.0",
-    "tar-stream": "^3.1.8",
-    "zod": "^3.23.0"
+    "ioredis": "^5.4.0"
   },
   "devDependencies": {
     "@types/dockerode": "^3.3.29",
     "@types/node": "^24.0.0",
-    "@types/tar-stream": "^3.1.4",
     "tsx": "^4.15.0",
     "typescript": "^5.5.0"
   },

@@ -225,6 +225,7 @@ Grouped by release phase (see [Release Plan](#12-release-plan) for timing).
 ### 9.3 Phase 3 — Stateful Apps
 
 - As a **developer**, I want to mount a persistent volume so my app's data survives redeploys.
+- As a **developer**, I want to **browse files inside my running app** from the dashboard (folders, file preview) **without SSH or shell commands**, so I can verify deployed layout, config, and volume-mounted data the same way I would on Railway or a cloud console.
 - As a **developer**, I want to **view and edit** environment variables in the dashboard (similar to Railway or Vercel)—with optional show/hide for values—so I can manage configuration without using the CLI, while knowing values remain **encrypted at rest** and are **never written to build logs, runtime logs, or public responses**.
 - As the **owner**, I want to cap memory and CPU per app, so one runaway container can't take down the entire server.
 
@@ -246,6 +247,7 @@ Grouped by release phase (see [Release Plan](#12-release-plan) for timing).
 - As the **owner**, I want to invite teammates by email, so my cofounder can deploy without sharing my password.
 - As an **admin**, I want to see every action someone took (who deployed what, when), so I have an audit trail.
 - As a **member**, I want to log in and see the apps I'm authorized for, so I can do my work without owner-level powers.
+- As an **owner** or **admin** on a **self-hosted** instance, I want optional, **allowlisted** read-only access to **host filesystem paths** (e.g. Sohwe data, backup locations) for troubleshooting, separate from the **in-container** file browser, so I can debug the server without SSH—while **members** have no such access and every access is **audited**.
 
 ### 9.7 Phase 4.5 — Portable Bundles
 
@@ -286,12 +288,14 @@ Each requirement is tagged with `[P<n>]` for the phase in which it must ship.
 - `[P2]` Attach a custom domain with automatic Let's Encrypt certificate.
 - `[P3]` Configure environment variables: **encrypted at rest** (e.g. AES-256-GCM); **list, view, add, edit, and remove** key/value pairs in the dashboard for **authorized** org members (owner/admin per RBAC); values may use a **reveal/mask** pattern in the UI; API returns decrypted values **only** to authenticated, authorized callers on dedicated env endpoints—not embedded in generic deployment payloads.
 - `[P3]` Configure persistent volumes (mount path + optional size hint).
+- `[P3]` **Container file browser** in the dashboard: for each application, when a container is **running**, authorized org members can **list directories** and **preview file contents** (read-only, size-limited) under absolute paths inside that container. Requests are scoped to the app’s managed container (not arbitrary host paths); paths must be normalized and safe (e.g. reject `..`). **v1** is inspection-only—no upload, rename, or delete via this UI unless promoted in a later phase.
 - `[P3]` Configure resource limits (memory MB, CPU).
 - `[P5]` Configure a tracked branch and "auto-deploy on push" toggle.
 
 ### 10.3 Deployments
 
 - `[P1]` Create a new deployment linked to an application.
+- `[P1]` Per-app **deployment list** in the dashboard: short id, **Current** marker on the active successful build, status and duration, branch, commit identity (e.g. SHA + subject), links or actions to open build logs and to roll back to a prior successful image. (Single live target per app in v1—no multi-environment column.)
 - `[P1]` Stream build logs live via SSE.
 - `[P1]` Persist build logs for historical viewing.
 - `[P1]` Mark deployments `pending` / `building` / `success` / `failed`.
@@ -332,6 +336,7 @@ Each requirement is tagged with `[P<n>]` for the phase in which it must ship.
 - `[P6]` Invite members by email with role (`admin` / `member`).
 - `[P6]` Revoke or change member roles.
 - `[P6]` Audit log of mutating actions.
+- `[P6]` (Self-hosted) **Instance host** read-only file browser: **owner** and **admin** only; **allowlisted** root paths; path normalization (no `..` escapes); no access for **member**; list/read operations recorded in the audit log. Distinct from `[P3]` in-container file browser.
 
 ### 10.8 API
 
@@ -571,3 +576,5 @@ Items to resolve before or during v1.
 | --- | --- | --- |
 | 2026-04-21 | Initial draft | — |
 | 2026-04-22 | Added §10.9 Portable Bundles (Phase 4.5 config mode, Phase 5.5 full-state mode). Updated §11.6 Portability, added §9.7 / §9.8 user stories, inserted M4.5 / M5.5 milestones in §12.1, resolved Open Question #5, added Bundle / Backup Destination / Config Mode / Full Mode glossary entries. | — |
+| 2026-04-22 | §10.3 Deployments: documented per-app deployment list UI (Current marker, log/rollback actions; single live target, no multi-environment column in v1). | — |
+| 2026-04-22 | §9.6 and §10.7: optional self-hosted **instance host** file browser (owner/admin, allowlisted paths, audited) scoped to **Phase 6**; distinct from in-container file browser. | — |
