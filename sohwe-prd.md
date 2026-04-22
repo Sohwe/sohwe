@@ -247,6 +247,22 @@ Grouped by release phase (see [Release Plan](#12-release-plan) for timing).
 - As an **admin**, I want to see every action someone took (who deployed what, when), so I have an audit trail.
 - As a **member**, I want to log in and see the apps I'm authorized for, so I can do my work without owner-level powers.
 
+### 9.7 Phase 4.5 — Portable Bundles
+
+- As the **owner**, I want to export all of my apps' configuration (git repo, branch, build settings, domains, resource limits, encrypted env vars) as a single signed bundle file, so I can migrate to a new server without recreating every app by hand.
+- As the **owner**, I want to configure a backup destination (local path, S3, or any S3-compatible bucket like R2, B2, or MinIO) and push bundles there from the dashboard or CLI, so my configuration survives a host loss.
+- As the **owner**, I want to schedule automatic config bundle exports (daily/weekly), so I always have a recent snapshot without thinking about it.
+- As the **owner**, I want to restore an instance from a bundle on a fresh Sohwe host with one command, so disaster recovery is measured in minutes, not hours.
+- As the **owner**, I want bundle encryption tied to a passphrase I control (not the source instance's key), so I can safely move bundles between hosts without sharing master keys.
+- As the **owner**, I want restore to detect slug collisions and let me choose rename / overwrite / skip per app, so I can merge a bundle into an existing instance safely.
+- As the **owner**, I want bundles to include a mirror of my (private) Git repos optionally, so I can recover even if the upstream repo host is unavailable.
+
+### 9.8 Phase 5.5 — Full State Backup (v1.x)
+
+- As the **owner**, I want full backups that include the Postgres database and persistent volume contents, so I can restore the *exact* running state — not just configuration.
+- As the **owner**, I want backups to be incremental where possible, so daily snapshots don't cost me gigabytes each.
+- As the **owner**, I want a documented restore drill, so I know my backups actually work before I need them.
+
 ---
 
 ## 10. Functional Requirements
@@ -324,6 +340,40 @@ Each requirement is tagged with `[P<n>]` for the phase in which it must ship.
 - `[P2]` Publicly documented API (OpenAPI spec generated from schemas).
 - `[P5]` API-key authentication alongside sessions (for CI use cases).
 
+### 10.9 Portable Bundles (Backup, Export & Migration)
+
+A **bundle** is a single, signed, compressed archive that captures a Sohwe instance's state in a host-independent form so it can be moved to another Sohwe instance — either for migration, disaster recovery, or templating.
+
+Two modes ship on different timelines:
+
+- **Config mode** (`P4.5`, v1): app metadata + encrypted secrets + optional git mirrors. The target instance rebuilds from Git.
+- **Full mode** (`P5.5`, v1.x): config mode + Postgres dump + persistent volume contents + (optional) built images.
+
+Functional requirements:
+
+- `[P4.5]` Generate a config bundle (`sohwe bundle create --mode config`) containing: organization + all applications + deployment metadata + encrypted env vars (re-wrapped with a user-supplied passphrase, not the instance master key) + GitHub App references + webhook targets + volume *declarations* (mount paths and size hints, not contents).
+- `[P4.5]` Bundle format is a **zstd-compressed tar** with a top-level `manifest.json` describing schema version, instance id, creation timestamp, and a SHA-256 content hash for every file. Bundles are signed with an ed25519 key held by the source instance.
+- `[P4.5]` Per-app opt-in **git mirror mode**: `git clone --mirror` each tracked repo into the bundle so restore can proceed even if the upstream host is unreachable or the repo is private with credentials that no longer work.
+- `[P4.5]` Pluggable **backup destinations**: `local` (file path on host), `s3` (AWS S3 and any S3-compatible endpoint — Cloudflare R2, Backblaze B2, MinIO, Wasabi), with a storage-backend interface that allows GCS/WebDAV later. Destination credentials stored encrypted at rest with `SOHWE_ENCRYPTION_KEY`.
+- `[P4.5]` Scheduled exports with a simple cron-style UI (hourly / daily / weekly / custom cron). Retention policy (`keep last N` and/or `keep for N days`) per destination.
+- `[P4.5]` Restore command (`sohwe bundle restore --from <url> --mode config`) that: verifies signature + content hashes, prompts for the passphrase, recreates DB rows, re-encrypts secrets with the target instance's master key, and reports a summary (apps created / renamed / skipped).
+- `[P4.5]` Slug-collision policy on restore: `rename` (default), `overwrite`, or `skip`, selectable per app or globally.
+- `[P4.5]` Restore never auto-requests TLS certificates; it flags domains as "pending DNS" and waits for the operator to confirm DNS has been repointed.
+- `[P4.5]` Dashboard UI for: listing bundles across destinations, creating an ad-hoc bundle, downloading a bundle, configuring destinations, configuring schedules, and previewing a bundle's manifest before restore.
+- `[P4.5]` API endpoints: `POST /api/bundles` (create), `GET /api/bundles` (list), `GET /api/bundles/:id` (manifest + metadata), `POST /api/bundles/restore` (initiate restore), plus destination CRUD under `/api/backup-destinations`.
+- `[P4.5]` Bundle schema is **versioned** (`schemaVersion` in manifest); a newer Sohwe instance must be able to restore older bundles across at least one major version.
+- `[P5.5]` Full-state bundles additionally include: `pg_dump --format=custom` of the Sohwe database, per-volume `tar.zst` of contents (captured via a sidecar `alpine` container against each named volume), and optional `docker save` of built images for listed apps.
+- `[P5.5]` Per-volume hook hints so DB-style volumes can be dumped with the right tool (`pg_dump` / `mysqldump` / `redis-cli --rdb`) instead of raw-tarred while the app is running. Raw tar is the default fallback, with a brief (configurable) stop-and-snapshot window for consistency.
+- `[P5.5]` Incremental volume backups (content-addressable chunks) to avoid re-uploading unchanged data on daily runs.
+- `[P5.5]` Restore drill mode: a dry-run that validates the bundle end-to-end (signature, hashes, DB schema compatibility, volume extract to a temp path) without mutating the target instance.
+
+Security requirements for bundles (additive to §11.3):
+
+- Bundles **never** contain the source instance's master encryption key or session secret.
+- Env-var values are re-encrypted inside the bundle using a **passphrase-derived key** (Argon2id → AES-256-GCM); restore requires the passphrase.
+- Bundle creation and restore are **logged in the audit trail** (`P6`) with actor, destination, mode, and affected app IDs — but never secret values.
+- The signature over the manifest is verified **before** any side effects (file extraction, DB writes) during restore.
+
 ---
 
 ## 11. Non-Functional Requirements
@@ -373,7 +423,9 @@ Each requirement is tagged with `[P<n>]` for the phase in which it must ship.
 
 - Runs on any x86_64 or arm64 Linux host with Docker Engine 24+.
 - No dependency on a specific cloud provider's APIs.
-- One-command export of all application configs (for migration to another host).
+- One-command export of all application configs (for migration to another host) via **portable bundles** — see §10.9.
+- Config bundles are host-independent: a bundle created on one Sohwe instance must restore cleanly on any other Sohwe instance running the same or a newer schema version.
+- Built-in storage backends cover the common options (local disk, S3-compatible), so operators are not locked into a single provider for their own backups.
 
 ### 11.7 Usability
 
@@ -407,10 +459,12 @@ Each requirement is tagged with `[P<n>]` for the phase in which it must ship.
 | **M2 — Runtimes** | Phase 2 complete | Week 4 |
 | **M3 — Stateful** | Phase 3 complete | Week 5 |
 | **M4 — Observability** | Phase 4 complete | Week 7 |
-| **M5 — Git Push** | Phase 5 complete | Week 8 |
-| **M6 — Multi-user** | Phase 6 complete | Week 9 |
-| **v1.0-beta** | Public beta, all above shipped | Week 10 |
-| **v1.0** | GA after 4–6 weeks of beta stabilization | Week 16 |
+| **M4.5 — Portable Bundles** | Config-mode bundle export/restore, local + S3 destinations, scheduled exports | Week 8 |
+| **M5 — Git Push** | Phase 5 complete | Week 9 |
+| **M6 — Multi-user** | Phase 6 complete | Week 10 |
+| **v1.0-beta** | Public beta, all above shipped | Week 11 |
+| **v1.0** | GA after 4–6 weeks of beta stabilization | Week 17 |
+| **M5.5 — Full-state Backup (v1.x)** | Postgres + volume + image bundles, incremental volumes, restore drill | Post-GA |
 
 Timeline assumes one primary maintainer working focused side-project hours.
 
@@ -485,7 +539,7 @@ Items to resolve before or during v1.
 2. **Telemetry**: opt-in or opt-out? Recommended: opt-in at first, opt-out once trust is established. Decide before beta.
 3. **Buildpack fallback**: if Nixpacks fails, do we fall back to Paketo Buildpacks, or just surface the failure? (Recommend: surface failure, document manual Dockerfile path.)
 4. **Instance naming / slugs**: collision handling when two orgs want the same app slug. (Recommend: org-scoped slugs; global uniqueness not required.)
-5. **Backup story for v1**: do we ship a built-in backup/restore for the Sohwe instance DB and volumes, or document a manual `pg_dump` + `docker volume` process? (Recommend: documented manual process for v1; built-in for v1.x.)
+5. ~~**Backup story for v1**: do we ship a built-in backup/restore for the Sohwe instance DB and volumes, or document a manual `pg_dump` + `docker volume` process?~~ **Resolved (2026-04-22):** ship built-in **config-mode bundles** in v1 at Phase 4.5 (see §10.9) — covers app configs, encrypted env vars, optional git mirrors, and pluggable storage destinations (local, S3-compatible). **Full-state backup** (Postgres dump + volume contents + images) ships post-GA at Phase 5.5.
 6. **CLI tool**: ship a Sohwe CLI with v1 or defer? (Recommend: defer to v1.1. Dashboard + API cover the user stories.)
 7. **Branding**: logo, color palette, marketing site before or after Show HN?
 
@@ -504,6 +558,10 @@ Items to resolve before or during v1.
 | **Volume** | A Docker named volume mounted into an app container to persist data across redeploys. |
 | **SSE** | Server-Sent Events — one-way server-to-client streaming over HTTP; used for log tailing. |
 | **AGPL-3.0** | GNU Affero General Public License v3; copyleft license that extends to network-hosted services. |
+| **Bundle** | A signed, zstd-compressed tar archive containing a portable snapshot of a Sohwe instance's configuration (config mode) or full state (full mode). See §10.9. |
+| **Backup Destination** | A pluggable storage target for bundles — local path, S3, or any S3-compatible endpoint (R2, B2, MinIO, Wasabi). |
+| **Config Mode** | Bundle variant with app metadata + encrypted secrets + optional git mirrors. Restore rebuilds from Git. |
+| **Full Mode** | Bundle variant that also includes Postgres dump, volume contents, and optionally built images. |
 
 ---
 
@@ -512,3 +570,4 @@ Items to resolve before or during v1.
 | Date | Change | Author |
 | --- | --- | --- |
 | 2026-04-21 | Initial draft | — |
+| 2026-04-22 | Added §10.9 Portable Bundles (Phase 4.5 config mode, Phase 5.5 full-state mode). Updated §11.6 Portability, added §9.7 / §9.8 user stories, inserted M4.5 / M5.5 milestones in §12.1, resolved Open Question #5, added Bundle / Backup Destination / Config Mode / Full Mode glossary entries. | — |

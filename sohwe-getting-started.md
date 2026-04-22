@@ -18,12 +18,13 @@ Licensed **AGPL-3.0** (open-core friendly, prevents closed-source forks).
 8. [Phase 2 — Broad Runtime Support](#phase-2--broad-runtime-support)
 9. [Phase 3 — Stateful Apps](#phase-3--stateful-apps)
 10. [Phase 4 — Observability](#phase-4--observability)
-11. [Phase 5 — Git-Push Deploys](#phase-5--git-push-deploys)
-12. [Phase 6 — Multi-User](#phase-6--multi-user)
-13. [Cross-Cutting Concerns](#cross-cutting-concerns)
-14. [Development Workflow](#development-workflow)
-15. [Troubleshooting](#troubleshooting)
-16. [Resources](#resources)
+11. [Phase 4.5 — Portable Bundles](#phase-45--portable-bundles)
+12. [Phase 5 — Git-Push Deploys](#phase-5--git-push-deploys)
+13. [Phase 6 — Multi-User](#phase-6--multi-user)
+14. [Cross-Cutting Concerns](#cross-cutting-concerns)
+15. [Development Workflow](#development-workflow)
+16. [Troubleshooting](#troubleshooting)
+17. [Resources](#resources)
 
 ---
 
@@ -70,6 +71,7 @@ Sohwe lets you:
 | **2. Broad Runtimes** | Nixpacks, custom commands, custom domains | 1 week |
 | **3. Stateful Apps** | Volumes, encrypted env vars, resource limits | 1 week |
 | **4. Observability** | Live logs, build logs, CPU/mem, basic alerts | 2 weeks |
+| **4.5. Portable Bundles** | Config export/restore, S3-compatible destinations, scheduled exports | 1 week |
 | **5. Git-Push Deploys** | GitHub App, webhooks, auto-deploy | 1 week |
 | **6. Multi-User** | Invites, roles, org scoping UI | 1 week |
 
@@ -994,6 +996,303 @@ Goal: users can see what their apps are doing.
 - [ ] Last-deploy build logs visible
 - [ ] CPU / memory updating live per app
 - [ ] Crash alert fires to a configured webhook
+
+---
+
+## Phase 4.5 — Portable Bundles
+
+Goal: the owner can export everything that describes this instance's apps into a single, signed, encrypted archive, push it to S3 (or local disk), and restore it on a different Sohwe host with one command.
+
+This is the v1 scope of §10.9 in the PRD — **config mode only**. Full-state backups (Postgres dump + volume contents + images) are Phase 5.5, post-GA.
+
+### Concepts
+
+A **bundle** is a zstd-compressed tar with this shape:
+
+```
+sohwe-<instance-id>-<timestamp>.tar.zst
+├── manifest.json           # schema version, instance id, created_at, mode, file list + sha256
+├── manifest.sig            # ed25519 signature over manifest.json
+├── config/
+│   ├── organization.json
+│   ├── applications.json   # one entry per app: git repo, branch, build cfg, domain, limits
+│   ├── volumes.json        # declared mount paths + size hints (no contents in config mode)
+│   └── webhooks.json
+├── secrets/
+│   └── env.enc             # AES-256-GCM, key derived from passphrase via Argon2id
+├── repos/                  # optional git mirrors (per-app opt-in)
+│   └── <app-slug>.git.tar
+└── README.md               # human-readable summary
+```
+
+Key rules:
+
+- `manifest.json` is the source of truth. Restore refuses to start if any file's sha256 doesn't match.
+- The source instance's **master key is never in the bundle**. Env vars are re-encrypted with a passphrase the user provides at export time.
+- Bundles are **signed** with an ed25519 key held by the source instance; the public key is embedded in the manifest. Self-signed is fine — the signature proves the manifest wasn't tampered with in transit.
+
+### Data Model Additions
+
+Two new tables. Add to `packages/db/prisma/schema.prisma`:
+
+```prisma
+model BackupDestination {
+  id              String   @id @default(uuid())
+  organizationId  String   @map("organization_id")
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name            String
+  kind            String   // local | s3
+  configEncrypted Bytes    @map("config_encrypted") // endpoint, bucket, region, creds
+  createdAt       DateTime @default(now()) @map("created_at")
+  bundles         Bundle[]
+  schedules       BackupSchedule[]
+
+  @@map("backup_destinations")
+}
+
+model Bundle {
+  id              String   @id @default(uuid())
+  organizationId  String   @map("organization_id")
+  mode            String   // config | full
+  sizeBytes       BigInt   @map("size_bytes")
+  checksum        String
+  storageKey      String   @map("storage_key")
+  destinationId   String?  @map("destination_id")
+  destination     BackupDestination? @relation(fields: [destinationId], references: [id], onDelete: SetNull)
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@index([organizationId, createdAt])
+  @@map("bundles")
+}
+
+model BackupSchedule {
+  id            String   @id @default(uuid())
+  destinationId String   @map("destination_id")
+  destination   BackupDestination @relation(fields: [destinationId], references: [id], onDelete: Cascade)
+  cron          String   // e.g. "0 3 * * *"
+  mode          String   @default("config")
+  keepLast      Int?     @map("keep_last")
+  keepDays      Int?     @map("keep_days")
+  lastRunAt     DateTime? @map("last_run_at")
+  enabled       Boolean  @default(true)
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@map("backup_schedules")
+}
+```
+
+Don't forget the back-reference on `Organization`:
+
+```prisma
+model Organization {
+  // ... existing fields ...
+  backupDestinations BackupDestination[]
+  bundles            Bundle[]
+}
+```
+
+### The `@sohwe/bundler` Package
+
+Create a new workspace package: `packages/bundler/`. It owns bundle format, signing, crypto, and storage backends. Both the API (for UI-triggered exports) and a future `sohwe` CLI consume it.
+
+```
+packages/bundler/
+├── package.json
+├── src/
+│   ├── index.ts
+│   ├── manifest.ts        # schema, validation, hashing
+│   ├── sign.ts            # ed25519 sign/verify
+│   ├── crypto.ts          # passphrase → AES-256-GCM (Argon2id KDF)
+│   ├── create.ts          # build a bundle from the DB
+│   ├── restore.ts         # verify + apply a bundle to the DB
+│   └── storage/
+│       ├── index.ts       # Storage interface
+│       ├── local.ts       # file:// backend
+│       └── s3.ts          # @aws-sdk/client-s3, works for R2/B2/MinIO via endpoint override
+```
+
+Key dependencies:
+
+```bash
+pnpm --filter @sohwe/bundler add @aws-sdk/client-s3 @node-rs/argon2 tar zstd-napi
+```
+
+The `Storage` interface is tiny:
+
+```typescript
+export interface Storage {
+  put(key: string, body: Readable, size: number): Promise<void>;
+  get(key: string): Promise<Readable>;
+  head(key: string): Promise<{ size: number; etag?: string }>;
+  list(prefix: string): Promise<Array<{ key: string; size: number; lastModified: Date }>>;
+  delete(key: string): Promise<void>;
+}
+```
+
+### Passphrase-Derived Encryption
+
+Never reuse the instance master key inside a bundle. Instead:
+
+```typescript
+import { hash } from "@node-rs/argon2";
+import { createCipheriv, randomBytes } from "node:crypto";
+
+export async function deriveBundleKey(passphrase: string, salt: Buffer) {
+  const raw = await hash(passphrase, {
+    salt,
+    memoryCost: 65536,
+    timeCost: 3,
+    outputLen: 32,
+    algorithm: 2 // Argon2id
+  });
+  return Buffer.from(raw, "utf8").subarray(0, 32);
+}
+
+export async function encryptEnvPayload(plaintext: string, passphrase: string) {
+  const salt = randomBytes(16);
+  const iv = randomBytes(12);
+  const key = await deriveBundleKey(passphrase, salt);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const ct = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
+  return { salt, iv, tag: cipher.getAuthTag(), ciphertext: ct };
+}
+```
+
+The salt + iv + tag go into `manifest.json` alongside the Argon2 parameters. On restore, the same parameters reproduce the key from the passphrase the user types.
+
+### API Endpoints
+
+Add to the Fastify API:
+
+```
+POST   /api/bundles                    # create a bundle (body: { mode, destinationId?, passphrase, includeRepos? })
+GET    /api/bundles                    # list bundles (joins destinations)
+GET    /api/bundles/:id                # manifest + metadata (no secret values)
+GET    /api/bundles/:id/download       # stream bundle (local dest or presigned S3 URL)
+POST   /api/bundles/restore            # body: { source: { destinationId, key } | upload, passphrase, conflict: "rename"|"overwrite"|"skip" }
+
+POST   /api/backup-destinations        # create
+GET    /api/backup-destinations        # list
+DELETE /api/backup-destinations/:id
+
+POST   /api/backup-schedules           # create
+GET    /api/backup-schedules
+PATCH  /api/backup-schedules/:id
+DELETE /api/backup-schedules/:id
+```
+
+Bundle creation is a BullMQ job, not an inline request handler — it can take tens of seconds, especially with git mirrors enabled. Same pattern as deployments: enqueue, return 202 with a bundle id, stream progress via SSE on `/api/bundles/:id/logs`.
+
+### Worker: Creating a Bundle
+
+Job handler outline:
+
+1. Mark `Bundle.status = creating` (extend the model with a `status` column or a sibling job record).
+2. Open a streaming tar writer piped into a zstd encoder piped into the storage backend's `put()`.
+3. Write `config/*.json` from Prisma queries (filter by `organizationId`).
+4. **Decrypt** env-var ciphertexts with the instance master key, **re-encrypt** with the bundle passphrase, write to `secrets/env.enc`. Clear plaintext buffers immediately.
+5. For each app with `includeRepo === true`, shell out to `git clone --mirror <repo> /tmp/<id>.git` then tar it into `repos/<app-slug>.git.tar`. Respect the tracked branch but clone all refs (branches + tags) — cheap insurance.
+6. Compute sha256 of every entry as it streams, accumulate into `manifest.json`.
+7. Write the manifest, sign it, write `manifest.sig`, close the archive.
+8. Record final size + checksum in the `Bundle` row, mark `status = ready`.
+
+Never write the plaintext bundle to local disk — streaming all the way to storage keeps secrets out of the host filesystem.
+
+### Worker: Restoring a Bundle
+
+Restore is safer as a two-step flow:
+
+1. **Preflight**: download the manifest only, verify signature, verify schema compatibility, present a summary to the user (N apps, N domains, git mirrors present y/n, collision report). No writes.
+2. **Apply**: user confirms, passes the passphrase, chooses conflict policy. Worker:
+   - Streams the full bundle from storage.
+   - Verifies every file's sha256 as it's extracted.
+   - Derives the bundle key from the passphrase; decrypt env vars.
+   - For each app in `applications.json`, check for slug collision in the target org and apply the conflict policy (`rename` appends `-restored-<date>`).
+   - Re-encrypt env vars with the **target** instance's master key and write them to the new rows.
+   - Leave domains in a `pending-dns` state until the operator explicitly activates them — don't trigger Let's Encrypt during restore.
+   - Do **not** auto-deploy. Show a "Deploy all" button once the user is ready.
+
+### Scheduled Exports
+
+Reuse BullMQ's repeatable jobs:
+
+```typescript
+await deployQueue.add(
+  "bundle:scheduled",
+  { scheduleId },
+  { repeat: { pattern: schedule.cron } }
+);
+```
+
+A separate worker handler reads the schedule, creates a bundle with the destination's stored passphrase (encrypted with the instance master key — still not as good as a user passphrase, but acceptable for automated runs), uploads, applies the retention policy (delete bundles older than `keepDays` or beyond `keepLast`).
+
+### S3-Compatible Storage
+
+The AWS SDK v3 S3 client works transparently against R2, B2, MinIO, and Wasabi — pass a custom `endpoint` and `forcePathStyle: true`:
+
+```typescript
+import { S3Client } from "@aws-sdk/client-s3";
+
+export function makeS3(config: S3Config) {
+  return new S3Client({
+    endpoint: config.endpoint,           // https://<account>.r2.cloudflarestorage.com
+    region: config.region ?? "auto",
+    credentials: {
+      accessKeyId: config.accessKeyId,
+      secretAccessKey: config.secretAccessKey
+    },
+    forcePathStyle: config.forcePathStyle ?? true
+  });
+}
+```
+
+The destination UI only needs: name, endpoint (optional for real AWS), region, bucket, access key, secret key, force-path-style toggle.
+
+### Dashboard
+
+Three new pages under `Settings → Backups`:
+
+- **Destinations**: CRUD for local + S3 destinations.
+- **Bundles**: table of past bundles (size, mode, destination, created). Actions: Download, Restore from this, Delete.
+- **Schedules**: cron editor with presets (Daily 3am / Weekly Sun / Custom), retention settings.
+
+One prominent **Export now** button on the org Settings page that kicks off an ad-hoc bundle.
+
+Restore has its own dedicated page with a two-step wizard (preflight summary → apply with passphrase).
+
+### CLI (Thin Wrapper)
+
+Even before a full `sohwe` CLI ships, a small helper is worth having:
+
+```bash
+# from the host running Sohwe
+docker exec sohwe-api node scripts/bundle-create.js --mode config --out /backups/my.tar.zst --passphrase-file /run/secrets/bundle-pass
+docker exec sohwe-api node scripts/bundle-restore.js --from /backups/my.tar.zst --passphrase-file /run/secrets/bundle-pass
+```
+
+These scripts just call into `@sohwe/bundler` directly. Ship them as part of the API image so the operator can always fall back to CLI when the dashboard is unavailable (e.g. restoring onto a fresh instance before any user exists).
+
+### Phase 4.5 Checklist
+
+- [ ] `BackupDestination`, `Bundle`, `BackupSchedule` tables migrated
+- [ ] `@sohwe/bundler` package builds; local + S3 storage backends pass their unit tests
+- [ ] Ad-hoc config bundle export works end-to-end (DB → tar.zst → storage)
+- [ ] Manifest signing + sha256 verification on restore works; tampered bundles are rejected
+- [ ] Passphrase-based env-var encryption round-trips correctly across two Sohwe instances
+- [ ] Restore with `rename` / `overwrite` / `skip` conflict policy behaves correctly
+- [ ] Domains after restore are flagged `pending-dns` and do **not** auto-request certs
+- [ ] Scheduled daily bundle uploads to an S3 bucket and enforces retention
+- [ ] Git mirror mode works for at least one private repo (clone back succeeds on target host)
+- [ ] Bundle create/restore events appear in the audit log (once Phase 6 ships; wire the hooks now)
+- [ ] Bundle operations never write plaintext secrets to disk or to any log stream
+
+### Deferred to Phase 5.5
+
+- Postgres dump and restore inside the bundle
+- Raw volume tar + per-volume hooks (`pg_dump`, `mysqldump`, `redis-cli --rdb`)
+- `docker save` of built images
+- Incremental volume chunks (content-addressable storage)
+- Restore drill (dry-run mode)
 
 ---
 
