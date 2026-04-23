@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildAppImage, type BuildMode } from "@sohwe/builder";
+import { decryptJson, toDockerEnvList } from "@sohwe/crypto";
+import { appDockerVolumeName, appInternalNetworkName } from "@sohwe/types";
 import { prisma } from "@sohwe/db";
 import {
   createRedisForPublish,
@@ -265,6 +267,35 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
       `[sohwe] Starting container (Traefik: ${hostRule}, port ${String(app.port)}, tls=${String(useTls)})...`
     );
 
+    const vols = await prisma.volume.findMany({ where: { applicationId: app.id } });
+    for (const v of vols) {
+      const vn = appDockerVolumeName(app.id, v.id);
+      try {
+        await docker.getVolume(vn).inspect();
+      } catch {
+        await docker.createVolume({
+          Name: vn,
+          Labels: {
+            "sohwe.managed": "true",
+            "sohwe.app": app.id,
+            "sohwe.volume": v.id
+          }
+        });
+      }
+    }
+
+    let envList: string[] = [];
+    if (app.envVarsEncrypted) {
+      const raw = app.envVarsEncrypted;
+      const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
+      const vars = decryptJson(buf);
+      envList = toDockerEnvList(vars);
+    }
+
+    const binds = vols.map(
+      (v) => `${appDockerVolumeName(app.id, v.id)}:${v.mountPath}`
+    );
+
     const containerName =
       `sohwe-${app.slug}`.replace(/[^a-z0-9-]/g, "-").slice(0, 63) || "sohwe-app";
 
@@ -307,13 +338,35 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
       Image: imageTag,
       Labels: labels,
       ExposedPorts: { [`${port}/tcp`]: {} },
+      Env: envList.length > 0 ? envList : undefined,
       HostConfig: {
         NetworkMode: network,
-        RestartPolicy: { Name: "unless-stopped" }
+        RestartPolicy: { Name: "unless-stopped" },
+        Binds: binds.length > 0 ? binds : undefined,
+        Memory: app.memoryLimitMb
+          ? app.memoryLimitMb * 1024 * 1024
+          : undefined,
+        NanoCpus: app.cpuLimit
+          ? Math.round(Number(app.cpuLimit) * 1e9)
+          : undefined
       }
     });
 
     await c.start();
+
+    const intNetName = appInternalNetworkName(app.id);
+    try {
+      await docker.createNetwork({
+        Name: intNetName,
+        Driver: "bridge",
+        Internal: true,
+        Labels: { "sohwe.managed": "true", "sohwe.app": app.id }
+      });
+    } catch {
+      // already exists
+    }
+    const internalNet = docker.getNetwork(intNetName);
+    await internalNet.connect({ Container: c.id });
 
     await prisma.deployment.update({
       where: { id: deploymentId },

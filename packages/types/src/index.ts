@@ -59,7 +59,16 @@ export const UpdateApplicationSchema = z
     buildMode: z.enum(["auto", "dockerfile", "nixpacks"]).optional(),
     buildCmd: z.string().nullable().optional(),
     startCmd: z.string().nullable().optional(),
-    domain: OptionalDomain.or(z.null())
+    domain: OptionalDomain.or(z.null()),
+    memoryLimitMb: z
+      .union([
+        z.null(),
+        z.coerce.number().int().min(16).max(65536)
+      ])
+      .optional(),
+    cpuLimit: z
+      .union([z.null(), z.coerce.number().min(0.1).max(64)])
+      .optional()
   })
   .partial();
 export type UpdateApplicationInput = z.infer<typeof UpdateApplicationSchema>;
@@ -77,3 +86,60 @@ export const FsPathQuerySchema = z.object({
     .transform((p) => (p === undefined || p === "" ? "/" : p))
 });
 export type FsPathQuery = z.infer<typeof FsPathQuerySchema>;
+
+/** HTTP env var name (e.g. `NODE_ENV`, `API_KEY_2`). */
+export const EnvKeySchema = z
+  .string()
+  .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "Invalid env var name")
+  .max(128);
+
+const MAX_ENV_VALUE_LEN = 32_768;
+
+export const EnvVarsReplaceSchema = z.object({
+  vars: z.record(EnvKeySchema, z.string().max(MAX_ENV_VALUE_LEN))
+});
+export type EnvVarsReplace = z.infer<typeof EnvVarsReplaceSchema>;
+
+export const EnvVarsPatchSchema = z.object({
+  set: z.record(EnvKeySchema, z.string().max(MAX_ENV_VALUE_LEN)).optional(),
+  unset: z.array(EnvKeySchema).optional()
+});
+export type EnvVarsPatch = z.infer<typeof EnvVarsPatchSchema>;
+
+export const EnvQuerySchema = z.object({
+  reveal: z
+    .string()
+    .optional()
+    .transform((s) => s === "true" || s === "1")
+});
+export type EnvQuery = z.infer<typeof EnvQuerySchema>;
+
+/**
+ * Absolute path under which a named volume is mounted; must be non-root with no `..`.
+ */
+export const VolumeCreateSchema = z.object({
+  mountPath: z
+    .string()
+    .min(2)
+    .max(255)
+    .regex(
+      /^\/[A-Za-z0-9._\-/]+$/,
+      "Must be an absolute path like /app/data (no ..)"
+    )
+    .refine((p) => !p.includes("..") && p !== "/" && p.length >= 2, "Invalid path"),
+  sizeBytes: z.coerce.number().int().positive().optional()
+});
+export type VolumeCreateInput = z.infer<typeof VolumeCreateSchema>;
+
+/** Docker named volume for a persist mount (Prisma `Volume.id`). */
+export function appDockerVolumeName(
+  appId: string,
+  volumeId: string
+): string {
+  return `sohwe_app_${appId}_${volumeId}`;
+}
+
+/** Per-app isolated internal Docker network. */
+export function appInternalNetworkName(appId: string): string {
+  return `sohwe_app_${appId}_net`;
+}

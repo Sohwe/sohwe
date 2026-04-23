@@ -1,0 +1,176 @@
+import { createRootRouteWithContext, createRoute, createRouter, Outlet, redirect } from "@tanstack/react-router";
+import type { QueryClient } from "@tanstack/react-query";
+import { fetchMe } from "@/lib/api";
+import { fetchSetupStatus } from "@/lib/setup-queries";
+import type { Me, SetupStatus } from "@/lib/types";
+import { AuthedLayout } from "@/components/layout/AuthedLayout";
+import { SetupPage } from "@/routes/setup";
+import { LoginPage } from "@/routes/login";
+import { AppsListPage } from "@/routes/apps.index";
+import { AppLayout } from "@/routes/app.$appId";
+import { AppOverviewPage } from "@/routes/app.$appId.overview";
+import { AppVariablesPage } from "@/routes/app.$appId.variables";
+import { AppVolumesPage } from "@/routes/app.$appId.volumes";
+import { AppFilesPage } from "@/routes/app.$appId.files";
+import { AppSettingsPage } from "@/routes/app.$appId.settings";
+import { DeploymentsPage } from "@/components/apps/DeploymentsPage";
+
+const rootRoute = createRootRouteWithContext<{ queryClient: QueryClient }>()({
+  component: () => <Outlet />
+});
+
+const indexRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/",
+  beforeLoad: async ({ context: { queryClient } }) => {
+    const s = await queryClient.fetchQuery<SetupStatus>({
+      queryKey: ["setup", "status"],
+      queryFn: fetchSetupStatus,
+      staleTime: 10_000
+    });
+    if (s.needsSetup) throw redirect({ to: "/setup" });
+    const me = await queryClient.fetchQuery<Me | null>({ queryKey: ["me"], queryFn: () => fetchMe<Me | null>() });
+    if (!me) throw redirect({ to: "/login" });
+    throw redirect({ to: "/apps" });
+  }
+});
+
+const setupRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "setup",
+  beforeLoad: async ({ context: { queryClient } }) => {
+    const s = await queryClient.fetchQuery<SetupStatus>({
+      queryKey: ["setup", "status"],
+      queryFn: fetchSetupStatus
+    });
+    if (!s.needsSetup) {
+      const me = await queryClient.fetchQuery<Me | null>({ queryKey: ["me"], queryFn: () => fetchMe<Me | null>() });
+      if (me) throw redirect({ to: "/apps" });
+      throw redirect({ to: "/login" });
+    }
+  },
+  component: SetupPage
+});
+
+const loginRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "login",
+  beforeLoad: async ({ context: { queryClient } }) => {
+    const s = await queryClient.fetchQuery<SetupStatus>({
+      queryKey: ["setup", "status"],
+      queryFn: fetchSetupStatus
+    });
+    if (s.needsSetup) throw redirect({ to: "/setup" });
+    const me = await queryClient.fetchQuery<Me | null>({ queryKey: ["me"], queryFn: () => fetchMe<Me | null>() });
+    if (me) throw redirect({ to: "/apps" });
+  },
+  component: LoginPage
+});
+
+const authedLayoutRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "apps",
+  beforeLoad: async ({ context: { queryClient } }) => {
+    const s = await queryClient.fetchQuery<SetupStatus>({
+      queryKey: ["setup", "status"],
+      queryFn: fetchSetupStatus
+    });
+    if (s.needsSetup) throw redirect({ to: "/setup" });
+    const me = await queryClient.fetchQuery<Me | null>({ queryKey: ["me"], queryFn: () => fetchMe<Me | null>() });
+    if (!me) throw redirect({ to: "/login" });
+  },
+  component: AuthedLayout
+});
+
+const appsIndexRoute = createRoute({
+  getParentRoute: () => authedLayoutRoute,
+  path: "/",
+  component: AppsListPage
+});
+
+const appLayoutRoute = createRoute({
+  getParentRoute: () => authedLayoutRoute,
+  path: "$appId",
+  component: AppLayout
+});
+
+const appIdIndexRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/",
+  beforeLoad: ({ params }) => {
+    throw redirect({ to: "/apps/$appId/overview", params: { appId: params.appId } });
+  }
+});
+
+const appOverviewRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "overview",
+  component: AppOverviewPage
+});
+
+const appVariablesRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "variables",
+  component: AppVariablesPage
+});
+
+const appVolumesRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "volumes",
+  component: AppVolumesPage
+});
+
+const appFilesRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "files",
+  component: AppFilesPage
+});
+
+const appSettingsRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "settings",
+  component: AppSettingsPage
+});
+
+const deploymentsLayoutRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "deployments",
+  component: () => <Outlet />
+});
+
+const deploymentsIndexRoute = createRoute({
+  getParentRoute: () => deploymentsLayoutRoute,
+  path: "/",
+  component: DeploymentsPage
+});
+
+const deploymentsWithIdRoute = createRoute({
+  getParentRoute: () => deploymentsLayoutRoute,
+  path: "$deploymentId",
+  component: DeploymentsPage
+});
+
+const routeTree = rootRoute.addChildren([
+  indexRoute,
+  setupRoute,
+  loginRoute,
+  authedLayoutRoute.addChildren([
+    appsIndexRoute,
+    appLayoutRoute.addChildren([
+      appIdIndexRoute,
+      appOverviewRoute,
+      appVariablesRoute,
+      appVolumesRoute,
+      appFilesRoute,
+      appSettingsRoute,
+      deploymentsLayoutRoute.addChildren([deploymentsIndexRoute, deploymentsWithIdRoute])
+    ])
+  ])
+]);
+
+export function buildRouter(queryClient: QueryClient) {
+  return createRouter({ routeTree, context: { queryClient } });
+}
+
+/** Typing: pass the router returned by `buildRouter` */
+export type SohweRouter = ReturnType<typeof buildRouter>;

@@ -11,8 +11,10 @@
   },
   "dependencies": {
     "@sohwe/builder": "workspace:*",
+    "@sohwe/crypto": "workspace:*",
     "@sohwe/db": "workspace:*",
     "@sohwe/queue": "workspace:*",
+    "@sohwe/types": "workspace:*",
     "dockerode": "^4.0.2",
     "dotenv": "^16.4.0",
     "ioredis": "^5.4.0"

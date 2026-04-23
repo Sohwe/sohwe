@@ -6,6 +6,8 @@ import {
   logChannelName
 } from "@sohwe/queue";
 import {
+  appDockerVolumeName,
+  appInternalNetworkName,
   CreateApplicationSchema,
   RollbackBodySchema,
   UpdateApplicationSchema
@@ -13,6 +15,7 @@ import {
 import Docker from "dockerode";
 import IORedis from "ioredis";
 import { z } from "zod";
+import { defaultApplicationSelect, serializeAppListRow } from "../app-public";
 import { authPreHandler } from "../session";
 
 const docker = new Docker();
@@ -25,7 +28,42 @@ function sseData(payload: unknown): string {
   return `data: ${JSON.stringify(payload)}\n\n`;
 }
 
+/** Stop and remove app containers, named volumes, and the internal per-app network. */
+async function removeDockerForApplication(
+  appId: string,
+  volumeIds: string[]
+): Promise<void> {
+  const list = await docker.listContainers({
+    all: true,
+    filters: { label: [`sohwe.app=${appId}`] }
+  });
+  for (const c of list) {
+    const d = docker.getContainer(c.Id);
+    await d.stop({ t: 10 }).catch(() => {});
+    await d.remove().catch(() => {});
+  }
+  for (const vid of volumeIds) {
+    const name = appDockerVolumeName(appId, vid);
+    try {
+      await docker.getVolume(name).remove({ force: true });
+    } catch (e) {
+      const err = e as { statusCode?: number };
+      if (err?.statusCode !== 404) throw e;
+    }
+  }
+  const netName = appInternalNetworkName(appId);
+  try {
+    await docker.getNetwork(netName).remove();
+  } catch (e) {
+    const err = e as { statusCode?: number };
+    if (err?.statusCode !== 404) throw e;
+  }
+}
+
 export async function registerApplicationRoutes(app: FastifyInstance) {
+  const sel20 = defaultApplicationSelect(20);
+  const sel30 = defaultApplicationSelect(30);
+
   app.post(
     "/api/applications",
     {
@@ -35,7 +73,7 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
     async (req, _reply) => {
       const u = req.user!;
       const body = CreateApplicationSchema.parse(req.body);
-      return prisma.application.create({
+      const created = await prisma.application.create({
         data: {
           name: body.name,
           slug: body.slug,
@@ -47,8 +85,10 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
           startCmd: body.startCmd ?? null,
           domain: body.domain ?? null,
           organizationId: u.organizationId
-        }
+        },
+        select: sel20
       });
+      return serializeAppListRow(created);
     }
   );
 
@@ -82,12 +122,28 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
       if (body.domain !== undefined) {
         data.domain = body.domain ? body.domain : null;
       }
-
-      if (Object.keys(data).length === 0) {
-        return existing;
+      if (body.memoryLimitMb !== undefined) {
+        data.memoryLimitMb = body.memoryLimitMb;
+      }
+      if (body.cpuLimit !== undefined) {
+        data.cpuLimit = body.cpuLimit;
       }
 
-      return prisma.application.update({ where: { id }, data });
+      if (Object.keys(data).length === 0) {
+        const cur = await prisma.application.findFirst({
+          where: { id, organizationId: u.organizationId },
+          select: sel30
+        });
+        if (!cur) return reply.notFound();
+        return serializeAppListRow(cur);
+      }
+
+      const updated = await prisma.application.update({
+        where: { id },
+        data,
+        select: sel30
+      });
+      return serializeAppListRow(updated);
     }
   );
 
@@ -96,13 +152,12 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
     { preHandler: [authPreHandler] },
     async (req, _reply) => {
       const u = req.user!;
-      return prisma.application.findMany({
+      const rows = await prisma.application.findMany({
         where: { organizationId: u.organizationId },
         orderBy: { createdAt: "desc" },
-        include: {
-          deployments: { orderBy: { createdAt: "desc" }, take: 20 }
-        }
+        select: sel20
       });
+      return rows.map(serializeAppListRow);
     }
   );
 
@@ -117,12 +172,10 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
       const { id } = req.params as z.infer<typeof IdParam>;
       const a = await prisma.application.findFirst({
         where: { id, organizationId: u.organizationId },
-        include: {
-          deployments: { orderBy: { createdAt: "desc" }, take: 30 }
-        }
+        select: sel30
       });
       if (!a) return reply.notFound();
-      return a;
+      return serializeAppListRow(a);
     }
   );
 
@@ -136,18 +189,15 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
       const u = req.user!;
       const { id } = req.params as z.infer<typeof IdParam>;
       const a = await prisma.application.findFirst({
-        where: { id, organizationId: u.organizationId }
+        where: { id, organizationId: u.organizationId },
+        select: {
+          id: true,
+          volumes: { select: { id: true } }
+        }
       });
       if (!a) return reply.notFound();
-      const list = await docker.listContainers({
-        all: true,
-        filters: { label: [`sohwe.app=${a.id}`] }
-      });
-      for (const c of list) {
-        const d = docker.getContainer(c.Id);
-        await d.stop({ t: 10 }).catch(() => {});
-        await d.remove().catch(() => {});
-      }
+      const volIds = a.volumes.map((v) => v.id);
+      await removeDockerForApplication(a.id, volIds);
       await prisma.application.delete({ where: { id: a.id } });
       return { ok: true };
     }
@@ -231,7 +281,9 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
       const { deploymentId } = req.params as z.infer<typeof DepParam>;
       const dep = await prisma.deployment.findFirst({
         where: { id: deploymentId },
-        include: { application: true }
+        include: {
+          application: { select: { id: true, organizationId: true } }
+        }
       });
       if (!dep || dep.application.organizationId !== u.organizationId) {
         return reply.notFound();

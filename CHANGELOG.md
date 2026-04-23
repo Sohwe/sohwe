@@ -7,6 +7,26 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+### Changed
+
+- **Dashboard** — Complete UI revamp: Render-style **shell** (collapsible sidebar + top bar + breadcrumbs), **TanStack Router** URL routes (`/apps`, `/apps/:id/overview|deployments|variables|volumes|files|settings`, deploy log at `/apps/:id/deployments/:deploymentId`), **shadcn-style** Radix primitives (cards, dialogs, sheets, tables, tabs, toasts), light/dark **theme** toggle, **sonner** notifications, responsive app cards, deployment log in a **slide-over sheet**, env editor with **bulk .env paste**, and confirm dialogs instead of `window.confirm`.
+
+## [0.3.0] - 2026-04-23
+
+**Phase 3 (stateful apps)** — encrypted environment variables, persistent named volumes, per-app memory/CPU limits, and a per-app isolated internal Docker network. Dashboard **Settings** adds env + volumes + resource limits; API responses no longer include ciphertext (`envVarsEncrypted`).
+
+### Added
+
+- **`@sohwe/crypto`** — AES-256-GCM helpers (`encryptJson` / `decryptJson` / `maskedPreview` / `toDockerEnvList`) for `envVarsEncrypted` and shared use in API + worker.
+- **API** — `GET/PUT/PATCH /api/applications/:id/env` (masked list by default; `?reveal=true` for plaintext; `logLevel: silent` on mutating env routes). `POST/GET/DELETE /api/applications/:id/volumes` and `.../volumes/:volumeId` for named volume rows; Docker volume name `sohwe_app_<appId>_<volumeId>`. `PATCH /api/applications/:id` accepts `memoryLimitMb` and `cpuLimit` (nullable).
+- **API responses** — `GET` applications use an explicit `select` so `envVarsEncrypted` is never returned; `sizeBytes` on volumes is JSON-safe (string). Build log SSE no longer loads full `Application` (no secret column in memory for that request).
+- **Worker** — decrypts env into `Env:`, pre-creates/labels named volumes and sets `Binds`, applies `HostConfig.Memory` / `NanoCpus`, `unless-stopped` unchanged; after start, ensures `sohwe_app_<appId>_net` (internal bridge) exists and connects the app container. **Delete application** stops containers, removes Docker named volumes for each Prisma `Volume` row, removes the per-app network, then deletes the DB row.
+- **Dashboard** — env panel (add/remove, masked list, “Show / edit all values”, PUT/PATCH), volumes panel (add path + optional size hint, remove with confirm), memory (MB) + CPU (cores) in settings form.
+
+### Notes
+
+- **`SOHWE_ENCRYPTION_KEY`** must be set for the **worker** as well as the API (same 32-byte base64 value) so deploy can decrypt env for `docker create`.
+
 ## [0.2.0] - 2026-04-23
 
 **Phase 2 (broad runtime support)** — Nixpacks auto-detection, per-app build/start command overrides, editable settings, custom domains with opt-in HTTPS via Traefik + Let's Encrypt. Also lands small pre-Phase-2 polish (deployments table, Phase 3 docs cleanup) and re-scopes the install script / self-update work to a new **Phase 3.5 — Packaging & Install** section in the roadmap.

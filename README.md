@@ -6,9 +6,9 @@ This repository is a **pnpm + Turborepo** monorepo. The detailed bootstrap and p
 
 ## Current status
 
-**v0.1.0** covers **Phase 0 (foundation)** and **Phase 1 (first deploy)** on a single machine: the worker, BullMQ deploy jobs, `docker build` + container lifecycle, Traefik routing, and a dashboard where you can create apps, run deploys with live build logs, **browse past deployments** (short id, **Current** on the live build, status, branch, commit line, Log, **Roll back**), and **browse files** in the running container.
+**v0.3.0** includes through **Phase 3 (stateful apps)** on a single machine: Nixpacks + custom domains, **encrypted env vars** (dashboard + API; worker injects at deploy), **named persistent volumes** with Docker `Binds`, **memory/CPU limits**, per-app **internal Docker network** (`sohwe_app_<id>_net` plus the Traefik network), and the same dashboard flows as before (deployments, **Browse files** — use a mount path under a volume after redeploy to verify persisted data).
 
-Work in progress on `main` — **Phase 2 (broad runtime support)**: **Nixpacks** auto-detection for apps without a Dockerfile (Next.js / Python / Go / Rust / static), per-app **build/start command overrides**, editable **Settings**, and **custom domains with HTTPS** via Traefik + Let's Encrypt (opt-in with `SOHWE_HTTPS_ENABLED=true`). See [`CHANGELOG.md`](./CHANGELOG.md) and [`sohwe-getting-started.md`](./sohwe-getting-started.md) for the full phase plan.
+Next roadmap milestone: **Phase 3.5 (packaging & install)**, then **Phase 4 (observability)**. See [`CHANGELOG.md`](./CHANGELOG.md) and [`sohwe-getting-started.md`](./sohwe-getting-started.md).
 
 ## Requirements
 
@@ -54,7 +54,7 @@ Work in progress on `main` — **Phase 2 (broad runtime support)**: **Nixpacks**
 
 ## Environment
 
-- **`apps/api/.env`** — API runtime (`DATABASE_URL`, `REDIS_URL`, `PORT`, `SESSION_SECRET`, `SOHWE_ENCRYPTION_KEY`, etc.).
+- **`apps/api/.env`** — API runtime (`DATABASE_URL`, `REDIS_URL`, `PORT`, `SESSION_SECRET`, `SOHWE_ENCRYPTION_KEY`, etc.). The **worker** also needs `SOHWE_ENCRYPTION_KEY` (and `DATABASE_URL` / `REDIS_URL`) to decrypt env at deploy; in local dev, `apps/worker` loads `apps/api/.env` via dotenv, so a single file is enough.
 - **`packages/db/.env`** — Prisma CLI (`DATABASE_URL` for `db:push` / `db:studio`).
 
 Use strong, unique values for secrets in any shared or deployed environment. The getting-started doc shows the expected variable names and example connection strings.
@@ -69,6 +69,7 @@ Use strong, unique values for secrets in any shared or deployed environment. The
 | `packages/db` | Prisma schema and client |
 | `packages/types` | Shared Zod schemas and types |
 | `packages/queue` | BullMQ deploy job types and queue config (API + worker) |
+| `packages/crypto` | AES-256-GCM env encryption helpers (API + worker) |
 | `docker-compose.dev.yml` | Local Postgres, Redis, Traefik |
 
 ## Scripts

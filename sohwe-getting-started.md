@@ -4,7 +4,7 @@ An open-source, self-hostable deployment platform — a spiritual cousin to Cool
 
 Licensed **AGPL-3.0** (open-core friendly, prevents closed-source forks).
 
-**Release notes:** [CHANGELOG.md](./CHANGELOG.md) (e.g. **v0.1.0** — Phase 0 + Phase 1 on `main`).
+**Release notes:** [CHANGELOG.md](./CHANGELOG.md) (e.g. **v0.3.0** — through Phase 3 on `main`).
 
 ---
 
@@ -147,7 +147,8 @@ sohwe/
 │   ├── db/                 # Prisma schema + client (shared)
 │   ├── types/              # Shared TS types / Zod schemas
 │   ├── queue/              # BullMQ job definitions (shared)
-│   └── builder/            # Git clone + Nixpacks/Docker build logic
+│   ├── builder/            # Git clone + Nixpacks/Docker build logic
+│   └── crypto/             # AES-256-GCM (env at rest, shared API + worker)
 ├── docker/
 │   ├── api.Dockerfile
 │   ├── worker.Dockerfile
@@ -985,16 +986,16 @@ Goal: apps can store data that survives redeploys, with secrets and limits manag
 **Already shipped in v0.1.0 (Phase 1):** read-only **Browse files** for the **running** container (list + preview). Phase 3 does *not* re-build that feature—it adds **named volumes** and then you use the same browser under `mountPath` to inspect persisted data.
 
 - Add **persistent volumes**: one named Docker volume per `Volume` row, mounted at `mountPath` on container start. Volume name convention: `sohwe_app_<app-id>_<volume-id>`.
-- **Encrypted env vars**: encrypt with AES-256-GCM using `SOHWE_ENCRYPTION_KEY`. Store ciphertext in `envVarsEncrypted`. Decrypt only when composing the `docker run` config.
+- **Encrypted env vars**: encrypt with AES-256-GCM using `SOHWE_ENCRYPTION_KEY`. Store ciphertext in `envVarsEncrypted`. Decrypt only when composing the `docker run` config. The **worker** must have the same `SOHWE_ENCRYPTION_KEY` as the API (in dev it loads `apps/api/.env` — see `apps/worker/src/index.ts`). If a deploy fails on decrypt, verify the key is set for the worker process.
 - **Resource limits**: expose `memoryLimitMb` and `cpuLimit` on the app settings page; pass them to dockerode as `HostConfig.Memory` and `NanoCpus`.
 - **Restart policy**: `unless-stopped` by default.
 
 ### Phase 3 Checklist
 
-- [ ] Redeploy an app and verify data in its volume persists
-- [ ] Env vars round-trip correctly and aren't readable as plaintext in the DB
-- [ ] Setting a memory limit actually caps the container (verify with `docker stats`)
-- [ ] **Browse files** to a path under a **mounted volume** and confirm the same data is visible after redeploy
+- [x] Redeploy an app and verify data in its volume persists
+- [x] Env vars round-trip correctly and aren't readable as plaintext in the DB
+- [x] Setting a memory limit actually caps the container (verify with `docker stats`)
+- [x] **Browse files** to a path under a **mounted volume** and confirm the same data is visible after redeploy
 
 ---
 

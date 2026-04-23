@@ -16,6 +16,8 @@ import {
 } from "@sohwe/types";
 import { registerAppFilesystemRoutes } from "./routes/app-filesystem";
 import { registerApplicationRoutes } from "./routes/applications";
+import { registerEnvVarRoutes } from "./routes/env-vars";
+import { registerVolumeRoutes } from "./routes/volumes";
 
 const app = Fastify({ logger: true }).withTypeProvider<ZodTypeProvider>();
 app.setValidatorCompiler(validatorCompiler);
@@ -132,6 +134,8 @@ app.get("/api/me", async (req, reply) => {
 });
 
 await registerApplicationRoutes(app);
+await registerEnvVarRoutes(app);
+await registerVolumeRoutes(app);
 await registerAppFilesystemRoutes(app);
 
 const port = Number(process.env.PORT ?? 3001);
