@@ -19,14 +19,15 @@ Licensed **AGPL-3.0** (open-core friendly, prevents closed-source forks).
 7. [Phase 1 — First Deploy](#phase-1--first-deploy)
 8. [Phase 2 — Broad Runtime Support](#phase-2--broad-runtime-support)
 9. [Phase 3 — Stateful Apps](#phase-3--stateful-apps)
-10. [Phase 4 — Observability](#phase-4--observability)
-11. [Phase 4.5 — Portable Bundles](#phase-45--portable-bundles)
-12. [Phase 5 — Git-Push Deploys](#phase-5--git-push-deploys)
-13. [Phase 6 — Multi-User](#phase-6--multi-user)
-14. [Cross-Cutting Concerns](#cross-cutting-concerns)
-15. [Development Workflow](#development-workflow)
-16. [Troubleshooting](#troubleshooting)
-17. [Resources](#resources)
+10. [Phase 3.5 — Packaging & Install](#phase-35--packaging--install)
+11. [Phase 4 — Observability](#phase-4--observability)
+12. [Phase 4.5 — Portable Bundles](#phase-45--portable-bundles)
+13. [Phase 5 — Git-Push Deploys](#phase-5--git-push-deploys)
+14. [Phase 6 — Multi-User](#phase-6--multi-user)
+15. [Cross-Cutting Concerns](#cross-cutting-concerns)
+16. [Development Workflow](#development-workflow)
+17. [Troubleshooting](#troubleshooting)
+18. [Resources](#resources)
 
 ---
 
@@ -73,6 +74,7 @@ Sohwe lets you:
 | **1. First Deploy** | Clone repo → Docker build → run container → public URL | 1–2 weeks |
 | **2. Broad Runtimes** | Nixpacks, custom commands, custom domains | 1 week |
 | **3. Stateful Apps** | Volumes, encrypted env vars, resource limits | 1 week |
+| **3.5. Packaging & Install** | Production Dockerfiles (api/worker/dashboard), `docker-compose.prod.yml`, published images, `curl \| bash` install script, self-update | 1 week |
 | **4. Observability** | Live logs, build logs, CPU/mem, basic alerts | 2 weeks |
 | **4.5. Portable Bundles** | Config export/restore, S3-compatible destinations, scheduled exports | 1 week |
 | **5. Git-Push Deploys** | GitHub App, webhooks, auto-deploy | 1 week |
@@ -993,6 +995,38 @@ Goal: apps can store data that survives redeploys, with secrets and limits manag
 - [ ] Env vars round-trip correctly and aren't readable as plaintext in the DB
 - [ ] Setting a memory limit actually caps the container (verify with `docker stats`)
 - [ ] **Browse files** to a path under a **mounted volume** and confirm the same data is visible after redeploy
+
+---
+
+## Phase 3.5 — Packaging & Install
+
+Goal: a new user can run **one `curl | bash` command on a fresh Ubuntu VPS** and get a working Sohwe instance — no manual `pnpm`, no Node version juggling, no manually installing `nixpacks`.
+
+This phase does **not** add product features. It packages what Phases 0–3 already built into something shareable, and closes PRD Goal #1 (10-minute install) and PRD §10.1 `[P1]` items that were deferred out of v0.1.0.
+
+### Scope
+
+1. **Production Dockerfiles** — `docker/api.Dockerfile`, `docker/worker.Dockerfile`, `docker/dashboard.Dockerfile`. Multi-stage, Node 24 slim base. The worker image bakes in `git`, `docker-ce-cli`, and `nixpacks` so the host never has to install them.
+2. **`docker-compose.prod.yml`** — api + worker + dashboard + postgres + redis + traefik, all wired together with sensible defaults, env file loaded from `/etc/sohwe/sohwe.env`.
+3. **Image publishing** — GitHub Actions workflow that builds and pushes `ghcr.io/<owner>/sohwe-{api,worker,dashboard}:<version>` on every git tag. Multi-arch (amd64 + arm64).
+4. **`scripts/install.sh`** — the curl target. Detects Ubuntu/Debian, installs `docker` + `docker compose plugin` if missing, writes a generated `/etc/sohwe/sohwe.env` with random `SESSION_SECRET` and `SOHWE_ENCRYPTION_KEY`, downloads `docker-compose.prod.yml`, runs `docker compose up -d`, prints the dashboard URL.
+5. **Self-update** — `sohwe update` shell command (shipped inside the install script's data dir) that pulls newer images, runs `prisma migrate deploy`, restarts services, keeps a one-version rollback.
+
+### Open questions to resolve in this phase
+
+- Image registry: GHCR (free, tied to repo) vs. Docker Hub (more familiar). **Recommend GHCR.**
+- Where `install.sh` is hosted (`get.sohwe.dev`, raw GitHub URL, or both).
+- Whether to sign images with `cosign` for supply-chain safety (nice-to-have; Coolify doesn't yet).
+
+### Phase 3.5 Checklist
+
+- [ ] `docker/api.Dockerfile`, `docker/worker.Dockerfile`, `docker/dashboard.Dockerfile` build locally
+- [ ] Worker image runs `docker build`, `nixpacks build`, and `git clone` without anything installed on the host beyond Docker itself
+- [ ] `docker-compose.prod.yml` boots a full instance from images alone (no source checkout)
+- [ ] GitHub Actions publishes tagged images to GHCR (amd64 + arm64)
+- [ ] `curl -fsSL https://<url>/install.sh | bash` on a fresh Ubuntu 22.04 VPS yields a working dashboard in under 10 minutes
+- [ ] `sohwe update` pulls new images, migrates DB, restarts cleanly
+- [ ] Secrets (`SESSION_SECRET`, `SOHWE_ENCRYPTION_KEY`) are generated if absent and preserved across updates
 
 ---
 

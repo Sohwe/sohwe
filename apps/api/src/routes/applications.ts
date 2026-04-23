@@ -7,7 +7,8 @@ import {
 } from "@sohwe/queue";
 import {
   CreateApplicationSchema,
-  RollbackBodySchema
+  RollbackBodySchema,
+  UpdateApplicationSchema
 } from "@sohwe/types";
 import Docker from "dockerode";
 import IORedis from "ioredis";
@@ -41,13 +42,52 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
           gitRepo: body.gitRepo,
           gitBranch: body.gitBranch,
           port: body.port,
-          buildMode: "dockerfile",
+          buildMode: body.buildMode,
           buildCmd: body.buildCmd ?? null,
           startCmd: body.startCmd ?? null,
           domain: body.domain ?? null,
           organizationId: u.organizationId
         }
       });
+    }
+  );
+
+  app.patch(
+    "/api/applications/:id",
+    {
+      preHandler: [authPreHandler],
+      schema: { params: IdParam, body: UpdateApplicationSchema }
+    },
+    async (req, reply) => {
+      const u = req.user!;
+      const { id } = req.params as z.infer<typeof IdParam>;
+      const body = UpdateApplicationSchema.parse(req.body);
+
+      const existing = await prisma.application.findFirst({
+        where: { id, organizationId: u.organizationId }
+      });
+      if (!existing) return reply.notFound();
+
+      const data: Record<string, unknown> = {};
+      if (body.name !== undefined) data.name = body.name;
+      if (body.gitBranch !== undefined) data.gitBranch = body.gitBranch;
+      if (body.port !== undefined) data.port = body.port;
+      if (body.buildMode !== undefined) data.buildMode = body.buildMode;
+      if (body.buildCmd !== undefined) {
+        data.buildCmd = body.buildCmd ? body.buildCmd : null;
+      }
+      if (body.startCmd !== undefined) {
+        data.startCmd = body.startCmd ? body.startCmd : null;
+      }
+      if (body.domain !== undefined) {
+        data.domain = body.domain ? body.domain : null;
+      }
+
+      if (Object.keys(data).length === 0) {
+        return existing;
+      }
+
+      return prisma.application.update({ where: { id }, data });
     }
   );
 

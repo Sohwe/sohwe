@@ -273,9 +273,11 @@ Each requirement is tagged with `[P<n>]` for the phase in which it must ship.
 
 ### 10.1 Installation & Setup
 
-- `[P1]` Single-command install script for Linux (Ubuntu 22.04+ / Debian 12+).
+- `[P3.5]` Single-command install script for Linux (Ubuntu 22.04+ / Debian 12+). *(Re-scoped from P1: deferred out of v0.1.0 in favor of dev-mode `pnpm dev`; now ships alongside production Docker images in Phase 3.5 — see `sohwe-getting-started.md`.)*
 - `[P1]` First-run setup wizard in the dashboard that creates the owner account and default organization.
-- `[P1]` Self-update mechanism (pull new Docker images, run DB migrations, restart).
+- `[P3.5]` Self-update mechanism (pull new Docker images, run DB migrations, restart). *(Re-scoped from P1, same rationale as install script.)*
+- `[P3.5]` Production Dockerfiles (`docker/api.Dockerfile`, `docker/worker.Dockerfile`, `docker/dashboard.Dockerfile`) and `docker-compose.prod.yml`. The worker image bakes in `git`, `docker-ce-cli`, and `nixpacks` so the host needs only Docker Engine.
+- `[P3.5]` Published, versioned container images (GHCR, multi-arch: amd64 + arm64) built by CI on every tag.
 - `[P2]` Configurable wildcard domain (`*.sohwe.<user-domain>`) for automatic per-app subdomains.
 
 ### 10.2 Applications
@@ -463,6 +465,7 @@ Security requirements for bundles (additive to §11.3):
 | **M1 — First Deploy** | Phase 1 complete | Week 3 |
 | **M2 — Runtimes** | Phase 2 complete | Week 4 |
 | **M3 — Stateful** | Phase 3 complete | Week 5 |
+| **M3.5 — Packaging & Install** | Production Dockerfiles, `docker-compose.prod.yml`, published images (GHCR, multi-arch), `curl \| bash` install script, `sohwe update` | Week 6 |
 | **M4 — Observability** | Phase 4 complete | Week 7 |
 | **M4.5 — Portable Bundles** | Config-mode bundle export/restore, local + S3 destinations, scheduled exports | Week 8 |
 | **M5 — Git Push** | Phase 5 complete | Week 9 |
@@ -540,7 +543,7 @@ AGPL prevents a cloud competitor from taking Sohwe, running it as a closed-sourc
 
 Items to resolve before or during v1.
 
-1. **Install script distribution**: curl-pipe-bash vs. official Docker image vs. both? (Industry trend: both, with signed scripts.)
+1. ~~**Install script distribution**: curl-pipe-bash vs. official Docker image vs. both?~~ **Resolved (2026-04-23):** ship **both** in Phase 3.5 — a `curl \| bash` script that pulls a `docker-compose.prod.yml` and published multi-arch images from GHCR. See `sohwe-getting-started.md` Phase 3.5 for the full scope.
 2. **Telemetry**: opt-in or opt-out? Recommended: opt-in at first, opt-out once trust is established. Decide before beta.
 3. **Buildpack fallback**: if Nixpacks fails, do we fall back to Paketo Buildpacks, or just surface the failure? (Recommend: surface failure, document manual Dockerfile path.)
 4. **Instance naming / slugs**: collision handling when two orgs want the same app slug. (Recommend: org-scoped slugs; global uniqueness not required.)

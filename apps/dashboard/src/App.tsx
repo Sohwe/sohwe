@@ -6,7 +6,10 @@ import {
   type ReactNode,
   useState as useReactState
 } from "react";
-import { CreateApplicationSchema } from "@sohwe/types";
+import {
+  CreateApplicationSchema,
+  UpdateApplicationSchema
+} from "@sohwe/types";
 import { api, apiGet, fetchMe } from "./lib/api";
 
 // --- setup / auth UI (Field, TextInput, Shell) unchanged in spirit ---
@@ -30,6 +33,8 @@ type AppRow = {
   port: number;
   status: string;
   buildMode: string;
+  buildCmd: string | null;
+  startCmd: string | null;
   domain: string | null;
   createdAt: string;
   deployments?: {
@@ -699,6 +704,158 @@ function deploymentStatusLine(status: string | undefined) {
   return <span className="text-slate-500">…</span>;
 }
 
+type BuildMode = "auto" | "dockerfile" | "nixpacks";
+
+function BuildModeBadge({ mode }: { mode: string }) {
+  const style =
+    mode === "dockerfile"
+      ? "bg-sky-600/20 text-sky-300"
+      : mode === "nixpacks"
+        ? "bg-amber-600/20 text-amber-300"
+        : "bg-slate-600/30 text-slate-300";
+  return (
+    <span
+      className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] ${style}`}
+    >
+      {mode}
+    </span>
+  );
+}
+
+function AppSettingsForm({
+  app,
+  onSaved,
+  onCancel
+}: {
+  app: AppRow;
+  onSaved: () => void;
+  onCancel: () => void;
+}) {
+  const [buildMode, setBuildMode] = useState<BuildMode>(
+    (app.buildMode as BuildMode) ?? "auto"
+  );
+  const [buildCmd, setBuildCmd] = useState(app.buildCmd ?? "");
+  const [startCmd, setStartCmd] = useState(app.startCmd ?? "");
+  const [domain, setDomain] = useState(app.domain ?? "");
+  const [port, setPort] = useState(app.port);
+  const [branch, setBranch] = useState(app.gitBranch);
+
+  const update = useMutation({
+    mutationFn: () => {
+      const body = UpdateApplicationSchema.parse({
+        buildMode,
+        buildCmd: buildCmd ? buildCmd : null,
+        startCmd: startCmd ? startCmd : null,
+        domain: domain ? domain : null,
+        port,
+        gitBranch: branch
+      });
+      return api<AppRow>(`/api/applications/${app.id}`, {
+        method: "PATCH",
+        body: JSON.stringify(body)
+      });
+    },
+    onSuccess: () => {
+      onSaved();
+    }
+  });
+
+  return (
+    <form
+      className="mt-4 space-y-3 rounded-lg border border-slate-800 bg-slate-950/50 p-4"
+      onSubmit={(e) => {
+        e.preventDefault();
+        update.mutate();
+      }}
+    >
+      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+        Settings
+      </p>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Build mode">
+          <select
+            value={buildMode}
+            onChange={(e) => setBuildMode(e.target.value as BuildMode)}
+            className="mt-0 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-violet-500"
+          >
+            <option value="auto">auto (Dockerfile → Nixpacks)</option>
+            <option value="dockerfile">dockerfile</option>
+            <option value="nixpacks">nixpacks</option>
+          </select>
+        </Field>
+        <Field label="Branch">
+          <TextInput
+            value={branch}
+            onChange={(e) => setBranch(e.target.value)}
+          />
+        </Field>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Build command (nixpacks override)">
+          <TextInput
+            value={buildCmd}
+            onChange={(e) => setBuildCmd(e.target.value)}
+            placeholder="(auto)"
+          />
+        </Field>
+        <Field label="Start command (nixpacks override)">
+          <TextInput
+            value={startCmd}
+            onChange={(e) => setStartCmd(e.target.value)}
+            placeholder="(auto)"
+          />
+        </Field>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Custom domain (optional)">
+          <TextInput
+            value={domain}
+            onChange={(e) => setDomain(e.target.value.toLowerCase())}
+            placeholder="app.example.com"
+          />
+        </Field>
+        <Field label="Container port">
+          <TextInput
+            type="number"
+            value={port}
+            onChange={(e) => setPort(Number(e.target.value))}
+            min={1}
+            max={65535}
+          />
+        </Field>
+      </div>
+      {update.isError ? (
+        <p className="text-xs text-red-400">
+          {update.error instanceof Error ? update.error.message : "Error"}
+        </p>
+      ) : null}
+      <p className="text-[11px] text-slate-500">
+        Changes apply to the next deploy. Custom domain + HTTPS requires
+        <code className="mx-1 rounded bg-slate-800 px-1 py-0.5 text-slate-300">
+          SOHWE_HTTPS_ENABLED=true
+        </code>
+        on the host and DNS pointed at this server.
+      </p>
+      <div className="flex gap-2">
+        <button
+          type="submit"
+          disabled={update.isPending}
+          className="rounded-md bg-violet-600 px-3 py-1.5 text-sm text-white hover:bg-violet-500 disabled:opacity-50"
+        >
+          {update.isPending ? "Saving…" : "Save"}
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded-md border border-slate-600 px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800"
+        >
+          Cancel
+        </button>
+      </div>
+    </form>
+  );
+}
+
 function ApplicationsDashboard({ me }: { me: Me }) {
   const queryClient = useQueryClient();
   const [cName, setCName] = useState("");
@@ -706,9 +863,14 @@ function ApplicationsDashboard({ me }: { me: Me }) {
   const [cRepo, setCRepo] = useState("");
   const [cBranch, setCBranch] = useState("main");
   const [cPort, setCPort] = useState(3000);
+  const [cBuildMode, setCBuildMode] = useState<BuildMode>("auto");
+  const [cBuildCmd, setCBuildCmd] = useState("");
+  const [cStartCmd, setCStartCmd] = useState("");
+  const [cDomain, setCDomain] = useState("");
   const [activeLogDeploymentId, setActiveLogDeploymentId] = useState<string | null>(null);
   const [logForApp, setLogForApp] = useState<string | null>(null);
   const [filesForApp, setFilesForApp] = useState<string | null>(null);
+  const [settingsForApp, setSettingsForApp] = useState<string | null>(null);
 
   const appsQuery = useQuery({
     queryKey: ["applications"],
@@ -741,7 +903,11 @@ function ApplicationsDashboard({ me }: { me: Me }) {
         slug: cSlug,
         gitRepo: cRepo,
         gitBranch: cBranch,
-        port: cPort
+        port: cPort,
+        buildMode: cBuildMode,
+        buildCmd: cBuildCmd || undefined,
+        startCmd: cStartCmd || undefined,
+        domain: cDomain || undefined
       });
       return api<AppRow>("/api/applications", {
         method: "POST",
@@ -755,6 +921,10 @@ function ApplicationsDashboard({ me }: { me: Me }) {
       setCRepo("");
       setCBranch("main");
       setCPort(3000);
+      setCBuildMode("auto");
+      setCBuildCmd("");
+      setCStartCmd("");
+      setCDomain("");
     }
   });
 
@@ -837,8 +1007,9 @@ function ApplicationsDashboard({ me }: { me: Me }) {
       <main className="mx-auto max-w-3xl space-y-10 px-4 py-10">
         <h1 className="text-2xl font-semibold text-white">Applications</h1>
         <p className="text-slate-400">
-          Phase 1: public Git URLs with a Dockerfile at the repo root. Live URL:{" "}
+          Public Git URLs — Dockerfile or Nixpacks auto-detection. Live URL:{" "}
           <code className="text-slate-300">&lt;slug&gt;.{baseDomain}</code>
+          <span className="text-slate-500"> · optional custom domain per app.</span>
         </p>
 
         <section className="rounded-xl border border-slate-800 bg-slate-900/50 p-6">
@@ -894,6 +1065,44 @@ function ApplicationsDashboard({ me }: { me: Me }) {
                 />
               </Field>
             </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Build mode">
+                <select
+                  value={cBuildMode}
+                  onChange={(e) => setCBuildMode(e.target.value as BuildMode)}
+                  className="mt-0 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-violet-500"
+                >
+                  <option value="auto">auto (Dockerfile → Nixpacks)</option>
+                  <option value="dockerfile">dockerfile</option>
+                  <option value="nixpacks">nixpacks</option>
+                </select>
+              </Field>
+              <Field label="Custom domain (optional)">
+                <TextInput
+                  value={cDomain}
+                  onChange={(e) => setCDomain(e.target.value.toLowerCase())}
+                  placeholder="app.example.com"
+                />
+              </Field>
+            </div>
+            {cBuildMode !== "dockerfile" ? (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field label="Build command (optional)">
+                  <TextInput
+                    value={cBuildCmd}
+                    onChange={(e) => setCBuildCmd(e.target.value)}
+                    placeholder="Nixpacks auto-detects"
+                  />
+                </Field>
+                <Field label="Start command (optional)">
+                  <TextInput
+                    value={cStartCmd}
+                    onChange={(e) => setCStartCmd(e.target.value)}
+                    placeholder="Nixpacks auto-detects"
+                  />
+                </Field>
+              </div>
+            ) : null}
             {createMut.isError ? (
               <p className="text-sm text-red-400">
                 {createMut.error instanceof Error
@@ -937,17 +1146,32 @@ function ApplicationsDashboard({ me }: { me: Me }) {
                 >
                   <div className="flex flex-wrap items-baseline justify-between gap-2">
                     <div>
-                      <h3 className="font-medium text-white">{a.name}</h3>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="font-medium text-white">{a.name}</h3>
+                        <BuildModeBadge mode={a.buildMode} />
+                      </div>
                       <p className="text-xs text-slate-500">{a.status}</p>
                     </div>
-                    <a
-                      href={appUrl}
-                      className="text-sm text-violet-400 hover:underline"
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      {a.slug}.{baseDomain}
-                    </a>
+                    <div className="flex flex-col items-end gap-1">
+                      <a
+                        href={appUrl}
+                        className="text-sm text-violet-400 hover:underline"
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {a.slug}.{baseDomain}
+                      </a>
+                      {a.domain ? (
+                        <a
+                          href={`https://${a.domain}`}
+                          className="text-xs text-emerald-400 hover:underline"
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          {a.domain}
+                        </a>
+                      ) : null}
+                    </div>
                   </div>
                   <p className="mt-2 font-mono text-xs text-slate-500 break-all">
                     {a.gitRepo} <span className="text-slate-600">@</span>{" "}
@@ -981,6 +1205,17 @@ function ApplicationsDashboard({ me }: { me: Me }) {
                         {filesForApp === a.id ? "Hide files" : "Browse files"}
                       </button>
                     ) : null}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setSettingsForApp(
+                          settingsForApp === a.id ? null : a.id
+                        )
+                      }
+                      className="rounded-md border border-slate-600 px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800"
+                    >
+                      {settingsForApp === a.id ? "Close settings" : "Settings"}
+                    </button>
                     <button
                       type="button"
                       disabled={deleteMut.isPending}
@@ -1042,6 +1277,18 @@ function ApplicationsDashboard({ me }: { me: Me }) {
                   ) : null}
                   {filesForApp === a.id && a.status === "running" ? (
                     <AppFileBrowser appId={a.id} />
+                  ) : null}
+                  {settingsForApp === a.id ? (
+                    <AppSettingsForm
+                      app={a}
+                      onSaved={() => {
+                        void queryClient.invalidateQueries({
+                          queryKey: ["applications"]
+                        });
+                        setSettingsForApp(null);
+                      }}
+                      onCancel={() => setSettingsForApp(null)}
+                    />
                   ) : null}
                 </li>
               );

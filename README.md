@@ -6,7 +6,9 @@ This repository is a **pnpm + Turborepo** monorepo. The detailed bootstrap and p
 
 ## Current status
 
-**v0.1.0** covers **Phase 0 (foundation)** and **Phase 1 (first deploy)** on a single machine: the worker, BullMQ deploy jobs, `docker build` + container lifecycle, Traefik routing, and a dashboard where you can create apps, run deploys with live build logs, **browse past deployments** (short id, **Current** on the live build, status, branch, commit line, Log, **Roll back**), and **browse files** in the running container. See [`CHANGELOG.md`](./CHANGELOG.md) for details. Later phases (Nixpacks, git-push deploys, and more) are in [`sohwe-getting-started.md`](./sohwe-getting-started.md).
+**v0.1.0** covers **Phase 0 (foundation)** and **Phase 1 (first deploy)** on a single machine: the worker, BullMQ deploy jobs, `docker build` + container lifecycle, Traefik routing, and a dashboard where you can create apps, run deploys with live build logs, **browse past deployments** (short id, **Current** on the live build, status, branch, commit line, Log, **Roll back**), and **browse files** in the running container.
+
+Work in progress on `main` — **Phase 2 (broad runtime support)**: **Nixpacks** auto-detection for apps without a Dockerfile (Next.js / Python / Go / Rust / static), per-app **build/start command overrides**, editable **Settings**, and **custom domains with HTTPS** via Traefik + Let's Encrypt (opt-in with `SOHWE_HTTPS_ENABLED=true`). See [`CHANGELOG.md`](./CHANGELOG.md) and [`sohwe-getting-started.md`](./sohwe-getting-started.md) for the full phase plan.
 
 ## Requirements
 

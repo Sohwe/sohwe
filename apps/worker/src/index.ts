@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { dockerBuild } from "@sohwe/builder";
+import { buildAppImage, type BuildMode } from "@sohwe/builder";
 import { prisma } from "@sohwe/db";
 import {
   createRedisForPublish,
@@ -136,9 +136,6 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
   if (!app) {
     throw new Error(`Application ${applicationId} not found`);
   }
-  if (app.buildMode === "nixpacks") {
-    throw new Error("Nixpacks builds are not available yet (Phase 2).");
-  }
 
   const dep = await prisma.deployment.findFirst({
     where: { id: deploymentId, applicationId: app.id }
@@ -148,11 +145,26 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
   }
 
   const baseDomain = process.env.SOHWE_BASE_DOMAIN ?? "sohwe.localhost";
-  const hostRule = app.domain
-    ? app.domain
-    : `${app.slug}.${baseDomain}`;
   const traefikR = traefikName(app.slug);
   const network = process.env.TRAEFIK_DOCKER_NETWORK ?? "sohwe_proxy";
+
+  /**
+   * HTTPS is opt-in via `SOHWE_HTTPS_ENABLED=true` (the operator also has to
+   * configure an ACME resolver + websecure entrypoint in Traefik). We also
+   * require a real public domain; Let's Encrypt will not issue for `.localhost`.
+   */
+  const httpsEnabled =
+    (process.env.SOHWE_HTTPS_ENABLED ?? "").toLowerCase() === "true";
+  const certResolver = process.env.SOHWE_CERT_RESOLVER ?? "letsencrypt";
+
+  const defaultHost = `${app.slug}.${baseDomain}`;
+  const hosts: string[] = [defaultHost];
+  if (app.domain && app.domain !== defaultHost) hosts.push(app.domain);
+
+  const isPublicDomain = (h: string) =>
+    !h.endsWith(".localhost") && !h.endsWith(".local") && h !== "localhost";
+  const useTls = httpsEnabled && hosts.some(isPublicDomain);
+  const hostRule = hosts.map((h) => `Host(\`${h}\`)`).join(" || ");
 
   const logChannel = logChannelName(deploymentId);
   const emit = (line: string) => {
@@ -227,9 +239,12 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
       onLog(`[sohwe] At commit ${commitSha}`);
       onLog(`[sohwe] Building image...`);
       imageTag = buildImageTag(app.slug, deploymentId);
-      await dockerBuild({
+      await buildAppImage({
         contextDir: repoDir,
         imageTag,
+        mode: (app.buildMode as BuildMode) ?? "auto",
+        buildCmd: app.buildCmd,
+        startCmd: app.startCmd,
         onLogLine: onLog
       });
     }
@@ -247,7 +262,7 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
     }
 
     onLog(
-      `[sohwe] Starting container (Traefik: Host(\`${hostRule}\`), port ${String(app.port)})...`
+      `[sohwe] Starting container (Traefik: ${hostRule}, port ${String(app.port)}, tls=${String(useTls)})...`
     );
 
     const containerName =
@@ -257,9 +272,6 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
     const labels: Record<string, string> = {
       "traefik.enable": "true",
       "traefik.docker.network": network,
-      [`traefik.http.routers.${traefikR}.rule`]: `Host(\`${hostRule}\`)`,
-      [`traefik.http.routers.${traefikR}.entrypoints`]: "web",
-      [`traefik.http.routers.${traefikR}.service`]: traefikR,
       [`traefik.http.services.${traefikR}.loadbalancer.server.port`]: String(
         port
       ),
@@ -267,6 +279,28 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
       "sohwe.app": app.id,
       "sohwe.deployment": deploymentId
     };
+
+    // Always expose an HTTP router. When TLS is enabled, HTTP redirects to HTTPS.
+    labels[`traefik.http.routers.${traefikR}.rule`] = hostRule;
+    labels[`traefik.http.routers.${traefikR}.entrypoints`] = "web";
+    labels[`traefik.http.routers.${traefikR}.service`] = traefikR;
+
+    if (useTls) {
+      const secureName = `${traefikR}s`;
+      labels[`traefik.http.routers.${secureName}.rule`] = hostRule;
+      labels[`traefik.http.routers.${secureName}.entrypoints`] = "websecure";
+      labels[`traefik.http.routers.${secureName}.service`] = traefikR;
+      labels[`traefik.http.routers.${secureName}.tls`] = "true";
+      labels[`traefik.http.routers.${secureName}.tls.certresolver`] =
+        certResolver;
+
+      // HTTP → HTTPS redirect middleware, applied to the plain router.
+      const mw = `${traefikR}-redirect`;
+      labels[`traefik.http.middlewares.${mw}.redirectscheme.scheme`] = "https";
+      labels[`traefik.http.middlewares.${mw}.redirectscheme.permanent`] =
+        "true";
+      labels[`traefik.http.routers.${traefikR}.middlewares`] = mw;
+    }
 
     const c = await docker.createContainer({
       name: containerName,
