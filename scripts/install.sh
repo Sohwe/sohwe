@@ -283,6 +283,12 @@ fetch() {
 }
 
 fetch_assets() {
+    # Ensure the data dir exists before anything tries to drop a file here.
+    # write_env_file also mkdirs this (idempotent), but fetch_assets runs first
+    # and would otherwise explode with "No such file or directory" on the mv.
+    mkdir -p "${DATA_DIR}"
+    chmod 750 "${DATA_DIR}"
+
     log "Fetching compose files from ${RAW_BASE}…"
     fetch "${RAW_BASE}/docker-compose.prod.yml"  "${COMPOSE_BASE}"
     fetch "${RAW_BASE}/docker-compose.https.yml" "${COMPOSE_HTTPS}"
