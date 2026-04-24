@@ -81,7 +81,7 @@ services:
       - sohwe_proxy
 
   api:
-    image: ${SOHWE_IMAGE_API:-ghcr.io/nanaab-116/sohwe-api:latest}
+    image: ${SOHWE_IMAGE_API:-ghcr.io/sohwe/sohwe-api:latest}
     restart: unless-stopped
     depends_on:
       postgres:
@@ -102,7 +102,7 @@ services:
       - sohwe_proxy
 
   worker:
-    image: ${SOHWE_IMAGE_WORKER:-ghcr.io/nanaab-116/sohwe-worker:latest}
+    image: ${SOHWE_IMAGE_WORKER:-ghcr.io/sohwe/sohwe-worker:latest}
     restart: unless-stopped
     depends_on:
       postgres:
@@ -122,7 +122,7 @@ services:
       - sohwe_internal
 
   dashboard:
-    image: ${SOHWE_IMAGE_DASHBOARD:-ghcr.io/nanaab-116/sohwe-dashboard:latest}
+    image: ${SOHWE_IMAGE_DASHBOARD:-ghcr.io/sohwe/sohwe-dashboard:latest}
     restart: unless-stopped
     depends_on:
       - api

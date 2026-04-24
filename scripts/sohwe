@@ -12,9 +12,9 @@ readonly DATA_DIR="/etc/sohwe"
 readonly ENV_FILE="${DATA_DIR}/sohwe.env"
 readonly COMPOSE_BASE="${DATA_DIR}/docker-compose.prod.yml"
 readonly PREV_VERSION_FILE="${DATA_DIR}/.previous-version"
-readonly REPO="NanaAb-116/sohwe"
+readonly REPO="Sohwe/sohwe"
 # Image namespace — GHCR lowercases the owner segment.
-readonly IMAGE_NS="nanaab-116/sohwe"
+readonly IMAGE_NS="sohwe/sohwe"
 readonly RAW_BASE="https://raw.githubusercontent.com/${REPO}/main"
 
 [[ $EUID -eq 0 ]] || { exec sudo -E bash "$0" "$@"; }

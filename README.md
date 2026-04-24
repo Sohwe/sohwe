@@ -15,7 +15,7 @@ This repository is a **pnpm + Turborepo** monorepo. The detailed bootstrap and p
 On a fresh Ubuntu 22.04 or 24.04 host:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NanaAb-116/sohwe/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Sohwe/sohwe/main/scripts/install.sh | bash
 ```
 
 The installer will:

@@ -3,7 +3,7 @@
 #
 # Sohwe installer. Target: a fresh Ubuntu 22.04 or 24.04 VPS.
 #
-#   curl -fsSL https://raw.githubusercontent.com/NanaAb-116/sohwe/main/scripts/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/Sohwe/sohwe/main/scripts/install.sh | bash
 #
 # Optional environment variables (or pass as `KEY=value bash install.sh`):
 #
@@ -39,9 +39,9 @@ fail()  { printf '%berr%b %s\n'   "${C_RED}"    "${C_RESET}" "$*" >&2; exit 1; }
 #-----------------------------------------------------------------------------#
 
 # Source-repo path (mixed case, used for raw.githubusercontent URLs).
-readonly REPO="NanaAb-116/sohwe"
+readonly REPO="Sohwe/sohwe"
 # Image namespace — GHCR lowercases the owner segment.
-readonly IMAGE_NS="nanaab-116/sohwe"
+readonly IMAGE_NS="sohwe/sohwe"
 readonly CHANNEL="${SOHWE_CHANNEL:-main}"
 readonly RAW_BASE="https://raw.githubusercontent.com/${REPO}/${CHANNEL}"
 readonly DATA_DIR="/etc/sohwe"
