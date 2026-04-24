@@ -1,0 +1,103 @@
+name: release
+
+## Builds and publishes production images to GHCR on every `v*` tag.
+##
+## Pushes three images per tag (multi-arch: linux/amd64 + linux/arm64):
+##   ghcr.io/<owner>/sohwe-api:<tag>
+##   ghcr.io/<owner>/sohwe-worker:<tag>
+##   ghcr.io/<owner>/sohwe-dashboard:<tag>
+##
+## The `latest` tag is also moved when the Git ref is a semver release tag
+## (not a pre-release like v0.2.0-rc.1).
+
+on:
+  push:
+    tags:
+      - "v*"
+  # Manual dispatch for rebuilding an arbitrary ref without cutting a new tag.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag to push (e.g. v0.2.0 or dev)"
+        required: true
+        default: "dev"
+
+permissions:
+  contents: read
+  packages: write   # Required to push to ghcr.io/<owner>/*
+
+concurrency:
+  # One release job per ref; cancel stale runs if a tag is force-pushed.
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - name: api
+            dockerfile: docker/api.Dockerfile
+          - name: worker
+            dockerfile: docker/worker.Dockerfile
+          - name: dashboard
+            dockerfile: docker/dashboard.Dockerfile
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU (for arm64 emulation on an x86 runner)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # GHCR requires lowercase repository paths; GitHub actor/owner may be
+      # mixed case (e.g. NanaAb-116). Compute a lowercase copy once.
+      - name: Compute lowercase owner
+        id: owner
+        run: echo "lc=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Derive metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ steps.owner.outputs.lc }}/sohwe-${{ matrix.name }}
+          tags: |
+            # Use the pushed tag as-is: v1.2.3 -> v1.2.3
+            type=ref,event=tag
+            # Also strip the leading 'v' so consumers can pin 1.2.3
+            type=semver,pattern={{version}}
+            # Move `latest` only for stable releases (skips -rc, -beta, etc.)
+            type=raw,value=latest,enable=${{ github.event_name == 'push' && !contains(github.ref, '-') }}
+            # workflow_dispatch inputs
+            type=raw,value=${{ github.event.inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
+          labels: |
+            org.opencontainers.image.title=sohwe-${{ matrix.name }}
+            org.opencontainers.image.description=Sohwe ${{ matrix.name }} service
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.licenses=AGPL-3.0
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # GitHub Actions cache so each matrix build reuses layers between runs.
+          cache-from: type=gha,scope=sohwe-${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=sohwe-${{ matrix.name }}
+          provenance: false   # Cleaner ghcr listing; no supply-chain attestation yet.

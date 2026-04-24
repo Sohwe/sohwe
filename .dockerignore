@@ -1,0 +1,37 @@
+## Keep build contexts small and hermetic.
+## Anything listed here is NOT sent to the Docker daemon during `docker build`.
+
+# Node / pnpm
+**/node_modules
+**/.pnpm-store
+**/.pnpm-debug.log*
+**/npm-debug.log*
+
+# Build outputs (regenerated inside the image)
+**/dist
+**/.turbo
+**/.next
+**/.vite
+**/coverage
+
+# VCS + editor
+.git
+.gitignore
+.gitattributes
+.github
+.vscode
+.idea
+**/.DS_Store
+
+# Local env files — secrets never belong in an image
+**/.env
+**/.env.*
+!**/.env.example
+
+# Docs / repo-level junk
+*.md
+!README.md
+docker-compose.dev.yml
+docker-compose.prod.yml
+docker-compose.https.yml
+scripts

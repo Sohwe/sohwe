@@ -1,0 +1,21 @@
+## HTTPS overlay — applied on top of docker-compose.prod.yml when the
+## operator provides a public domain + ACME email. `scripts/install.sh`
+## writes SOHWE_COMPOSE_OVERLAYS into /etc/sohwe/sohwe.env so the `sohwe`
+## wrapper runs `docker compose -f prod.yml -f https.yml ...` every time.
+
+services:
+  dashboard:
+    labels:
+      # Replace the HTTP router from the base file with one that terminates
+      # TLS on websecure and requests a Let's Encrypt cert for SOHWE_HOST.
+      - "traefik.http.routers.sohwe.rule=Host(`${SOHWE_HOST}`)"
+      - "traefik.http.routers.sohwe.entrypoints=websecure"
+      - "traefik.http.routers.sohwe.tls=true"
+      - "traefik.http.routers.sohwe.tls.certresolver=letsencrypt"
+      # Separate :80 router that only redirects to HTTPS. Keeps ACME's HTTP-01
+      # challenge working (Traefik internally short-circuits challenge paths).
+      - "traefik.http.routers.sohwe-http.rule=Host(`${SOHWE_HOST}`)"
+      - "traefik.http.routers.sohwe-http.entrypoints=web"
+      - "traefik.http.routers.sohwe-http.middlewares=sohwe-https-redirect"
+      - "traefik.http.middlewares.sohwe-https-redirect.redirectscheme.scheme=https"
+      - "traefik.http.middlewares.sohwe-https-redirect.redirectscheme.permanent=true"

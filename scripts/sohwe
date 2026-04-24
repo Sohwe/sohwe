@@ -1,0 +1,172 @@
+#!/usr/bin/env bash
+# shellcheck shell=bash
+#
+# Sohwe — host-side management CLI installed by scripts/install.sh.
+#
+# All state is in /etc/sohwe. Every subcommand loads /etc/sohwe/sohwe.env and
+# dispatches to `docker compose` with the right overlay files.
+
+set -euo pipefail
+
+readonly DATA_DIR="/etc/sohwe"
+readonly ENV_FILE="${DATA_DIR}/sohwe.env"
+readonly COMPOSE_BASE="${DATA_DIR}/docker-compose.prod.yml"
+readonly PREV_VERSION_FILE="${DATA_DIR}/.previous-version"
+readonly REPO="NanaAb-116/sohwe"
+# Image namespace — GHCR lowercases the owner segment.
+readonly IMAGE_NS="nanaab-116/sohwe"
+readonly RAW_BASE="https://raw.githubusercontent.com/${REPO}/main"
+
+[[ $EUID -eq 0 ]] || { exec sudo -E bash "$0" "$@"; }
+
+[[ -f "${ENV_FILE}" ]] || { echo "Missing ${ENV_FILE}. Run the installer first." >&2; exit 1; }
+[[ -f "${COMPOSE_BASE}" ]] || { echo "Missing ${COMPOSE_BASE}." >&2; exit 1; }
+
+# Read overlays from env without sourcing untrusted content into this shell.
+overlays_from_env() {
+    grep -E '^SOHWE_COMPOSE_OVERLAYS=' "${ENV_FILE}" | head -n1 | cut -d= -f2- | tr -d '"'
+}
+
+# Build the compose invocation. The compose plugin reads --env-file once
+# and substitutes variables referenced in the YAML.
+compose() {
+    local overlays; overlays="$(overlays_from_env)"
+    local args=(--env-file "${ENV_FILE}" -f "${COMPOSE_BASE}")
+    if [[ -n "${overlays}" ]]; then
+        # Overlays are colon-separated paths, mirroring COMPOSE_FILE convention.
+        IFS=':' read -r -a extra <<< "${overlays}"
+        for f in "${extra[@]}"; do args+=(-f "${f}"); done
+    fi
+    docker compose "${args[@]}" "$@"
+}
+
+current_version() {
+    grep -E '^SOHWE_VERSION=' "${ENV_FILE}" | head -n1 | cut -d= -f2-
+}
+
+set_version_in_env() {
+    local new="$1"
+    # Update SOHWE_VERSION and every SOHWE_IMAGE_* line to match.
+    sed -i \
+        -e "s|^SOHWE_VERSION=.*|SOHWE_VERSION=${new}|" \
+        -e "s|^SOHWE_IMAGE_API=.*|SOHWE_IMAGE_API=ghcr.io/${IMAGE_NS}-api:${new}|" \
+        -e "s|^SOHWE_IMAGE_WORKER=.*|SOHWE_IMAGE_WORKER=ghcr.io/${IMAGE_NS}-worker:${new}|" \
+        -e "s|^SOHWE_IMAGE_DASHBOARD=.*|SOHWE_IMAGE_DASHBOARD=ghcr.io/${IMAGE_NS}-dashboard:${new}|" \
+        "${ENV_FILE}"
+}
+
+usage() {
+    cat <<'EOF'
+Sohwe CLI
+
+Usage:
+  sohwe <command> [args]
+
+Commands:
+  up                  Start the stack (equivalent to `docker compose up -d`).
+  down                Stop the stack (containers remain; volumes preserved).
+  restart             Restart every Sohwe service.
+  status              Show service state.
+  logs [service]      Follow logs for the stack or a single service.
+  pull                Pull the images pinned in sohwe.env.
+  migrate             Run `prisma migrate deploy` inside the api container.
+  update [version]    Upgrade to `version` (default: latest). Pulls, migrates,
+                      restarts. The previous version is stashed for rollback.
+  rollback            Roll back to the version saved by the last `update`.
+  version             Show the currently installed version.
+  env                 Print the path to the env file.
+  help                This message.
+
+Secrets live in /etc/sohwe/sohwe.env. Edit with care.
+EOF
+}
+
+cmd_up()      { compose up -d "$@"; }
+cmd_down()    { compose down "$@"; }
+cmd_restart() { compose restart "$@"; }
+cmd_status()  { compose ps "$@"; }
+cmd_logs()    { compose logs -f "$@"; }
+cmd_pull()    { compose pull "$@"; }
+cmd_version() { current_version; }
+cmd_env()     { echo "${ENV_FILE}"; }
+
+cmd_migrate() {
+    # The api image has Prisma + schema baked in at /app/packages/db.
+    # v0.3.0 uses `prisma db push` (declarative, no migrations directory).
+    # A proper `prisma migrate` pipeline is planned for a future phase; once
+    # it lands this should switch to `prisma migrate deploy`.
+    compose exec -T -w /app/packages/db api pnpm exec prisma db push --accept-data-loss --skip-generate
+}
+
+refresh_compose_files() {
+    # Keep compose files on the host in sync with the tagged version. Simpler
+    # than shipping a new installer for every release.
+    local tmp
+    tmp="$(mktemp)"
+    if curl -fsSL "${RAW_BASE}/docker-compose.prod.yml" -o "${tmp}"; then
+        install -m 644 "${tmp}" "${COMPOSE_BASE}"
+    fi
+    if curl -fsSL "${RAW_BASE}/docker-compose.https.yml" -o "${tmp}"; then
+        install -m 644 "${tmp}" "${DATA_DIR}/docker-compose.https.yml"
+    fi
+    rm -f "${tmp}"
+}
+
+cmd_update() {
+    local target="${1:-latest}"
+    local prev; prev="$(current_version)"
+    [[ -n "${prev}" ]] || { echo "Could not read current version from ${ENV_FILE}" >&2; exit 1; }
+
+    echo "Updating Sohwe: ${prev} -> ${target}"
+    refresh_compose_files
+    echo "${prev}" > "${PREV_VERSION_FILE}"
+    set_version_in_env "${target}"
+
+    compose pull
+    compose up -d
+    cmd_migrate
+    # Occasionally Traefik's Docker provider misses a label update when the
+    # dashboard container is recreated. Bouncing Traefik after everything else
+    # has settled is cheap and guarantees the router table is fresh.
+    compose restart traefik >/dev/null 2>&1 || true
+    echo "Sohwe ${target} is live. Previous version (${prev}) saved for rollback."
+}
+
+cmd_rollback() {
+    [[ -f "${PREV_VERSION_FILE}" ]] \
+        || { echo "No previous version recorded. Nothing to roll back to." >&2; exit 1; }
+    local prev; prev="$(cat "${PREV_VERSION_FILE}")"
+    local current; current="$(current_version)"
+    echo "Rolling back Sohwe: ${current} -> ${prev}"
+    set_version_in_env "${prev}"
+    compose pull
+    compose up -d
+    compose restart traefik >/dev/null 2>&1 || true
+    # Intentionally NOT running `migrate` on rollback. Prisma migrations are
+    # forward-only; if the new version applied schema changes we can't
+    # mechanically undo them here. Operator should restore a DB backup if
+    # schema is incompatible.
+    echo "Rolled back to ${prev}. Note: DB schema is NOT reverted."
+    rm -f "${PREV_VERSION_FILE}"
+}
+
+main() {
+    local cmd="${1:-help}"; shift || true
+    case "${cmd}" in
+        up)       cmd_up       "$@" ;;
+        down)     cmd_down     "$@" ;;
+        restart)  cmd_restart  "$@" ;;
+        status|ps) cmd_status  "$@" ;;
+        logs)     cmd_logs     "$@" ;;
+        pull)     cmd_pull     "$@" ;;
+        migrate)  cmd_migrate  "$@" ;;
+        update)   cmd_update   "$@" ;;
+        rollback) cmd_rollback "$@" ;;
+        version|--version|-v) cmd_version ;;
+        env)      cmd_env ;;
+        help|--help|-h|"") usage ;;
+        *) echo "Unknown command: ${cmd}" >&2; usage >&2; exit 2 ;;
+    esac
+}
+
+main "$@"

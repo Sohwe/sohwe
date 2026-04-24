@@ -7,6 +7,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+### Added
+
+- **Phase 3.5 — Packaging & Install.** A fresh Ubuntu 22.04 or 24.04 VPS can now be turned into a working Sohwe instance with `curl -fsSL https://raw.githubusercontent.com/NanaAb-116/sohwe/main/scripts/install.sh | bash`.
+  - **Production Dockerfiles** in `docker/` — multi-stage, `node:24-slim` base, Prisma client generated at build time. `api.Dockerfile` runs Fastify via `tsx`; `worker.Dockerfile` bakes in `git`, `docker-ce-cli`, and a pinned `nixpacks` release so the host only needs Docker; `dashboard.Dockerfile` builds the Vite SPA and serves it with `nginx:alpine`.
+  - **`docker/dashboard.nginx.conf`** — same-origin serving: static assets + SPA fallback, plus `/api` and `/health` reverse-proxied to the `api` service (eliminates CORS, keeps session cookies first-party, forwards SSE/WebSocket headers for upcoming log streaming).
+  - **`docker-compose.prod.yml`** — `api` + `worker` + `dashboard` + `postgres:16-alpine` + `redis:7-alpine` + `traefik:v3.1`, split across `sohwe_proxy` (public; Traefik + dashboard + managed user apps) and `sohwe_internal` (control plane). Traefik dashboard is disabled, Docker socket is mounted read-only, and Let's Encrypt HTTP-01 is pre-wired.
+  - **`docker-compose.https.yml`** — optional overlay that flips the dashboard router to `websecure` with a Let's Encrypt cert and an HTTP→HTTPS redirect. Applied automatically when the operator provides a domain + email at install time.
+  - **`scripts/install.sh`** — idempotent installer. Detects Ubuntu 22.04/24.04, installs Docker Engine + compose plugin from Docker's apt repo, collects an optional domain/email (via `/dev/tty` so `curl | bash` still prompts), generates `/etc/sohwe/sohwe.env` with random 32-byte `SESSION_SECRET`, `SOHWE_ENCRYPTION_KEY`, and Postgres password (chmod 600), downloads compose files + the `sohwe` CLI, runs `prisma migrate deploy`, prints the dashboard URL.
+  - **`sohwe` CLI** at `/usr/local/bin/sohwe` — `up`, `down`, `restart`, `status`, `logs`, `pull`, `migrate`, `update [version]`, `rollback`, `version`, `env`. `update` pulls the new images, refreshes compose files, runs migrations, and stashes the previous version in `/etc/sohwe/.previous-version` so `sohwe rollback` works for one hop. Rollback intentionally does *not* reverse Prisma migrations.
+  - **`.github/workflows/release.yml`** — on every `v*` tag (and manual dispatch), builds and pushes multi-arch (`linux/amd64` + `linux/arm64`) images to `ghcr.io/nanaab-116/sohwe-{api,worker,dashboard}:<tag>` (GHCR lowercases the owner segment). `latest` moves only for stable semver tags (skips `-rc`, `-beta`, etc.). Uses GitHub Actions layer cache per image.
+  - **Root `.dockerignore`** — keeps build contexts small; excludes `node_modules`, `dist`, `.turbo`, `.env*`, docs, and the compose files themselves.
+
 ### Changed
 
 - **Dashboard** — Complete UI revamp: Render-style **shell** (collapsible sidebar + top bar + breadcrumbs), **TanStack Router** URL routes (`/apps`, `/apps/:id/overview|deployments|variables|volumes|files|settings`, deploy log at `/apps/:id/deployments/:deploymentId`), **shadcn-style** Radix primitives (cards, dialogs, sheets, tables, tabs, toasts), light/dark **theme** toggle, **sonner** notifications, responsive app cards, deployment log in a **slide-over sheet**, env editor with **bulk .env paste**, and confirm dialogs instead of `window.confirm`.

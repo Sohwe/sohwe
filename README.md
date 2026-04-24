@@ -8,15 +8,52 @@ This repository is a **pnpm + Turborepo** monorepo. The detailed bootstrap and p
 
 **v0.3.0** includes through **Phase 3 (stateful apps)** on a single machine: Nixpacks + custom domains, **encrypted env vars** (dashboard + API; worker injects at deploy), **named persistent volumes** with Docker `Binds`, **memory/CPU limits**, per-app **internal Docker network** (`sohwe_app_<id>_net` plus the Traefik network), and the same dashboard flows as before (deployments, **Browse files** — use a mount path under a volume after redeploy to verify persisted data).
 
-Next roadmap milestone: **Phase 3.5 (packaging & install)**, then **Phase 4 (observability)**. See [`CHANGELOG.md`](./CHANGELOG.md) and [`sohwe-getting-started.md`](./sohwe-getting-started.md).
+**Unreleased** completes **Phase 3.5 (packaging & install)**: production Dockerfiles, `docker-compose.prod.yml` + HTTPS overlay, multi-arch GHCR publishing on tag, and a one-command installer for fresh Ubuntu 22.04/24.04 VPS hosts. Next milestone: **Phase 4 (observability)**. See [`CHANGELOG.md`](./CHANGELOG.md) and [`sohwe-getting-started.md`](./sohwe-getting-started.md).
 
-## Requirements
+## Install on a server (production)
+
+On a fresh Ubuntu 22.04 or 24.04 host:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/NanaAb-116/sohwe/main/scripts/install.sh | bash
+```
+
+The installer will:
+
+1. Install Docker Engine + the compose plugin if they aren't already present.
+2. Prompt for a public domain and Let's Encrypt email (optional — skip for HTTP-only).
+3. Generate `/etc/sohwe/sohwe.env` with random `SESSION_SECRET`, `SOHWE_ENCRYPTION_KEY`, and Postgres password (mode 0600).
+4. Pull the `api`, `worker`, and `dashboard` images from GHCR and start the stack.
+5. Apply the database schema (`prisma db push`; a `migrate deploy` pipeline is planned for a later phase).
+6. Print the dashboard URL.
+
+Complete the first-run setup (create the owner account + organization) in the dashboard.
+
+### Managing the instance
+
+Everything is driven by the `sohwe` CLI installed to `/usr/local/bin/sohwe`:
+
+```bash
+sohwe status               # show running services
+sohwe logs api             # tail a service's logs
+sohwe update               # upgrade to latest
+sohwe update v0.4.0        # pin a specific version
+sohwe rollback             # revert to the version before the last update (one hop)
+sohwe restart
+sohwe env                  # print the path to the env file
+```
+
+State lives entirely under `/etc/sohwe/`. Postgres data and Let's Encrypt certs are in named Docker volumes (`sohwe_postgres_data`, `sohwe_traefik_acme`), so re-running the installer or rebooting the host doesn't lose data.
+
+## Development
+
+### Requirements
 
 - **Node.js** 24+ (see `.nvmrc`)
 - **pnpm** 9 (`packageManager` in root `package.json`)
 - **Docker** (for local Postgres, Redis, Traefik)
 
-## Quick start
+### Quick start
 
 1. **Install dependencies**
 
@@ -52,14 +89,14 @@ Next roadmap milestone: **Phase 3.5 (packaging & install)**, then **Phase 4 (obs
 
    On first visit, complete setup to create the owner and organization, then sign in.
 
-## Environment
+### Environment
 
 - **`apps/api/.env`** — API runtime (`DATABASE_URL`, `REDIS_URL`, `PORT`, `SESSION_SECRET`, `SOHWE_ENCRYPTION_KEY`, etc.). The **worker** also needs `SOHWE_ENCRYPTION_KEY` (and `DATABASE_URL` / `REDIS_URL`) to decrypt env at deploy; in local dev, `apps/worker` loads `apps/api/.env` via dotenv, so a single file is enough.
 - **`packages/db/.env`** — Prisma CLI (`DATABASE_URL` for `db:push` / `db:studio`).
 
 Use strong, unique values for secrets in any shared or deployed environment. The getting-started doc shows the expected variable names and example connection strings.
 
-## Repository layout
+### Repository layout
 
 | Path | Role |
 | --- | --- |
@@ -71,8 +108,13 @@ Use strong, unique values for secrets in any shared or deployed environment. The
 | `packages/queue` | BullMQ deploy job types and queue config (API + worker) |
 | `packages/crypto` | AES-256-GCM env encryption helpers (API + worker) |
 | `docker-compose.dev.yml` | Local Postgres, Redis, Traefik |
+| `docker-compose.prod.yml` + `docker-compose.https.yml` | Production stack (api + worker + dashboard + infra) |
+| `docker/*.Dockerfile` | Multi-stage production images (api / worker / dashboard) |
+| `scripts/install.sh` | One-command installer for Ubuntu 22.04/24.04 |
+| `scripts/sohwe` | Host-side CLI installed to `/usr/local/bin/sohwe` |
+| `.github/workflows/release.yml` | Multi-arch GHCR publish on `v*` tags |
 
-## Scripts
+### Scripts
 
 | Command | Description |
 | --- | --- |
