@@ -58,12 +58,38 @@ NONINTERACTIVE="${SOHWE_NONINTERACTIVE:-0}"
 #-----------------------------------------------------------------------------#
 # Privileges
 #-----------------------------------------------------------------------------#
+#
+# Re-exec as root if we aren't already. This is subtle because of `curl | bash`:
+# when piped into bash, `$0` is the interpreter ("bash" or "/usr/bin/bash"),
+# not a readable path to this script. Re-running `sudo bash "$0"` in that case
+# hands bash its own binary as a script and blows up with:
+#
+#   /usr/bin/bash: /usr/bin/bash: cannot execute binary file
+#
+# So if `$0` doesn't point at a readable file, we fetch ourselves to a temp
+# file first and sudo-exec that. Uses the same URL as everything else so a
+# mismatched installer/compose version is impossible.
 
 if [[ $EUID -ne 0 ]]; then
-    if command -v sudo >/dev/null 2>&1; then
+    if ! command -v sudo >/dev/null 2>&1; then
+        fail "Run as root (or install sudo)."
+    fi
+
+    if [[ -f "$0" && -r "$0" ]]; then
+        # Invoked as a real file (e.g. bash ./install.sh). Normal re-exec.
         exec sudo -E bash "$0" "$@"
     fi
-    fail "Run as root (or install sudo)."
+
+    # Piped case: materialize ourselves to disk, then re-exec. Preserves env
+    # so SOHWE_VERSION, SOHWE_HOST, etc. carry through the sudo boundary.
+    tmp_self="$(mktemp -t sohwe-install.XXXXXX.sh)"
+    if ! curl -fsSL "${RAW_BASE}/scripts/install.sh" -o "${tmp_self}"; then
+        rm -f "${tmp_self}"
+        fail "Failed to re-download installer from ${RAW_BASE}/scripts/install.sh"
+    fi
+    chmod +x "${tmp_self}"
+    # shellcheck disable=SC2093  # exec replaces this shell; nothing after runs.
+    exec sudo -E bash "${tmp_self}" "$@"
 fi
 
 #-----------------------------------------------------------------------------#
