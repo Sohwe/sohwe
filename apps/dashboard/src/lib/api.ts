@@ -1,4 +1,8 @@
-const BASE = import.meta.env.DEV ? "" : (import.meta.env.VITE_API_URL ?? "http://localhost:3001");
+// Production images serve `/api` via nginx on the same origin; only set
+// VITE_API_URL for special builds (e.g. static dashboard talking to a remote API).
+const BASE = import.meta.env.DEV
+  ? ""
+  : (import.meta.env.VITE_API_URL ?? "");
 
 function errMessage(body: unknown, fallback: string): string {
   if (
