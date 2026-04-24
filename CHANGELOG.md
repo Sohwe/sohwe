@@ -7,6 +7,13 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+### Fixed
+
+- **Installer** — fresh-install failures surfaced during v0.3.5 VPS testing:
+  - `curl | bash` no longer dies with `/usr/bin/bash: cannot execute binary file` when re-execing under `sudo`. Piped runs now re-download the installer to a temp file before `sudo -E bash`'ing it, because `$0` is the interpreter — not a readable script path — in that scenario.
+  - `scripts/install.sh` now creates `/etc/sohwe/` up front (inside `fetch_assets`), fixing `mv: ... No such file or directory` on first run where the env-file step (which used to be the only `mkdir`) hadn't executed yet.
+- **`sohwe` CLI** — `sohwe up` and `sohwe restart` now actually apply pending `sohwe.env` / compose-overlay edits. `restart` was a plain `docker compose restart`, which only bounces running containers with their existing config and silently ignored operator edits (e.g. toggling the HTTPS overlay). Both commands now run `docker compose up -d` (reconfigures + recreates only what changed) and then bounce Traefik, matching the existing `update` / `rollback` safeguard against stale Traefik router tables after label changes.
+
 ### Added
 
 - **Phase 3.5 — Packaging & Install.** A fresh Ubuntu 22.04 or 24.04 VPS can now be turned into a working Sohwe instance with `curl -fsSL https://raw.githubusercontent.com/NanaAb-116/sohwe/main/scripts/install.sh | bash`.

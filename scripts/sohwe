@@ -63,9 +63,9 @@ Usage:
   sohwe <command> [args]
 
 Commands:
-  up                  Start the stack (equivalent to `docker compose up -d`).
+  up                  Start the stack and apply any config changes in sohwe.env.
   down                Stop the stack (containers remain; volumes preserved).
-  restart             Restart every Sohwe service.
+  restart             Apply pending sohwe.env / compose changes and restart.
   status              Show service state.
   logs [service]      Follow logs for the stack or a single service.
   pull                Pull the images pinned in sohwe.env.
@@ -81,9 +81,27 @@ Secrets live in /etc/sohwe/sohwe.env. Edit with care.
 EOF
 }
 
-cmd_up()      { compose up -d "$@"; }
+# `up` and `restart` both end with a Traefik bounce. Traefik's Docker provider
+# sometimes misses a label change when the dashboard container is recreated
+# (observed: stale Host(...) router from a removed HTTPS overlay still winning,
+# returning 404 for every request). Bouncing Traefik after config-affecting
+# operations is cheap and guarantees a clean router table. Same safeguard is
+# already in cmd_update and cmd_rollback.
+#
+# `restart` is deliberately implemented as `up -d` rather than `compose restart`.
+# Operators expect "restart" to apply any edits they made to sohwe.env or the
+# compose files (overlays, new version pins, etc). Plain `compose restart` only
+# bounces existing containers with their existing config, which silently
+# ignores those edits.
+cmd_up() {
+    compose up -d "$@"
+    compose restart traefik >/dev/null 2>&1 || true
+}
 cmd_down()    { compose down "$@"; }
-cmd_restart() { compose restart "$@"; }
+cmd_restart() {
+    compose up -d "$@"
+    compose restart traefik >/dev/null 2>&1 || true
+}
 cmd_status()  { compose ps "$@"; }
 cmd_logs()    { compose logs -f "$@"; }
 cmd_pull()    { compose pull "$@"; }
