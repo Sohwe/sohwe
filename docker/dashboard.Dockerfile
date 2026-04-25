@@ -41,6 +41,10 @@ RUN --mount=type=cache,id=pnpm-store-dashboard,target=/root/.local/share/pnpm/st
 # Stage 3: build the SPA
 ############################
 FROM deps AS build
+# Same-origin /api is served by nginx in the runtime image. Default is an empty
+# base (relative URLs). Pass --build-arg VITE_API_URL= only for split-origin builds.
+ARG VITE_API_URL
+ENV VITE_API_URL=${VITE_API_URL}
 COPY packages packages
 COPY apps/dashboard apps/dashboard
 RUN pnpm --filter @sohwe/dashboard build
