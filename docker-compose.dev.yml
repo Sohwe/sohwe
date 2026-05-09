@@ -29,7 +29,9 @@ services:
       retries: 5
 
   traefik:
-    image: traefik:v3.1
+    # See note in docker-compose.prod.yml: Traefik <3.7 hardcodes Docker
+    # API 1.24 which Docker Engine 29.x rejects. Keep this in sync with prod.
+    image: traefik:v3.7
     container_name: sohwe-traefik-dev
     command:
       - --api.insecure=true
