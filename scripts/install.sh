@@ -13,6 +13,9 @@
 #   SOHWE_CHANNEL        branch to fetch compose files from (default: main)
 #   SOHWE_NONINTERACTIVE 1 = never prompt; fail if required input is missing
 #
+#   SOHWE_HTTP_PORT      host port published for Traefik HTTP (default: 8080)
+#   SOHWE_SETUP_PASSWORD installer password for first dashboard access (min 8 chars)
+#
 # The script is idempotent. Re-running it upgrades compose files and the
 # `sohwe` wrapper without touching secrets in /etc/sohwe/sohwe.env.
 
@@ -54,6 +57,7 @@ SOHWE_VERSION="${SOHWE_VERSION:-latest}"
 SOHWE_HOST_INPUT="${SOHWE_HOST:-}"
 SOHWE_ACME_EMAIL_INPUT="${SOHWE_ACME_EMAIL:-}"
 NONINTERACTIVE="${SOHWE_NONINTERACTIVE:-0}"
+readonly DEFAULT_HTTP_PORT="${DEFAULT_HTTP_PORT:-8080}"
 
 #-----------------------------------------------------------------------------#
 # Privileges
@@ -175,8 +179,8 @@ collect_inputs() {
     cat <<EOF
 
 ${C_BOLD}Sohwe setup${C_RESET}
-You can skip the domain for now and reach the dashboard via the server's IP
-address (HTTP only). Set a domain later with:  sohwe enable-https <host> <email>
+You can skip the domain and use http://<this-host>:${SOHWE_HTTP_PORT} only, or add
+a DNS name later. Set HTTPS later with:  sohwe enable-https <host> <email>
 
 EOF
     prompt_if_interactive SOHWE_HOST_INPUT       "Public domain for the dashboard (blank = HTTP only): "
@@ -184,6 +188,139 @@ EOF
         prompt_if_interactive SOHWE_ACME_EMAIL_INPUT "Contact email for Let's Encrypt: "
         [[ -n "${SOHWE_ACME_EMAIL_INPUT}" ]] \
             || fail "An email is required when a domain is configured (Let's Encrypt needs it)."
+    fi
+}
+
+#-----------------------------------------------------------------------------#
+# Host port + installer password
+#-----------------------------------------------------------------------------#
+
+# Exit 0 if something is listening on TCP host port $1.
+host_port_in_use() {
+    local port="$1"
+    [[ "$port" =~ ^[0-9]+$ ]] || return 2
+    (( port >= 1 && port <= 65535 )) || return 2
+
+    if command -v ss >/dev/null 2>&1; then
+        if ss -tln 2>/dev/null | awk -v p="$port" 'BEGIN { found = 0 } NR > 1 && $4 ~ ":"p"$" { found = 1 } END { exit !found }'; then
+            return 0
+        fi
+    fi
+
+    if command -v lsof >/dev/null 2>&1; then
+        if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
+            return 0
+        fi
+    fi
+
+    if timeout 0.25 bash -c "echo >/dev/tcp/127.0.0.1/${port}" 2>/dev/null; then
+        return 0
+    fi
+
+    return 1
+}
+
+quote_env_append() {
+    local key="$1" val="$2"
+    local escaped="${val//\\/\\\\}"
+    escaped="${escaped//\"/\\\"}"
+    printf '%s="%s"\n' "$key" "$escaped" >> "${ENV_FILE}"
+}
+
+collect_http_port() {
+    SOHWE_HTTP_PORT="${SOHWE_HTTP_PORT:-}"
+
+    if [[ "${NONINTERACTIVE}" == "1" ]]; then
+        [[ -n "${SOHWE_HTTP_PORT}" ]] \
+            || fail "SOHWE_HTTP_PORT is required when SOHWE_NONINTERACTIVE=1."
+    else
+        while true; do
+            local answer=""
+            if [[ ! -t 0 ]] && [[ -r /dev/tty ]]; then
+                printf '%s' "HTTP port for the dashboard [${DEFAULT_HTTP_PORT}]: " > /dev/tty
+                read -r answer < /dev/tty
+            else
+                printf '%s' "HTTP port for the dashboard [${DEFAULT_HTTP_PORT}]: "
+                read -r answer
+            fi
+            [[ -z "${answer}" ]] && answer="${DEFAULT_HTTP_PORT}"
+            if ! [[ "${answer}" =~ ^[0-9]+$ ]] || (( answer < 1 || answer > 65535 )); then
+                warn "Enter an integer between 1 and 65535."
+                continue
+            fi
+            if host_port_in_use "${answer}"; then
+                warn "Port ${answer} is already in use on this host. Choose another."
+                continue
+            fi
+            SOHWE_HTTP_PORT="${answer}"
+            break
+        done
+    fi
+
+    if ! [[ "${SOHWE_HTTP_PORT}" =~ ^[0-9]+$ ]] || (( SOHWE_HTTP_PORT < 1 || SOHWE_HTTP_PORT > 65535 )); then
+        fail "Invalid SOHWE_HTTP_PORT: ${SOHWE_HTTP_PORT}"
+    fi
+    if host_port_in_use "${SOHWE_HTTP_PORT}"; then
+        fail "Port ${SOHWE_HTTP_PORT} is already in use on this host."
+    fi
+
+    ok "Dashboard HTTP traffic will use host port ${SOHWE_HTTP_PORT}."
+}
+
+collect_setup_password() {
+    SOHWE_SETUP_PASSWORD="${SOHWE_SETUP_PASSWORD:-}"
+
+    if [[ -n "${SOHWE_SETUP_PASSWORD}" ]]; then
+        ((${#SOHWE_SETUP_PASSWORD} >= 8)) \
+            || fail "SOHWE_SETUP_PASSWORD must be at least 8 characters."
+        [[ "${SOHWE_SETUP_PASSWORD}" != *$'\n'* ]] \
+            || fail "SOHWE_SETUP_PASSWORD cannot contain newlines."
+        return
+    fi
+
+    if [[ "${NONINTERACTIVE}" == "1" ]]; then
+        fail "SOHWE_SETUP_PASSWORD is required when SOHWE_NONINTERACTIVE=1."
+    fi
+
+    local pw1 pw2
+    while true; do
+        if [[ ! -t 0 ]] && [[ -r /dev/tty ]]; then
+            printf '%s' "Choose an installer password for first dashboard access (min 8 chars): " > /dev/tty
+            read -rs pw1 < /dev/tty
+            printf '\n' > /dev/tty
+            printf '%s' "Confirm installer password: " > /dev/tty
+            read -rs pw2 < /dev/tty
+            printf '\n' > /dev/tty
+        else
+            printf '%s' "Choose an installer password for first dashboard access (min 8 chars): "
+            read -rs pw1
+            printf '\n'
+            printf '%s' "Confirm installer password: "
+            read -rs pw2
+            printf '\n'
+        fi
+        if ((${#pw1} < 8)); then
+            warn "Password must be at least 8 characters."
+            continue
+        fi
+        if [[ "${pw1}" != "${pw2}" ]]; then
+            warn "Passwords did not match."
+            continue
+        fi
+        SOHWE_SETUP_PASSWORD="${pw1}"
+        break
+    done
+}
+
+warn_standard_ports() {
+    if host_port_in_use 443; then
+        warn "Port 443 is already in use — Traefik may fail to bind until it is free."
+    fi
+    if [[ -n "${SOHWE_HOST_INPUT}" ]] && host_port_in_use 80; then
+        warn "Port 80 is already in use — Let's Encrypt for ${SOHWE_HOST_INPUT} may fail until HTTP is reachable on port 80."
+    fi
+    if [[ -n "${SOHWE_HOST_INPUT}" && "${SOHWE_HTTP_PORT}" == "80" ]]; then
+        warn "SOHWE_HTTP_PORT=80 plus HTTPS can duplicate Docker's host port 80 mapping; prefer 8080 for http://IP access (compose adds :80 for Let's Encrypt)."
     fi
 }
 
@@ -225,7 +362,7 @@ write_env_file() {
 
     if [[ -f "${ENV_FILE}" ]]; then
         ok "Existing ${ENV_FILE} kept as-is (secrets and settings preserved)."
-        warn "To change domain, email, or version: edit ${ENV_FILE} then run \`sohwe restart\`."
+        warn "To change domain, email, port (SOHWE_HTTP_PORT), installer password (SOHWE_SETUP_PASSWORD), or version: edit ${ENV_FILE} then run \`sohwe restart\`."
         return
     fi
 
@@ -244,6 +381,7 @@ SOHWE_IMAGE_WORKER=ghcr.io/${IMAGE_NS}-worker:${SOHWE_VERSION}
 SOHWE_IMAGE_DASHBOARD=ghcr.io/${IMAGE_NS}-dashboard:${SOHWE_VERSION}
 
 # Public-facing
+SOHWE_HTTP_PORT=${SOHWE_HTTP_PORT}
 SOHWE_HOST=${SOHWE_HOST_INPUT}
 SOHWE_ACME_EMAIL=${SOHWE_ACME_EMAIL_INPUT}
 SOHWE_HTTPS_ENABLED=${https_enabled}
@@ -263,6 +401,7 @@ REDIS_URL=redis://redis:6379
 SESSION_SECRET=${session_secret}
 SOHWE_ENCRYPTION_KEY=${encryption_key}
 ENV
+    quote_env_append SOHWE_SETUP_PASSWORD "${SOHWE_SETUP_PASSWORD}"
     chmod 600 "${ENV_FILE}"
     ok "Generated ${ENV_FILE} (0600)."
 }
@@ -327,23 +466,37 @@ boot_stack() {
 #-----------------------------------------------------------------------------#
 
 print_banner() {
-    local public_url
-    if [[ -n "${SOHWE_HOST_INPUT}" ]]; then
-        public_url="https://${SOHWE_HOST_INPUT}"
-    else
-        public_url="http://$(hostname -I 2>/dev/null | awk '{print $1}')"
-        [[ "${public_url}" == "http://" ]] && public_url="http://<server-ip>"
+    local ip_hint http_url http_port
+    http_port="${SOHWE_HTTP_PORT:-}"
+    if [[ -z "${http_port}" ]] && [[ -f "${ENV_FILE}" ]]; then
+        http_port="$(grep -E '^SOHWE_HTTP_PORT=' "${ENV_FILE}" 2>/dev/null | head -n1 | cut -d= -f2- | tr -d '"' || true)"
     fi
+    http_port="${http_port:-8080}"
+    ip_hint="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    [[ -z "${ip_hint}" ]] && ip_hint="<server-ip>"
+    http_url="http://${ip_hint}:${http_port}"
 
     cat <<EOF
 
 ${C_GREEN}${C_BOLD}Sohwe is up.${C_RESET}
 
-  Dashboard:  ${C_BOLD}${public_url}${C_RESET}
+EOF
+    if [[ -n "${SOHWE_HOST_INPUT}" ]]; then
+        cat <<EOF
+  Dashboard (HTTPS):  ${C_BOLD}https://${SOHWE_HOST_INPUT}${C_RESET}
+  Dashboard (HTTP):   ${C_BOLD}${http_url}${C_RESET}
+EOF
+    else
+        cat <<EOF
+  Dashboard:  ${C_BOLD}${http_url}${C_RESET}
+EOF
+    fi
+
+    cat <<EOF
   Data dir:   ${DATA_DIR}
   CLI:        sohwe --help
 
-First-run setup (create the owner account) is in the dashboard.
+Unlock first-run setup with your installer password, then create the owner account.
 
 EOF
 }
@@ -356,7 +509,10 @@ main() {
     log "Sohwe installer (${SOHWE_VERSION}, channel=${CHANNEL})"
     detect_os
     ensure_docker
+    collect_http_port
     collect_inputs
+    warn_standard_ports
+    collect_setup_password
     fetch_assets
     write_env_file
     boot_stack

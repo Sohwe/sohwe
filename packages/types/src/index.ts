@@ -14,6 +14,12 @@ export const LoginSchema = z.object({
 });
 export type LoginInput = z.infer<typeof LoginSchema>;
 
+/** First-access installer password (dashboard unlock before owner setup). */
+export const SetupUnlockSchema = z.object({
+  password: z.string().min(8)
+});
+export type SetupUnlockInput = z.infer<typeof SetupUnlockSchema>;
+
 /**
  * Loose domain validation: lowercase labels separated by dots, 1-253 chars.
  * We intentionally avoid a full RFC 1035 / IDN check — Traefik rejects

@@ -71,8 +71,10 @@ services:
       # Dashboard/API stays OFF in prod. Flip to true + set basic-auth to inspect.
       - --api.dashboard=false
       - --api.insecure=false
+    # HTTP: map host port (default 8080 in fresh installs — see install.sh).
+    # HTTPS overlay adds :80 for Let's Encrypt HTTP-01 when a domain is used.
     ports:
-      - "80:80"
+      - "${SOHWE_HTTP_PORT:-8080}:80"
       - "443:443"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
@@ -91,6 +93,7 @@ services:
     environment:
       <<: *sohwe-env
       PORT: "3001"
+      SOHWE_SETUP_PASSWORD: ${SOHWE_SETUP_PASSWORD:-}
     healthcheck:
       test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
       interval: 30s

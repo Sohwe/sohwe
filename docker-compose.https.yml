@@ -4,6 +4,11 @@
 ## wrapper runs `docker compose -f prod.yml -f https.yml ...` every time.
 
 services:
+  traefik:
+    # Let's Encrypt HTTP-01 must reach Traefik on host port 80 (merged with
+    # docker-compose.prod.yml port list).
+    ports:
+      - "80:80"
   dashboard:
     labels:
       # Replace the HTTP router from the base file with one that terminates

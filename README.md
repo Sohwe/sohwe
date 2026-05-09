@@ -21,13 +21,17 @@ curl -fsSL https://raw.githubusercontent.com/Sohwe/sohwe/main/scripts/install.sh
 The installer will:
 
 1. Install Docker Engine + the compose plugin if they aren't already present.
-2. Prompt for a public domain and Let's Encrypt email (optional — skip for HTTP-only).
-3. Generate `/etc/sohwe/sohwe.env` with random `SESSION_SECRET`, `SOHWE_ENCRYPTION_KEY`, and Postgres password (mode 0600).
-4. Pull the `api`, `worker`, and `dashboard` images from GHCR and start the stack.
-5. Apply the database schema (`prisma db push`; a `migrate deploy` pipeline is planned for a later phase).
-6. Print the dashboard URL.
+2. Prompt for an **HTTP port** for the dashboard (default **8080**) and verify it is free on the host.
+3. Optionally prompt for a **public domain** and Let's Encrypt email — skip to use `http://<server-ip>:<port>` only.
+4. Prompt for an **installer password** (confirmed twice); this unlocks the dashboard for first-run setup before anyone can create the owner account.
+5. Generate `/etc/sohwe/sohwe.env` with random `SESSION_SECRET`, `SOHWE_ENCRYPTION_KEY`, Postgres password, and your chosen values (mode 0600).
+6. Pull the `api`, `worker`, and `dashboard` images from GHCR and start the stack.
+7. Apply the database schema (`prisma migrate deploy` via the running API container).
+8. Print the dashboard URL(s).
 
-Complete the first-run setup (create the owner account + organization) in the dashboard.
+Unlock first-run setup with your installer password, then complete setup (owner account + organization) in the dashboard.
+
+Non-interactive installs can pass **`SOHWE_HTTP_PORT`**, **`SOHWE_SETUP_PASSWORD`**, and other inputs via the environment (see comments in `scripts/install.sh`).
 
 ### Managing the instance
 

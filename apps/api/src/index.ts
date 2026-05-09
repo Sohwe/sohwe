@@ -12,8 +12,16 @@ import argon2 from "argon2";
 import { prisma } from "@sohwe/db";
 import {
   FirstRunSetupSchema,
-  LoginSchema
+  LoginSchema,
+  SetupUnlockSchema
 } from "@sohwe/types";
+import {
+  buildSetupStatus,
+  clearSetupGateCookie,
+  setSetupGateCookie,
+  setupGateHook,
+  verifyUnlockPassword
+} from "./setup-gate";
 import { registerAppFilesystemRoutes } from "./routes/app-filesystem";
 import { registerApplicationRoutes } from "./routes/applications";
 import { registerEnvVarRoutes } from "./routes/env-vars";
@@ -30,15 +38,36 @@ await app.register(cors, {
 await app.register(cookie, { secret: process.env.SESSION_SECRET });
 await app.register(sensible);
 
+app.addHook("onRequest", setupGateHook);
+
 app.get("/health", async () => ({
   status: "ok",
   timestamp: new Date().toISOString()
 }));
 
-app.get("/api/setup/status", async () => {
-  const userCount = await prisma.user.count();
-  return { needsSetup: userCount === 0 };
-});
+app.get("/api/setup/status", async (req) => buildSetupStatus(req));
+
+app.post(
+  "/api/setup/unlock",
+  { schema: { body: SetupUnlockSchema } },
+  async (req, reply) => {
+    const pwd = process.env.SOHWE_SETUP_PASSWORD;
+    if (!pwd?.length) {
+      return reply.badRequest(
+        "Installer password is not configured on this instance."
+      );
+    }
+    const userCount = await prisma.user.count();
+    if (userCount > 0) {
+      return reply.conflict("Setup has already been completed");
+    }
+    if (!verifyUnlockPassword(req.body.password)) {
+      return reply.unauthorized("Invalid installer password");
+    }
+    setSetupGateCookie(reply);
+    return { ok: true };
+  }
+);
 
 app.post(
   "/api/setup",
@@ -68,6 +97,7 @@ app.post(
       include: { users: true }
     });
 
+    clearSetupGateCookie(reply);
     return { ok: true, organizationId: org.id };
   }
 );

@@ -1,4 +1,10 @@
-export type SetupStatus = { needsSetup: boolean };
+export type SetupStatus = {
+  needsSetup: boolean;
+  /** True when SOHWE_SETUP_PASSWORD is set and no users exist yet. */
+  setupGateActive: boolean;
+  /** True when the browser holds a valid unlock cookie. */
+  setupUnlocked: boolean;
+};
 
 export type Me = {
   id: string;
