@@ -137,13 +137,13 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=sohwe_proxy"
-      # HTTP-only router. `PathPrefix(/)` matches every host + path, so the
-      # dashboard is reachable via the server's IP *or* any hostname on first
-      # boot. The https overlay replaces this with a strict `Host(...)` rule
-      # bound to SOHWE_HOST with a Let's Encrypt cert.
-      - "traefik.http.routers.sohwe.rule=PathPrefix(`/`)"
+      # HTTP-only router: match any Host (IP, localhost, etc.). PathPrefix(`/`)
+      # alone has been unreliable for `/` on Traefik v3 + Docker in the wild.
+      # The https overlay replaces this router set with Host(TLS) + IP fallback.
+      - "traefik.http.routers.sohwe.rule=HostRegexp(`.*`)"
       - "traefik.http.routers.sohwe.entrypoints=web"
       - "traefik.http.routers.sohwe.priority=1"
+      - "traefik.http.routers.sohwe.service=sohwe"
       - "traefik.http.services.sohwe.loadbalancer.server.port=80"
 
 networks:

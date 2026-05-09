@@ -21,6 +21,13 @@ services:
       # challenge working (Traefik internally short-circuits challenge paths).
       - "traefik.http.routers.sohwe-http.rule=Host(`${SOHWE_HOST}`)"
       - "traefik.http.routers.sohwe-http.entrypoints=web"
+      - "traefik.http.routers.sohwe-http.priority=100"
       - "traefik.http.routers.sohwe-http.middlewares=sohwe-https-redirect"
       - "traefik.http.middlewares.sohwe-https-redirect.redirectscheme.scheme=https"
       - "traefik.http.middlewares.sohwe-https-redirect.redirectscheme.permanent=true"
+      # HTTP by IP or unknown host (e.g. http://203.0.113.4:8080). Host(SOHWE_HOST)
+      # routers above do not match bare IP; without this Traefik returns 404.
+      - "traefik.http.routers.sohwe-ip.rule=HostRegexp(`.*`) && !Host(`${SOHWE_HOST}`)"
+      - "traefik.http.routers.sohwe-ip.entrypoints=web"
+      - "traefik.http.routers.sohwe-ip.priority=1"
+      - "traefik.http.routers.sohwe-ip.service=sohwe"
