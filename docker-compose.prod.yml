@@ -20,6 +20,13 @@ x-sohwe-env: &sohwe-env
   # scripts/install.sh when SOHWE_HOST is configured. HTTP-only deploys
   # leave this "false" so the browser will store the cookie.
   SOHWE_HTTPS_ENABLED: ${SOHWE_HTTPS_ENABLED:-false}
+  # Base domain for deployed apps; routing label is `<slug>.<base-domain>`.
+  # The worker reads this when it creates Traefik labels on user app
+  # containers. The api echoes it through GET /api/config so the dashboard
+  # can show the right URL. Default `sohwe.localhost` only resolves on this
+  # host (curl with Host header or /etc/hosts) — set a real domain with a
+  # wildcard A record for browser access.
+  SOHWE_BASE_DOMAIN: ${SOHWE_BASE_DOMAIN:-sohwe.localhost}
   NODE_ENV: production
 
 services:

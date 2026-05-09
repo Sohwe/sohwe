@@ -4,7 +4,7 @@ import { ExternalLink } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
-import { baseDomain } from "@/lib/constants";
+import { useBaseDomain } from "@/lib/config";
 import { formatRelativeTime, shortCommitSha, truncMsg } from "@/lib/format";
 import type { AppRow } from "@/lib/types";
 import { getCurrentDeploymentId } from "@/lib/types";
@@ -13,6 +13,7 @@ import { CopyButton } from "@/components/common/CopyButton";
 export function AppOverviewPage() {
   const { appId } = useParams({ strict: false });
   const q = useQuery({ queryKey: ["applications"], queryFn: () => api<AppRow[]>("/api/applications") });
+  const baseDomain = useBaseDomain();
   const app = q.data?.find((a) => a.id === appId);
   if (!appId || !q.data || !app) return null;
 

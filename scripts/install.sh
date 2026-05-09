@@ -56,8 +56,10 @@ readonly WRAPPER="/usr/local/bin/sohwe"
 SOHWE_VERSION="${SOHWE_VERSION:-latest}"
 SOHWE_HOST_INPUT="${SOHWE_HOST:-}"
 SOHWE_ACME_EMAIL_INPUT="${SOHWE_ACME_EMAIL:-}"
+SOHWE_BASE_DOMAIN_INPUT="${SOHWE_BASE_DOMAIN:-}"
 NONINTERACTIVE="${SOHWE_NONINTERACTIVE:-0}"
 readonly DEFAULT_HTTP_PORT="${DEFAULT_HTTP_PORT:-8080}"
+readonly DEFAULT_BASE_DOMAIN="sohwe.localhost"
 
 #-----------------------------------------------------------------------------#
 # Privileges
@@ -189,6 +191,20 @@ EOF
         [[ -n "${SOHWE_ACME_EMAIL_INPUT}" ]] \
             || fail "An email is required when a domain is configured (Let's Encrypt needs it)."
     fi
+
+    # Base domain for deployed apps. Each app's URL is `<slug>.<base-domain>`,
+    # so this needs a wildcard DNS record (`*.<base-domain> A <server-ip>`)
+    # pointing at this host for browsers to reach apps. If a dashboard host
+    # was provided we default to that (the most common case: dashboard at
+    # sohwe.example.com, apps at <slug>.sohwe.example.com, single wildcard).
+    # Falls back to `sohwe.localhost` for HTTP-only/no-DNS installs — apps
+    # are then only reachable from this host (curl with Host header, or an
+    # /etc/hosts entry).
+    local default_base="${SOHWE_HOST_INPUT:-${DEFAULT_BASE_DOMAIN}}"
+    prompt_if_interactive SOHWE_BASE_DOMAIN_INPUT \
+        "Base domain for deployed apps [${default_base}]: "
+    [[ -n "${SOHWE_BASE_DOMAIN_INPUT}" ]] \
+        || SOHWE_BASE_DOMAIN_INPUT="${default_base}"
 }
 
 #-----------------------------------------------------------------------------#
@@ -385,6 +401,7 @@ SOHWE_HTTP_PORT=${SOHWE_HTTP_PORT}
 SOHWE_HOST=${SOHWE_HOST_INPUT}
 SOHWE_ACME_EMAIL=${SOHWE_ACME_EMAIL_INPUT}
 SOHWE_HTTPS_ENABLED=${https_enabled}
+SOHWE_BASE_DOMAIN=${SOHWE_BASE_DOMAIN_INPUT}
 SOHWE_COMPOSE_OVERLAYS=${overlays}
 TRAEFIK_LOG_LEVEL=INFO
 

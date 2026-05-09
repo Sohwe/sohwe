@@ -108,6 +108,9 @@ export async function setupGateHook(
 
   if (path === "/api/setup/status") return;
   if (path === "/api/setup/unlock" && req.method === "POST") return;
+  // /api/config is a non-secret read; the dashboard fetches it on every
+  // page render, including the unlock screen.
+  if (path === "/api/config" && req.method === "GET") return;
 
   const userCount = await prisma.user.count();
   if (userCount > 0) return;
