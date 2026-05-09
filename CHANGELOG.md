@@ -7,7 +7,14 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.8] - 2026-05-09
+
 ### Fixed
+
+- **Traefik on Docker 29 hosts** — bumped `traefik:v3.1` → `traefik:v3.7` in `docker-compose.prod.yml` and `docker-compose.dev.yml`. Traefik v3.0–v3.6.0 hardcoded `client.WithVersion("1.24")` on the Docker SDK in `pkg/provider/docker/pdocker.go`; Docker Engine 29 raised its minimum supported API version to 1.40, so the daemon rejected every request from the docker provider with `client version 1.24 is too old. Minimum supported API version is 1.40`. The provider then looped in an error state, no routers were registered from container labels, and every request to `:8080` hit Traefik's default `404 page not found`. Traefik v3.7 dropped the constant in favor of `client.FromEnv` (which negotiates), restoring routing without any other config changes.
+- **HTTP-only deploys couldn't get past the unlock screen** — the setup-gate cookie and the login session cookie were both set with `secure: process.env.NODE_ENV === "production"`. Browsers refuse to store `Secure` cookies received over plain HTTP, and the installer's "no-domain" path is explicitly HTTP-only. Result: `POST /api/setup/unlock` returned 200, the dashboard fired the "Unlocked — complete organization setup below" toast, but the next `GET /api/setup/status` saw no cookie, returned `setupUnlocked: false`, and the UI re-rendered the unlock form. Now both cookies derive `Secure` from `SOHWE_HTTPS_ENABLED`, which `scripts/install.sh` already writes to `/etc/sohwe/sohwe.env`. Wired through `docker-compose.prod.yml`'s shared env block.
+
+### Fixed (earlier in the v0.3.5–v0.3.8 line)
 
 - **Installer** — fresh-install failures surfaced during v0.3.5 VPS testing:
   - `curl | bash` no longer dies with `/usr/bin/bash: cannot execute binary file` when re-execing under `sudo`. Piped runs now re-download the installer to a temp file before `sudo -E bash`'ing it, because `$0` is the interpreter — not a readable script path — in that scenario.

@@ -6,9 +6,9 @@ This repository is a **pnpm + Turborepo** monorepo. The detailed bootstrap and p
 
 ## Current status
 
-**v0.3.0** includes through **Phase 3 (stateful apps)** on a single machine: Nixpacks + custom domains, **encrypted env vars** (dashboard + API; worker injects at deploy), **named persistent volumes** with Docker `Binds`, **memory/CPU limits**, per-app **internal Docker network** (`sohwe_app_<id>_net` plus the Traefik network), and the same dashboard flows as before (deployments, **Browse files** — use a mount path under a volume after redeploy to verify persisted data).
+**v0.3.8** is the latest release. **Phase 3 (stateful apps)** is complete: Nixpacks + custom domains, **encrypted env vars** (dashboard + API; worker injects at deploy), **named persistent volumes** with Docker `Binds`, **memory/CPU limits**, and a per-app **internal Docker network** (`sohwe_app_<id>_net` plus the Traefik network). **Phase 3.5 (packaging & install)** is also live: production Dockerfiles, `docker-compose.prod.yml` + HTTPS overlay, multi-arch GHCR publishing on tag, and a one-command installer for fresh Ubuntu 22.04/24.04 VPS hosts. v0.3.6–v0.3.8 patched fresh-install issues uncovered on real VPS hardware — most notably, Docker Engine 29 compatibility (Traefik bumped to v3.7) and a setup/login cookie regression on HTTP-only installs.
 
-**Unreleased** completes **Phase 3.5 (packaging & install)**: production Dockerfiles, `docker-compose.prod.yml` + HTTPS overlay, multi-arch GHCR publishing on tag, and a one-command installer for fresh Ubuntu 22.04/24.04 VPS hosts. Next milestone: **Phase 4 (observability)**. See [`CHANGELOG.md`](./CHANGELOG.md) and [`sohwe-getting-started.md`](./sohwe-getting-started.md).
+Next milestone: **Phase 4 (observability)**. See [`CHANGELOG.md`](./CHANGELOG.md) and [`sohwe-getting-started.md`](./sohwe-getting-started.md).
 
 ## Install on a server (production)
 
