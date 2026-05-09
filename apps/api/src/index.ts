@@ -46,6 +46,14 @@ app.get("/health", async () => ({
   timestamp: new Date().toISOString()
 }));
 
+// Public read-only config consumed by the dashboard (no auth, no secrets).
+// `baseDomain` drives the `<slug>.<base-domain>` URL display next to apps
+// and on the deploy form. Plumbed through from sohwe.env via compose so
+// operators can change the domain without rebuilding the dashboard image.
+app.get("/api/config", async () => ({
+  baseDomain: process.env.SOHWE_BASE_DOMAIN ?? "sohwe.localhost"
+}));
+
 app.get("/api/setup/status", async (req) => buildSetupStatus(req));
 
 app.post(

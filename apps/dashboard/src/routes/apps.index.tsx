@@ -8,11 +8,12 @@ import { EmptyState } from "@/components/common/EmptyState";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
-import { baseDomain } from "@/lib/constants";
+import { useBaseDomain } from "@/lib/config";
 import type { AppRow } from "@/lib/types";
 
 export function AppsListPage() {
   const [createOpen, setCreateOpen] = useState(false);
+  const baseDomain = useBaseDomain();
   const q = useQuery({ queryKey: ["applications"], queryFn: () => api<AppRow[]>("/api/applications") });
 
   useEffect(() => {

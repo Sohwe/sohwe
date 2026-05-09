@@ -7,7 +7,7 @@ import { AppStatusBadge, BuildModeBadge } from "@/components/apps/BuildModeBadge
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
-import { baseDomain } from "@/lib/constants";
+import { useBaseDomain } from "@/lib/config";
 import type { AppRow } from "@/lib/types";
 import { CopyButton } from "@/components/common/CopyButton";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -33,6 +33,7 @@ export function AppLayout() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const baseDomain = useBaseDomain();
 
   const appsQuery = useQuery({
     queryKey: ["applications"],

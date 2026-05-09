@@ -3,7 +3,7 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { ExternalLink, Rocket } from "lucide-react";
 import { toast } from "sonner";
 import { BuildModeBadge, AppStatusBadge } from "./BuildModeBadge";
-import { baseDomain } from "@/lib/constants";
+import { useBaseDomain } from "@/lib/config";
 import { formatRelativeTime, shortCommitSha, truncMsg } from "@/lib/format";
 import type { AppRow } from "@/lib/types";
 import { getCurrentDeploymentId } from "@/lib/types";
@@ -17,6 +17,7 @@ import { MoreVertical } from "lucide-react";
 export function AppCard({ app }: { app: AppRow }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const baseDomain = useBaseDomain();
   const appUrl = `http://${app.slug}.${baseDomain}`;
   const lastDep = app.deployments?.[0]
     ? [...(app.deployments ?? [])].sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt))[0]
