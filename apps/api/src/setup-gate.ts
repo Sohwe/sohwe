@@ -4,6 +4,16 @@ import { prisma } from "@sohwe/db";
 
 const COOKIE_NAME = "sohwe_setup_gate";
 
+// Whether to set the `Secure` flag on auth cookies. We tie it to whether
+// HTTPS is actually serving traffic (set by the installer when SOHWE_HOST
+// is configured), NOT to NODE_ENV. HTTP-only deploys (no domain, dashboard
+// reachable only at http://<ip>:<port>) are explicitly supported by the
+// installer; on those, browsers refuse to store `Secure` cookies received
+// over plain HTTP, and unlock/login appear to succeed but never persist.
+export function cookieSecure(): boolean {
+  return process.env.SOHWE_HTTPS_ENABLED === "true";
+}
+
 function verifyInstallPassword(input: string, expected: string): boolean {
   const ha = createHash("sha256").update(input, "utf8").digest();
   const hb = createHash("sha256").update(expected, "utf8").digest();
@@ -79,7 +89,7 @@ export function setSetupGateCookie(reply: FastifyReply): void {
   reply.setCookie(COOKIE_NAME, token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: cookieSecure(),
     path: "/",
     maxAge: 7 * 24 * 60 * 60
   });

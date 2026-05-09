@@ -15,6 +15,11 @@ x-sohwe-env: &sohwe-env
   REDIS_URL: ${REDIS_URL}
   SESSION_SECRET: ${SESSION_SECRET}
   SOHWE_ENCRYPTION_KEY: ${SOHWE_ENCRYPTION_KEY}
+  # Drives the `Secure` flag on auth cookies. Must be "true" only when the
+  # dashboard is actually served over HTTPS — set automatically by
+  # scripts/install.sh when SOHWE_HOST is configured. HTTP-only deploys
+  # leave this "false" so the browser will store the cookie.
+  SOHWE_HTTPS_ENABLED: ${SOHWE_HTTPS_ENABLED:-false}
   NODE_ENV: production
 
 services:

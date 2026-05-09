@@ -18,6 +18,7 @@ import {
 import {
   buildSetupStatus,
   clearSetupGateCookie,
+  cookieSecure,
   setSetupGateCookie,
   setupGateHook,
   verifyUnlockPassword
@@ -121,7 +122,7 @@ app.post(
     reply.setCookie("sohwe_session", session.id, {
       httpOnly: true,
       sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
+      secure: cookieSecure(),
       path: "/",
       expires: expiresAt
     });
