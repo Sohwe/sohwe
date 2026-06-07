@@ -132,6 +132,8 @@ Use strong, unique values for secrets in any shared or deployed environment. The
 
 ## Documentation
 
+- [`AGENTS.md`](./AGENTS.md) — quick context for future coding-agent chats
+- [`DEVELOPMENT.md`](./DEVELOPMENT.md) — local environment setup and dev deploy notes
 - [`sohwe-prd.md`](./sohwe-prd.md) — Product requirements and release plan  
 - [`sohwe-getting-started.md`](./sohwe-getting-started.md) — Architecture and step-by-step implementation  
 

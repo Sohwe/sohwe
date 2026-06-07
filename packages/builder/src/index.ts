@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 
 export type LogHandler = (line: string) => void;
@@ -42,6 +43,13 @@ function hasDockerfile(dir: string): boolean {
   return existsSync(join(dir, "Dockerfile"));
 }
 
+function resolveToolCommand(cmd: string): string {
+  if (cmd !== "nixpacks" || process.platform !== "win32") return cmd;
+
+  const localNixpacks = join(homedir(), ".nixpacks", "bin", "nixpacks.exe");
+  return existsSync(localNixpacks) ? localNixpacks : cmd;
+}
+
 /**
  * Spawn a process and forward stdout+stderr to `onLogLine`.
  * Resolves on exit 0; rejects with a helpful message otherwise.
@@ -53,7 +61,7 @@ function runTool(
 ): Promise<void> {
   const { cwd, onLogLine, tool } = opts;
   return new Promise((resolve, reject) => {
-    const p = spawn(cmd, args, {
+    const p = spawn(resolveToolCommand(cmd), args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"]
     });

@@ -19,8 +19,8 @@ import {
 import Docker from "dockerode";
 
 const _here = dirname(fileURLToPath(import.meta.url));
-config({ path: join(_here, "../../.env") });
-config({ path: join(_here, "../api/.env") });
+config({ path: join(_here, "../../../.env") });
+config({ path: join(_here, "../../api/.env") });
 config();
 
 const MAX_COMMIT_MSG = 2000;

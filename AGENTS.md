@@ -9,11 +9,19 @@ Sohwe is an open-source, self-hostable deployment platform/PaaS. It lets users c
 The source of truth for product direction and architecture is:
 
 - `README.md` - current status, install/development workflow, repo map
+- `DEVELOPMENT.md` - local env setup and dev deploy notes
 - `sohwe-getting-started.md` - architecture and phased implementation guide
 - `sohwe-prd.md` - product requirements and roadmap
 - `CHANGELOG.md` - released and unreleased behavior changes
 
 `apps/dashboard/README.md` is still the default Vite template and should not be treated as project-specific documentation.
+
+Current milestone state:
+
+- `v0.3.8` is the latest documented release.
+- Phase 3 is complete: encrypted env vars, persistent volumes, resource limits, and per-app internal Docker networks.
+- Phase 3.5 is complete: production Dockerfiles, compose files, GHCR release workflow, Ubuntu installer, and `sohwe` host CLI.
+- Next roadmap milestone is Phase 4: observability.
 
 ## Repository Shape
 
@@ -34,7 +42,7 @@ This is a pnpm 9 + Turborepo monorepo. Node.js 24+ is required.
 
 ## Commands
 
-Use pnpm from the repository root unless a narrower filter is useful.
+Use pnpm from the repository root unless a narrower filter is useful. On Windows PowerShell, use `pnpm.cmd` if `pnpm.ps1` is blocked by execution policy.
 
 ```bash
 pnpm install
@@ -71,9 +79,22 @@ Expected env files:
 - `apps/api/.env` - API runtime variables such as `DATABASE_URL`, `REDIS_URL`, `PORT`, `SESSION_SECRET`, `SOHWE_ENCRYPTION_KEY`, `SOHWE_BASE_DOMAIN`, `SOHWE_HTTPS_ENABLED`, and `SOHWE_CERT_RESOLVER`
 - `packages/db/.env` - Prisma CLI `DATABASE_URL`
 
+Tracked examples:
+
+- `apps/api/.env.example`
+- `packages/db/.env.example`
+
 The worker loads env from several locations, including `apps/api/.env`, so local development usually uses the same database, Redis, and encryption key as the API.
 
 Do not commit real secrets or generated env files.
+
+## Local Deployment Notes
+
+- The worker must be running for queued deploy jobs to leave `pending`.
+- Apps without a root `Dockerfile` use Nixpacks in `auto` mode.
+- Local Nixpacks builds require a `nixpacks` executable.
+- On Windows, the builder checks `%USERPROFILE%\.nixpacks\bin\nixpacks.exe` when `nixpacks` is not available on `PATH`.
+- Production worker images bake in `git`, Docker CLI, and Nixpacks; local dev uses host tools.
 
 ## Implementation Rules
 
@@ -133,11 +154,23 @@ Do not commit real secrets or generated env files.
 Update docs when behavior changes:
 
 - `README.md` for install/dev commands, environment variables, current status, and repo layout
+- `DEVELOPMENT.md` for local setup prerequisites and development-only gotchas
 - `sohwe-getting-started.md` for architecture, phase scope, or implementation flow changes
 - `sohwe-prd.md` for product requirement or roadmap changes
 - `CHANGELOG.md` for notable fixes, additions, and breaking changes
 
 Keep docs consistent with the current phase language. The repo currently includes v0.3.x behavior plus unreleased Phase 3.5 packaging/install work.
+
+## Next Useful Work
+
+Start Phase 4 with runtime log streaming:
+
+- Worker tails `docker logs -f` for managed app containers.
+- Worker publishes lines to Redis, likely `logs:app:<id>`.
+- API exposes an authenticated SSE endpoint, likely `GET /api/applications/:id/logs`.
+- Dashboard adds a runtime logs view under each app.
+
+Then add build-log UX polish, live CPU/memory stats from `docker stats`, and crash alerts from Docker `die` events.
 
 ## Verification Checklist
 
