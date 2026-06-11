@@ -7,6 +7,10 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+### Added
+
+- **Phase 4 runtime logs slice.** The worker now attaches to managed app containers with Docker log streaming, publishes stdout/stderr lines to Redis on per-app channels, and re-attaches to already-running managed containers on worker startup. The API exposes authenticated, organization-scoped runtime log SSE at `GET /api/applications/:id/logs`, including a short replay from the running container's recent Docker logs. The dashboard adds a per-app **Logs** tab that streams runtime output separately from deployment build logs.
+
 ### Changed
 
 - **Configurable apps base domain.** `SOHWE_BASE_DOMAIN` is now an installer prompt (defaults to the dashboard host, falling back to `sohwe.localhost`) and is written to `/etc/sohwe/sohwe.env`. The value is plumbed into both the api and worker via `docker-compose.prod.yml`'s shared env block — the worker has always read it for Traefik labels, but it was never *set* anywhere except hardcoded `"sohwe.localhost"` defaults. The api now serves it back over `GET /api/config` (a new public, no-auth endpoint allowed through the setup gate). The dashboard's hardcoded `lib/constants.ts#baseDomain` is gone, replaced with `lib/config.ts#useBaseDomain` — a TanStack Query hook with `staleTime: Infinity` (config doesn't change at runtime). All four consumers (`apps.index.tsx`, `app.$appId.tsx`, `app.$appId.overview.tsx`, `AppCard.tsx`) updated to call the hook. Net effect: an operator can now point a real wildcard domain at the box (`*.apps.example.com A <ip>`) and the dashboard will display correct URLs without rebuilding any image.

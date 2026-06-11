@@ -265,6 +265,14 @@ Grouped by release phase (see [Release Plan](#12-release-plan) for timing).
 - As the **owner**, I want backups to be incremental where possible, so daily snapshots don't cost me gigabytes each.
 - As the **owner**, I want a documented restore drill, so I know my backups actually work before I need them.
 
+### 9.9 Phase 7 — Managed Datastores (post-v1 / v2)
+
+- As a **developer**, I want to create a Postgres database from the dashboard, so my app can use a production database on the same VPS without manual Docker or SSH setup.
+- As a **developer**, I want to create a Redis instance from the dashboard, so my app can add queues, cache, sessions, or pub/sub without leaving Sohwe.
+- As a **developer**, I want to bind a datastore to an app and have Sohwe inject `DATABASE_URL`, `REDIS_URL`, or custom env vars, so I do not have to copy connection strings by hand.
+- As the **owner**, I want managed datastore credentials encrypted at rest and hidden from logs, so one-click services do not weaken Sohwe's security model.
+- As the **owner**, I want clear deletion, backup, and restore behavior for managed datastores, so I understand when data is durable and when it is at risk.
+
 ---
 
 ## 10. Functional Requirements
@@ -381,6 +389,33 @@ Security requirements for bundles (additive to §11.3):
 - Bundle creation and restore are **logged in the audit trail** (`P6`) with actor, destination, mode, and affected app IDs — but never secret values.
 - The signature over the manifest is verified **before** any side effects (file extraction, DB writes) during restore.
 
+### 10.10 Managed Datastores (Post-v1 / v2)
+
+Managed datastores let Sohwe provision first-party Postgres and Redis containers on the same VPS as user applications. They are intentionally post-v1 because they turn Sohwe from a deployment control plane into a data-hosting tool, which raises the bar for backups, restore, upgrades, and operational safety.
+
+Functional requirements:
+
+- `[P7]` Create, list, view, and delete managed Postgres instances.
+- `[P7]` Create, list, view, and delete managed Redis instances.
+- `[P7]` Store generated datastore credentials encrypted at rest with `SOHWE_ENCRYPTION_KEY`.
+- `[P7]` Run datastores as Sohwe-managed Docker containers using official images and Sohwe labels.
+- `[P7]` Persist datastore data in named Docker volumes separate from app volumes.
+- `[P7]` Do not publish datastore ports publicly by default; app access should use private Docker networking.
+- `[P7]` Bind a datastore to one or more applications and inject connection strings into encrypted app env vars.
+- `[P7]` Support default env var keys (`DATABASE_URL`, `REDIS_URL`) plus custom keys.
+- `[P7]` Add password/credential rotation flows.
+- `[P7]` Show basic health and status for each datastore.
+- `[P7]` Require explicit confirmation before deleting a datastore volume.
+- `[P7]` Include managed datastore configuration in config-mode bundles, but defer raw datastore contents to full-state backup.
+
+Deferred from the first managed-datastore release:
+
+- Public TCP exposure for external clients.
+- Multi-node replication/high availability.
+- Point-in-time recovery.
+- SQL browser/admin console.
+- Automated major-version upgrades.
+
 ---
 
 ## 11. Non-Functional Requirements
@@ -473,6 +508,7 @@ Security requirements for bundles (additive to §11.3):
 | **v1.0-beta** | Public beta, all above shipped | Week 11 |
 | **v1.0** | GA after 4–6 weeks of beta stabilization | Week 17 |
 | **M5.5 — Full-state Backup (v1.x)** | Postgres + volume + image bundles, incremental volumes, restore drill | Post-GA |
+| **M7 — Managed Datastores (v2)** | One-click Postgres/Redis, private bindings, encrypted generated credentials | Post-v1 |
 
 Timeline assumes one primary maintainer working focused side-project hours.
 
@@ -482,6 +518,7 @@ Timeline assumes one primary maintainer working focused side-project hours.
 - **Public beta (M5 onwards)** — Show HN post, documentation live, GitHub repo public. Bug-fix-heavy period.
 - **v1.0 GA** — Blog post, second Show HN, outreach to typical "self-hosted" communities (r/selfhosted, r/homelab, awesome-selfhosted).
 - **Post-v1** — Begin v2 work (DBaaS, multi-node, preview deploys). Begin work on hosted Sohwe Cloud.
+- **v2 datastore candidate** — One-click Postgres/Redis should ship only after v1 deployment, observability, backups, and multi-user foundations are stable enough to support user data responsibly.
 
 ### 12.3 Versioning
 
@@ -570,6 +607,7 @@ Items to resolve before or during v1.
 | **Backup Destination** | A pluggable storage target for bundles — local path, S3, or any S3-compatible endpoint (R2, B2, MinIO, Wasabi). |
 | **Config Mode** | Bundle variant with app metadata + encrypted secrets + optional git mirrors. Restore rebuilds from Git. |
 | **Full Mode** | Bundle variant that also includes Postgres dump, volume contents, and optionally built images. |
+| **Managed Datastore** | A Sohwe-provisioned Postgres or Redis container with a named volume, encrypted generated credentials, and private app bindings. |
 
 ---
 
@@ -581,3 +619,4 @@ Items to resolve before or during v1.
 | 2026-04-22 | Added §10.9 Portable Bundles (Phase 4.5 config mode, Phase 5.5 full-state mode). Updated §11.6 Portability, added §9.7 / §9.8 user stories, inserted M4.5 / M5.5 milestones in §12.1, resolved Open Question #5, added Bundle / Backup Destination / Config Mode / Full Mode glossary entries. | — |
 | 2026-04-22 | §10.3 Deployments: documented per-app deployment list UI (Current marker, log/rollback actions; single live target, no multi-environment column in v1). | — |
 | 2026-04-22 | §9.6 and §10.7: optional self-hosted **instance host** file browser (owner/admin, allowlisted paths, audited) scoped to **Phase 6**; distinct from in-container file browser. | — |
+| 2026-06-11 | Added post-v1/v2 managed datastore scope for one-click Postgres/Redis, including user stories, functional requirements, and release-plan placement. | — |

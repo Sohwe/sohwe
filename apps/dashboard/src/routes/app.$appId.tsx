@@ -13,14 +13,22 @@ import { CopyButton } from "@/components/common/CopyButton";
 import { Skeleton } from "@/components/ui/skeleton";
 
 type TabDef = {
-  path: "overview" | "deployments" | "variables" | "volumes" | "files" | "settings";
+  path: "overview" | "deployments" | "logs" | "variables" | "volumes" | "files" | "settings";
   label: string;
-  route: "/apps/$appId/overview" | "/apps/$appId/deployments" | "/apps/$appId/variables" | "/apps/$appId/volumes" | "/apps/$appId/files" | "/apps/$appId/settings";
+  route:
+    | "/apps/$appId/overview"
+    | "/apps/$appId/deployments"
+    | "/apps/$appId/logs"
+    | "/apps/$appId/variables"
+    | "/apps/$appId/volumes"
+    | "/apps/$appId/files"
+    | "/apps/$appId/settings";
 };
 
 const tabs: TabDef[] = [
   { path: "overview", label: "Overview", route: "/apps/$appId/overview" },
   { path: "deployments", label: "Deployments", route: "/apps/$appId/deployments" },
+  { path: "logs", label: "Logs", route: "/apps/$appId/logs" },
   { path: "variables", label: "Variables", route: "/apps/$appId/variables" },
   { path: "volumes", label: "Volumes", route: "/apps/$appId/volumes" },
   { path: "files", label: "Files", route: "/apps/$appId/files" },

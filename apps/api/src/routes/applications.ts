@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { prisma } from "@sohwe/db";
 import {
+  appLogChannelName,
   createQueue,
   getRedisUrl,
   logChannelName
@@ -16,6 +17,7 @@ import Docker from "dockerode";
 import IORedis from "ioredis";
 import { z } from "zod";
 import { defaultApplicationSelect, serializeAppListRow } from "../app-public";
+import { getRunningAppContainer } from "../container-fs";
 import { authPreHandler } from "../session";
 
 const docker = new Docker();
@@ -26,6 +28,58 @@ const DepParam = z.object({ deploymentId: z.string().uuid() });
 
 function sseData(payload: unknown): string {
   return `data: ${JSON.stringify(payload)}\n\n`;
+}
+
+async function collectStream(stream: NodeJS.ReadableStream): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  await new Promise<void>((resolve, reject) => {
+    stream.on("data", (chunk: Buffer | string) => {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    });
+    stream.on("end", resolve);
+    stream.on("close", resolve);
+    stream.on("error", reject);
+  });
+  return Buffer.concat(chunks);
+}
+
+function decodeDockerLogBuffer(buf: Buffer): string {
+  let offset = 0;
+  const chunks: Buffer[] = [];
+
+  while (offset + 8 <= buf.length) {
+    const streamType = buf[offset];
+    const hasHeader =
+      (streamType === 1 || streamType === 2) &&
+      buf[offset + 1] === 0 &&
+      buf[offset + 2] === 0 &&
+      buf[offset + 3] === 0;
+
+    if (!hasHeader) return buf.toString("utf8");
+
+    const len = buf.readUInt32BE(offset + 4);
+    const start = offset + 8;
+    const end = start + len;
+    if (end > buf.length) return buf.toString("utf8");
+    chunks.push(buf.subarray(start, end));
+    offset = end;
+  }
+
+  if (offset !== buf.length) return buf.toString("utf8");
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+async function readRecentRuntimeLogs(applicationId: string): Promise<string> {
+  const container = await getRunningAppContainer(docker, applicationId);
+  if (!container) return "";
+  const logs = (await container.logs({
+    stdout: true,
+    stderr: true,
+    timestamps: false,
+    tail: 200
+  })) as Buffer | NodeJS.ReadableStream;
+  const buf = Buffer.isBuffer(logs) ? logs : await collectStream(logs);
+  return decodeDockerLogBuffer(buf);
 }
 
 /** Stop and remove app containers, named volumes, and the internal per-app network. */
@@ -267,6 +321,52 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
       return reply
         .status(202)
         .send({ deployment: { id: d.id, status: d.status } });
+    }
+  );
+
+  app.get(
+    "/api/applications/:id/logs",
+    {
+      preHandler: [authPreHandler],
+      schema: { params: IdParam }
+    },
+    async (req, reply) => {
+      const u = req.user!;
+      const { id } = req.params as z.infer<typeof IdParam>;
+      const a = await prisma.application.findFirst({
+        where: { id, organizationId: u.organizationId },
+        select: { id: true }
+      });
+      if (!a) return reply.notFound();
+
+      const channel = appLogChannelName(id);
+      const sub = new IORedis(getRedisUrl());
+      const existing = await readRecentRuntimeLogs(id).catch(() => "");
+
+      reply.hijack();
+      reply.raw.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+      reply.raw.setHeader("Cache-Control", "no-cache, no-transform");
+      reply.raw.setHeader("Connection", "keep-alive");
+      (reply as { raw: { flushHeaders?(): void } }).raw.flushHeaders?.();
+      reply.raw.write(sseData({ type: "replay", text: existing }));
+
+      await sub.subscribe(channel);
+      const onMessage = (_ch: string, message: string) => {
+        reply.raw.write(sseData({ type: "line", line: message }));
+      };
+      sub.on("message", onMessage);
+
+      const end = () => {
+        sub.off("message", onMessage);
+        void sub.unsubscribe(channel).catch(() => {});
+        void sub.quit().catch(() => {});
+        try {
+          reply.raw.end();
+        } catch {
+          // ignore
+        }
+      };
+      req.raw.on("close", end);
     }
   );
 

@@ -14,6 +14,10 @@ export function logChannelName(deploymentId: string): string {
   return `logs:deployment:${deploymentId}`;
 }
 
+export function appLogChannelName(applicationId: string): string {
+  return `logs:app:${applicationId}`;
+}
+
 export function getRedisUrl(): string {
   const u = process.env.REDIS_URL;
   if (!u) throw new Error("REDIS_URL is not set");

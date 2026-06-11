@@ -24,10 +24,11 @@ Licensed **AGPL-3.0** (open-core friendly, prevents closed-source forks).
 12. [Phase 4.5 — Portable Bundles](#phase-45--portable-bundles)
 13. [Phase 5 — Git-Push Deploys](#phase-5--git-push-deploys)
 14. [Phase 6 — Multi-User](#phase-6--multi-user)
-15. [Cross-Cutting Concerns](#cross-cutting-concerns)
-16. [Development Workflow](#development-workflow)
-17. [Troubleshooting](#troubleshooting)
-18. [Resources](#resources)
+15. [Phase 7 — Managed Datastores](#phase-7--managed-datastores-post-v1--v2)
+16. [Cross-Cutting Concerns](#cross-cutting-concerns)
+17. [Development Workflow](#development-workflow)
+18. [Troubleshooting](#troubleshooting)
+19. [Resources](#resources)
 
 ---
 
@@ -56,7 +57,7 @@ Sohwe lets you:
 
 ### Explicitly deferred to v2+
 
-- Databases-as-a-service (one-click Postgres/Redis)
+- Databases-as-a-service (one-click Postgres/Redis). This is feasible on the same VPS by running managed Docker containers with Sohwe-created volumes, labels, credentials, and private app-network bindings, but it is intentionally deferred until after the v1 app deployment/control-plane scope is stable.
 - Multi-node / cluster scheduling
 - Preview deployments per pull request
 - Log history beyond basic storage
@@ -1043,7 +1044,7 @@ Goal: users can see what their apps are doing.
 
 ### Phase 4 Checklist
 
-- [ ] Live runtime logs visible in the dashboard
+- [x] Live runtime logs visible in the dashboard
 - [x] Last-deploy build logs visible
 - [ ] CPU / memory updating live per app
 - [ ] Crash alert fires to a configured webhook
@@ -1382,6 +1383,102 @@ Goal: the owner can invite teammates, and the platform can safely offer **power 
 - [ ] Member can log in and see the org's apps
 - [ ] Member cannot delete the org or change billing (future)
 - [ ] **Instance host** (optional): allowlisted path browse for owner/admin only; members denied; actions audited
+
+---
+
+## Phase 7 — Managed Datastores (Post-v1 / v2)
+
+Goal: make a fresh VPS feel closer to Railway/Render for stateful dependencies: click **Create Postgres** or **Create Redis**, get a private service running on the host, and bind it to an app without SSH or manual Docker commands.
+
+This should build on Phase 3's per-app internal networks and volumes. A managed datastore is not deployed from Git; it is a Sohwe-owned Docker container using an official image, a named volume, generated credentials, and Sohwe labels.
+
+### How It Works
+
+1. User creates a datastore from the dashboard: kind (`postgres` or `redis`), name, image version, storage hint, optional CPU/memory limits.
+2. API creates a `Datastore` row with `status = provisioning`, generates credentials, encrypts them with `SOHWE_ENCRYPTION_KEY`, and enqueues a datastore job.
+3. Worker creates a named Docker volume such as `sohwe_datastore_<id>_data`.
+4. Worker starts an official image (`postgres:<version>` or `redis:<version>`) with Sohwe labels and no public ports by default.
+5. When an app is bound to the datastore, the worker connects the datastore container to that app's internal network, or to a small shared private network if the product later supports multi-app sharing.
+6. API can inject `DATABASE_URL`, `REDIS_URL`, or custom env var keys into the app's encrypted env vars.
+7. On the next deploy/restart, the app receives the connection string and talks to the datastore over private Docker DNS.
+
+### Data Model Sketch
+
+Add two tables:
+
+```prisma
+model Datastore {
+  id                   String   @id @default(uuid())
+  organizationId       String   @map("organization_id")
+  kind                 String   // postgres | redis
+  name                 String
+  slug                 String
+  status               String   @default("provisioning")
+  image                String
+  credentialsEncrypted Bytes    @map("credentials_encrypted")
+  storageBytes         BigInt?  @map("storage_bytes")
+  memoryLimitMb        Int?     @map("memory_limit_mb")
+  cpuLimit             Float?   @map("cpu_limit")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  @@unique([organizationId, slug])
+  @@map("datastores")
+}
+
+model DatastoreBinding {
+  id            String   @id @default(uuid())
+  datastoreId   String   @map("datastore_id")
+  applicationId String   @map("application_id")
+  envKey        String   @map("env_key")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@unique([datastoreId, applicationId, envKey])
+  @@map("datastore_bindings")
+}
+```
+
+### API Surface
+
+```text
+GET    /api/datastores
+POST   /api/datastores
+GET    /api/datastores/:id
+DELETE /api/datastores/:id
+POST   /api/datastores/:id/rotate-password
+POST   /api/datastores/:id/bindings
+DELETE /api/datastores/:id/bindings/:bindingId
+GET    /api/datastores/:id/connection-string
+```
+
+The connection-string endpoint should behave like env-var reveal: authenticated, intentional, audited once audit logs exist, and never embedded in generic list responses.
+
+### Worker Responsibilities
+
+- Create, label, start, stop, and delete datastore containers.
+- Create and delete Docker volumes only when the user confirms destructive deletion.
+- Apply CPU/memory limits.
+- Attach datastore containers to the correct private Docker network.
+- Run basic health checks (`pg_isready` for Postgres, `redis-cli ping` for Redis).
+- Rotate credentials safely where possible. For Postgres this means updating the DB user password; for Redis this means updating config/container env and restarting.
+
+### Dashboard
+
+Add a **Datastores** section:
+
+- List Postgres/Redis instances with status, image version, storage hint, bound apps, and health.
+- Create flow with sensible defaults.
+- Detail page with connection info, reveal/copy actions, bound apps, restart, password rotate, and delete.
+- App settings binding flow: choose datastore, choose env var key (`DATABASE_URL` / `REDIS_URL` default), save, then prompt to redeploy/restart the app.
+
+### Security And Product Constraints
+
+- No public TCP exposure by default. Datastores should be private to bound apps.
+- Generated passwords must be encrypted at rest and hidden from logs.
+- Runtime logs and health errors must not print connection strings.
+- Deleting a datastore is data-destructive because it deletes the volume; require explicit confirmation.
+- Managed datastore config should be included in Phase 4.5 config bundles, but raw database contents should wait for full-state backup.
+- This feature increases Sohwe's responsibility from deploy control plane to data host, so backups and restore docs need to be clear before public release.
 
 ---
 

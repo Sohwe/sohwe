@@ -23,6 +23,7 @@ function tabLabel(tab: string | undefined, sub: string | undefined): string {
   if (tab === "overview") return "Overview";
   if (tab === "deployments" && !sub) return "Deployments";
   if (tab === "deployments" && sub) return `Log ${shortDepId(sub)}`;
+  if (tab === "logs") return "Logs";
   if (tab === "variables") return "Variables";
   if (tab === "volumes") return "Volumes";
   if (tab === "files") return "Files";

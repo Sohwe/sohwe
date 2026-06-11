@@ -3,12 +3,14 @@ import { spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { buildAppImage, type BuildMode } from "@sohwe/builder";
 import { decryptJson, toDockerEnvList } from "@sohwe/crypto";
 import { appDockerVolumeName, appInternalNetworkName } from "@sohwe/types";
 import { prisma } from "@sohwe/db";
 import {
+  appLogChannelName,
   createRedisForPublish,
   DEPLOY_QUEUE,
   getConnectionOptionsForBull,
@@ -27,6 +29,10 @@ const MAX_COMMIT_MSG = 2000;
 
 const docker = new Docker();
 const publishRedis = createRedisForPublish();
+const runtimeLogTails = new Map<
+  string,
+  { containerId: string; stream: NodeJS.ReadableStream & { destroy?(): void } }
+>();
 
 function sh(cmd: string, args: string[], cwd: string): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -126,6 +132,103 @@ function traefikName(slug: string): string {
 
 function buildImageTag(slug: string, deploymentId: string): string {
   return `sohwe/app-${slug}:dep-${deploymentId}`.toLowerCase();
+}
+
+function publishRuntimeLine(applicationId: string, line: string): void {
+  void publishRedis.publish(appLogChannelName(applicationId), line);
+}
+
+function stopRuntimeLogTail(applicationId: string): void {
+  const tail = runtimeLogTails.get(applicationId);
+  if (!tail) return;
+  runtimeLogTails.delete(applicationId);
+  tail.stream.destroy?.();
+}
+
+async function startRuntimeLogTail(
+  applicationId: string,
+  container: Docker.Container,
+  since = Math.floor(Date.now() / 1000)
+): Promise<void> {
+  stopRuntimeLogTail(applicationId);
+
+  let stream: NodeJS.ReadableStream & { destroy?(): void };
+  try {
+    stream = (await container.logs({
+      follow: true,
+      stdout: true,
+      stderr: true,
+      timestamps: false,
+      since
+    })) as NodeJS.ReadableStream & { destroy?(): void };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    publishRuntimeLine(applicationId, `[sohwe] Failed to attach runtime logs: ${msg}`);
+    return;
+  }
+
+  runtimeLogTails.set(applicationId, { containerId: container.id, stream });
+
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  let buffer = "";
+
+  const onData = (chunk: Buffer) => {
+    buffer += chunk.toString("utf8");
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (line.length > 0) publishRuntimeLine(applicationId, line);
+    }
+  };
+
+  const onEnd = () => {
+    if (buffer.length > 0) {
+      publishRuntimeLine(applicationId, buffer);
+      buffer = "";
+    }
+    const current = runtimeLogTails.get(applicationId);
+    if (current?.containerId === container.id) {
+      runtimeLogTails.delete(applicationId);
+    }
+    stdout.destroy();
+    stderr.destroy();
+  };
+
+  stdout.on("data", onData);
+  stderr.on("data", onData);
+  stream.on("end", onEnd);
+  stream.on("close", onEnd);
+  stream.on("error", (e) => {
+    const msg = e instanceof Error ? e.message : String(e);
+    publishRuntimeLine(applicationId, `[sohwe] Runtime log stream ended: ${msg}`);
+    onEnd();
+  });
+
+  try {
+    (
+      docker.modem as {
+        demuxStream(
+          stream: NodeJS.ReadableStream,
+          stdout: NodeJS.WritableStream,
+          stderr: NodeJS.WritableStream
+        ): void;
+      }
+    ).demuxStream(stream, stdout, stderr);
+  } catch {
+    stream.on("data", onData);
+  }
+}
+
+async function startRuntimeLogTailsForRunningContainers(): Promise<void> {
+  const containers = await docker.listContainers({
+    filters: { label: ["sohwe.managed=true"] }
+  });
+  for (const c of containers) {
+    const appId = c.Labels?.["sohwe.app"];
+    if (!appId) continue;
+    await startRuntimeLogTail(appId, docker.getContainer(c.Id));
+  }
 }
 
 async function runDeploy(job: { data: DeployJobData }): Promise<void> {
@@ -253,6 +356,7 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
 
     await sink.end();
     onLog(`[sohwe] Stopping old containers for this app (if any)...`);
+    stopRuntimeLogTail(app.id);
     const existing = await docker.listContainers({
       all: true,
       filters: { label: [`sohwe.app=${app.id}`] }
@@ -353,6 +457,7 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
     });
 
     await c.start();
+    await startRuntimeLogTail(app.id, c, Math.floor(Date.now() / 1000) - 1);
 
     const intNetName = appInternalNetworkName(app.id);
     try {
@@ -412,6 +517,10 @@ const worker = new Worker<DeployJobData>(DEPLOY_QUEUE, async (job) => {
   await runDeploy({ data: job.data });
 }, { connection });
 
+await startRuntimeLogTailsForRunningContainers().catch((e) => {
+  console.error("Failed to attach runtime log tails", e);
+});
+
 worker.on("failed", (job, err) => {
   console.error("Job failed", job?.id, err);
 });
@@ -420,6 +529,7 @@ worker.on("error", (err) => {
 });
 
 const shutdown = async () => {
+  for (const appId of runtimeLogTails.keys()) stopRuntimeLogTail(appId);
   await worker.close();
   await publishRedis.quit();
   await prisma.$disconnect();
