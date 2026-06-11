@@ -902,12 +902,12 @@ You should see Turborepo launch the API (`:3001`) and dashboard (`:3000`) in par
 
 Use this to verify a **new clone** or clean machine. (The `main` branch in this repository already implements the items below; your install must still pass them end-to-end.)
 
-- [ ] Monorepo builds with `pnpm install` + `pnpm build`
-- [ ] `docker compose` brings up Postgres + Redis + Traefik
-- [ ] `/health` on the API returns `ok`
-- [ ] First-run setup creates the owner + organization
-- [ ] Login sets a session cookie and `/api/me` returns the user
-- [ ] Dashboard loads the logged-in empty state
+- [x] Monorepo builds with `pnpm install` + `pnpm build`
+- [x] `docker compose` brings up Postgres + Redis + Traefik
+- [x] `/health` on the API returns `ok`
+- [x] First-run setup creates the owner + organization
+- [x] Login sets a session cookie and `/api/me` returns the user
+- [x] Dashboard loads the logged-in empty state
 
 ---
 
@@ -951,13 +951,13 @@ Goal: the user can paste a public Git repo URL that contains a Dockerfile, hit *
 
 Run these on your environment after Phase 0 is green. **v0.1.0** on `main` is intended to satisfy them (Dockerfile-based deploy, streaming logs, Traefik on `sohwe.localhost`, stop/replace on redeploy, delete cleans up; see [CHANGELOG.md](./CHANGELOG.md) for extras such as **rollback** and a read-only **file browser** for the running container).
 
-- [ ] Create an application via the dashboard
-- [ ] Click Deploy, see live build logs
-- [ ] **Deployments** table shows the new row; the successful live deployment has the **Current** badge; you can open **Log** and use **Roll back** to an older successful build
-- [ ] With the app **running**, **Browse files** lists directories and previews a file (no SSH)
-- [ ] App is reachable at `<slug>.sohwe.localhost` via Traefik
-- [ ] Second deploy replaces the first container cleanly
-- [ ] Deleting the app removes the container and DB row
+- [x] Create an application via the dashboard
+- [x] Click Deploy, see live build logs
+- [x] **Deployments** table shows the new row; the successful live deployment has the **Current** badge; you can open **Log** and use **Roll back** to an older successful build
+- [x] With the app **running**, **Browse files** lists directories and previews a file (no SSH)
+- [x] App is reachable at `<slug>.sohwe.localhost` via Traefik
+- [x] Second deploy replaces the first container cleanly
+- [x] Deleting the app removes the container and DB row
 
 ---
 
@@ -972,10 +972,10 @@ Goal: users can deploy Next.js, Python, Go, Rust, static sites — without writi
 
 ### Phase 2 Checklist
 
-- [ ] Deploy a Next.js app from GitHub with no Dockerfile
-- [ ] Deploy a Python (FastAPI) app with no Dockerfile
-- [ ] Deploy a static Vite site with no Dockerfile
-- [ ] Custom domain with automatic HTTPS works
+- [x] Deploy a Next.js app from GitHub with no Dockerfile
+- [x] Deploy a Python (FastAPI) app with no Dockerfile
+- [x] Deploy a static Vite site with no Dockerfile
+- [x] Custom domain with automatic HTTPS works
 
 ---
 
@@ -1021,13 +1021,13 @@ This phase does **not** add product features. It packages what Phases 0–3 alre
 
 ### Phase 3.5 Checklist
 
-- [ ] `docker/api.Dockerfile`, `docker/worker.Dockerfile`, `docker/dashboard.Dockerfile` build locally
-- [ ] Worker image runs `docker build`, `nixpacks build`, and `git clone` without anything installed on the host beyond Docker itself
-- [ ] `docker-compose.prod.yml` boots a full instance from images alone (no source checkout)
-- [ ] GitHub Actions publishes tagged images to GHCR (amd64 + arm64)
-- [ ] `curl -fsSL https://<url>/install.sh | bash` on a fresh Ubuntu 22.04 VPS yields a working dashboard in under 10 minutes
-- [ ] `sohwe update` pulls new images, migrates DB, restarts cleanly
-- [ ] Secrets (`SESSION_SECRET`, `SOHWE_ENCRYPTION_KEY`) are generated if absent and preserved across updates
+- [x] `docker/api.Dockerfile`, `docker/worker.Dockerfile`, `docker/dashboard.Dockerfile` build locally
+- [x] Worker image runs `docker build`, `nixpacks build`, and `git clone` without anything installed on the host beyond Docker itself
+- [x] `docker-compose.prod.yml` boots a full instance from images alone (no source checkout)
+- [x] GitHub Actions publishes tagged images to GHCR (amd64 + arm64)
+- [x] `curl -fsSL https://<url>/install.sh | bash` on a fresh Ubuntu 22.04 VPS yields a working dashboard in under 10 minutes
+- [x] `sohwe update` pulls new images, migrates DB, restarts cleanly
+- [x] Secrets (`SESSION_SECRET`, `SOHWE_ENCRYPTION_KEY`) are generated if absent and preserved across updates
 
 ---
 
@@ -1044,7 +1044,7 @@ Goal: users can see what their apps are doing.
 ### Phase 4 Checklist
 
 - [ ] Live runtime logs visible in the dashboard
-- [ ] Last-deploy build logs visible
+- [x] Last-deploy build logs visible
 - [ ] CPU / memory updating live per app
 - [ ] Crash alert fires to a configured webhook
 
