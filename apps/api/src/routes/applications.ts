@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { prisma } from "@sohwe/db";
 import {
   appLogChannelName,
+  appStatsKey,
   createQueue,
   getRedisUrl,
   logChannelName
@@ -22,6 +23,8 @@ import { authPreHandler } from "../session";
 
 const docker = new Docker();
 const deployQueue = createQueue();
+// Shared read-only client for polling the worker's short-TTL stats keys.
+const statsRedis = new IORedis(getRedisUrl());
 
 const IdParam = z.object({ id: z.string().uuid() });
 const DepParam = z.object({ deploymentId: z.string().uuid() });
@@ -367,6 +370,32 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
         }
       };
       req.raw.on("close", end);
+    }
+  );
+
+  app.get(
+    "/api/applications/:id/stats",
+    {
+      preHandler: [authPreHandler],
+      schema: { params: IdParam },
+      logLevel: "silent"
+    },
+    async (req, reply) => {
+      const u = req.user!;
+      const { id } = req.params as z.infer<typeof IdParam>;
+      const a = await prisma.application.findFirst({
+        where: { id, organizationId: u.organizationId },
+        select: { id: true }
+      });
+      if (!a) return reply.notFound();
+
+      const raw = await statsRedis.get(appStatsKey(id)).catch(() => null);
+      if (!raw) return { running: false };
+      try {
+        return JSON.parse(raw) as unknown;
+      } catch {
+        return { running: false };
+      }
     }
   );
 

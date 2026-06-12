@@ -18,6 +18,14 @@ export function appLogChannelName(applicationId: string): string {
   return `logs:app:${applicationId}`;
 }
 
+/**
+ * Redis string key holding the latest CPU/memory sample for an app, written by
+ * the worker with a short TTL and read by the API stats endpoint (polling).
+ */
+export function appStatsKey(applicationId: string): string {
+  return `stats:app:${applicationId}`;
+}
+
 export function getRedisUrl(): string {
   const u = process.env.REDIS_URL;
   if (!u) throw new Error("REDIS_URL is not set");

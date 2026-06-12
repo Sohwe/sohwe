@@ -12,6 +12,7 @@ import { AppOverviewPage } from "@/routes/app.$appId.overview";
 import { AppVariablesPage } from "@/routes/app.$appId.variables";
 import { AppVolumesPage } from "@/routes/app.$appId.volumes";
 import { AppLogsPage } from "@/routes/app.$appId.logs";
+import { AppMetricsPage } from "@/routes/app.$appId.metrics";
 import { AppFilesPage } from "@/routes/app.$appId.files";
 import { AppSettingsPage } from "@/routes/app.$appId.settings";
 import { DeploymentsPage } from "@/components/apps/DeploymentsPage";
@@ -127,6 +128,12 @@ const appLogsRoute = createRoute({
   component: AppLogsPage
 });
 
+const appMetricsRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "metrics",
+  component: AppMetricsPage
+});
+
 const appFilesRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: "files",
@@ -169,6 +176,7 @@ const routeTree = rootRoute.addChildren([
       appVariablesRoute,
       appVolumesRoute,
       appLogsRoute,
+      appMetricsRoute,
       appFilesRoute,
       appSettingsRoute,
       deploymentsLayoutRoute.addChildren([deploymentsIndexRoute, deploymentsWithIdRoute])

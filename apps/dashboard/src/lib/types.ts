@@ -65,6 +65,29 @@ export function getCurrentDeploymentId(
 
 export type BuildMode = "auto" | "dockerfile" | "nixpacks";
 
+export type AppStats =
+  | { running: false }
+  | {
+      running: true;
+      cpuPercent: number;
+      memUsedBytes: number;
+      memLimitBytes: number;
+      memPercent: number;
+      ts: number;
+    };
+
+export type AlertDestinationType = "discord" | "slack" | "generic";
+
+export type AlertDestination = {
+  id: string;
+  type: AlertDestinationType;
+  name: string;
+  url: string;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type FsListEntry = { name: string; kind: "file" | "dir" | "symlink" };
 export type FsListResponse = { path: string; entries: FsListEntry[] };
 export type FsFileResponse = {

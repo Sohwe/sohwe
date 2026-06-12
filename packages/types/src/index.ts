@@ -137,6 +137,52 @@ export const VolumeCreateSchema = z.object({
 });
 export type VolumeCreateInput = z.infer<typeof VolumeCreateSchema>;
 
+/**
+ * Live container resource sample exposed by `GET /api/applications/:id/stats`.
+ * `running: false` means there is no current sample (no running container or
+ * the worker's short-TTL Redis key has expired).
+ */
+export type AppStats =
+  | { running: false }
+  | {
+      running: true;
+      cpuPercent: number;
+      memUsedBytes: number;
+      memLimitBytes: number;
+      memPercent: number;
+      ts: number;
+    };
+
+/** Webhook crash-alert destination kinds. */
+export const AlertDestinationTypeSchema = z.enum([
+  "discord",
+  "slack",
+  "generic"
+]);
+export type AlertDestinationType = z.infer<typeof AlertDestinationTypeSchema>;
+
+export const CreateAlertDestinationSchema = z.object({
+  type: AlertDestinationTypeSchema,
+  name: z.string().min(1).max(100),
+  url: z.string().url(),
+  enabled: z.boolean().default(true)
+});
+export type CreateAlertDestinationInput = z.infer<
+  typeof CreateAlertDestinationSchema
+>;
+
+export const UpdateAlertDestinationSchema = z
+  .object({
+    type: AlertDestinationTypeSchema.optional(),
+    name: z.string().min(1).max(100).optional(),
+    url: z.string().url().optional(),
+    enabled: z.boolean().optional()
+  })
+  .partial();
+export type UpdateAlertDestinationInput = z.infer<
+  typeof UpdateAlertDestinationSchema
+>;
+
 /** Docker named volume for a persist mount (Prisma `Volume.id`). */
 export function appDockerVolumeName(
   appId: string,

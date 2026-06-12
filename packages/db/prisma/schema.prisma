@@ -63,6 +63,7 @@ model Application {
   updatedAt         DateTime     @updatedAt @map("updated_at")
   deployments       Deployment[]
   volumes           Volume[]
+  alertDestinations AlertDestination[]
 
   @@unique([organizationId, slug])
   @@map("applications")
@@ -96,4 +97,19 @@ model Volume {
 
   @@unique([applicationId, mountPath])
   @@map("volumes")
+}
+
+model AlertDestination {
+  id            String      @id @default(uuid())
+  applicationId String      @map("application_id")
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  type          String      // discord | slack | generic
+  name          String
+  url           String
+  enabled       Boolean     @default(true)
+  createdAt     DateTime    @default(now()) @map("created_at")
+  updatedAt     DateTime    @updatedAt @map("updated_at")
+
+  @@index([applicationId])
+  @@map("alert_destinations")
 }

@@ -23,6 +23,7 @@ import {
   setupGateHook,
   verifyUnlockPassword
 } from "./setup-gate";
+import { registerAlertDestinationRoutes } from "./routes/alert-destinations";
 import { registerAppFilesystemRoutes } from "./routes/app-filesystem";
 import { registerApplicationRoutes } from "./routes/applications";
 import { registerEnvVarRoutes } from "./routes/env-vars";
@@ -175,6 +176,7 @@ app.get("/api/me", async (req, reply) => {
 await registerApplicationRoutes(app);
 await registerEnvVarRoutes(app);
 await registerVolumeRoutes(app);
+await registerAlertDestinationRoutes(app);
 await registerAppFilesystemRoutes(app);
 
 const port = Number(process.env.PORT ?? 3001);

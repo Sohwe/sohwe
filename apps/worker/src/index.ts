@@ -11,6 +11,7 @@ import { appDockerVolumeName, appInternalNetworkName } from "@sohwe/types";
 import { prisma } from "@sohwe/db";
 import {
   appLogChannelName,
+  appStatsKey,
   createRedisForPublish,
   DEPLOY_QUEUE,
   getConnectionOptionsForBull,
@@ -229,6 +230,286 @@ async function startRuntimeLogTailsForRunningContainers(): Promise<void> {
     if (!appId) continue;
     await startRuntimeLogTail(appId, docker.getContainer(c.Id));
   }
+}
+
+// --- Live CPU/memory stats (Phase 4) ---------------------------------------
+//
+// Every few seconds we sample one-shot Docker stats for each managed running
+// container and write a compact JSON snapshot to Redis under `stats:app:<id>`
+// with a short TTL. The API reads this key (polling); when it expires the app
+// is reported as not running. We deliberately avoid streaming stats — periodic
+// one-shot reads are simpler and the daemon still populates `precpu_stats` so
+// the standard CPU% delta formula works.
+
+const STATS_INTERVAL_MS = 3000;
+const STATS_TTL_SECONDS = 10;
+let statsTimer: ReturnType<typeof setInterval> | null = null;
+
+type RawDockerStats = {
+  cpu_stats?: {
+    cpu_usage?: { total_usage?: number };
+    system_cpu_usage?: number;
+    online_cpus?: number;
+  };
+  precpu_stats?: {
+    cpu_usage?: { total_usage?: number };
+    system_cpu_usage?: number;
+  };
+  memory_stats?: {
+    usage?: number;
+    limit?: number;
+    stats?: { cache?: number; inactive_file?: number };
+  };
+};
+
+function computeStats(raw: RawDockerStats): {
+  cpuPercent: number;
+  memUsedBytes: number;
+  memLimitBytes: number;
+  memPercent: number;
+} {
+  const cpuTotal = raw.cpu_stats?.cpu_usage?.total_usage ?? 0;
+  const preTotal = raw.precpu_stats?.cpu_usage?.total_usage ?? 0;
+  const system = raw.cpu_stats?.system_cpu_usage ?? 0;
+  const preSystem = raw.precpu_stats?.system_cpu_usage ?? 0;
+  const onlineCpus = raw.cpu_stats?.online_cpus ?? 1;
+  const cpuDelta = cpuTotal - preTotal;
+  const systemDelta = system - preSystem;
+  const cpuPercent =
+    systemDelta > 0 && cpuDelta > 0
+      ? (cpuDelta / systemDelta) * onlineCpus * 100
+      : 0;
+
+  const rawUsage = raw.memory_stats?.usage ?? 0;
+  // Match `docker stats`: subtract page cache (cgroup v1 `cache`, v2 `inactive_file`).
+  const cache =
+    raw.memory_stats?.stats?.cache ??
+    raw.memory_stats?.stats?.inactive_file ??
+    0;
+  const memUsedBytes = Math.max(0, rawUsage - cache);
+  const memLimitBytes = raw.memory_stats?.limit ?? 0;
+  const memPercent =
+    memLimitBytes > 0 ? (memUsedBytes / memLimitBytes) * 100 : 0;
+
+  return {
+    cpuPercent: Math.round(cpuPercent * 10) / 10,
+    memUsedBytes,
+    memLimitBytes,
+    memPercent: Math.round(memPercent * 10) / 10
+  };
+}
+
+async function sampleStatsOnce(): Promise<void> {
+  const containers = await docker.listContainers({
+    filters: { label: ["sohwe.managed=true"], status: ["running"] }
+  });
+  await Promise.all(
+    containers.map(async (c) => {
+      const appId = c.Labels?.["sohwe.app"];
+      if (!appId) return;
+      try {
+        const raw = (await docker
+          .getContainer(c.Id)
+          .stats({ stream: false })) as RawDockerStats;
+        const s = computeStats(raw);
+        await publishRedis.set(
+          appStatsKey(appId),
+          JSON.stringify({ running: true, ...s, ts: Date.now() }),
+          "EX",
+          STATS_TTL_SECONDS
+        );
+      } catch {
+        // Container may have stopped between listing and sampling; skip.
+      }
+    })
+  );
+}
+
+function startStatsCollector(): void {
+  if (statsTimer) return;
+  statsTimer = setInterval(() => {
+    void sampleStatsOnce().catch(() => {});
+  }, STATS_INTERVAL_MS);
+}
+
+function stopStatsCollector(): void {
+  if (statsTimer) {
+    clearInterval(statsTimer);
+    statsTimer = null;
+  }
+}
+
+// --- Crash detection + webhook alerts (Phase 4) ----------------------------
+//
+// We watch Docker `die`/`oom` events for managed containers. On a crash we mark
+// the app `crashed` and POST a webhook to each enabled per-app destination.
+// Alert payloads carry only non-sensitive metadata (app name/slug, event, exit
+// code, container id, timestamp) — never env var values or other secrets.
+
+type DockerEvent = {
+  Type?: string;
+  Action?: string;
+  status?: string;
+  id?: string;
+  Actor?: { ID?: string; Attributes?: Record<string, string> };
+};
+
+let eventsStream: (NodeJS.ReadableStream & { destroy?(): void }) | null = null;
+let eventsStopping = false;
+
+function buildAlertPayload(
+  type: string,
+  info: {
+    appName: string;
+    appSlug: string;
+    event: string;
+    exitCode: string;
+    containerId: string;
+    timeIso: string;
+  }
+): unknown {
+  const title = `🔴 Sohwe: app "${info.appName}" ${info.event}`;
+  const detail =
+    `App: ${info.appName} (${info.appSlug})\n` +
+    `Event: ${info.event}\n` +
+    `Exit code: ${info.exitCode}\n` +
+    `Container: ${info.containerId.slice(0, 12)}\n` +
+    `Time: ${info.timeIso}`;
+  if (type === "slack") {
+    return { text: `${title}\n${detail}` };
+  }
+  if (type === "discord") {
+    return { content: `**${title}**\n${detail}` };
+  }
+  // generic
+  return {
+    type: "sohwe.crash",
+    app: { name: info.appName, slug: info.appSlug },
+    event: info.event,
+    exitCode: info.exitCode,
+    containerId: info.containerId,
+    time: info.timeIso
+  };
+}
+
+async function sendCrashAlerts(
+  appId: string,
+  event: string,
+  exitCode: string,
+  containerId: string
+): Promise<void> {
+  const app = await prisma.application.findUnique({
+    where: { id: appId },
+    select: { id: true, name: true, slug: true }
+  });
+  if (!app) return;
+
+  const destinations = await prisma.alertDestination.findMany({
+    where: { applicationId: appId, enabled: true }
+  });
+  if (destinations.length === 0) return;
+
+  const info = {
+    appName: app.name,
+    appSlug: app.slug,
+    event,
+    exitCode,
+    containerId,
+    timeIso: new Date().toISOString()
+  };
+
+  await Promise.all(
+    destinations.map(async (d) => {
+      try {
+        await fetch(d.url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(buildAlertPayload(d.type, info))
+        });
+      } catch (e) {
+        console.error(
+          `Failed to send crash alert to destination ${d.id}`,
+          e instanceof Error ? e.message : e
+        );
+      }
+    })
+  );
+}
+
+async function handleDockerEvent(ev: DockerEvent): Promise<void> {
+  if (ev.Type && ev.Type !== "container") return;
+  const action = ev.Action ?? ev.status ?? "";
+  const isOom = action === "oom";
+  const isDie = action === "die";
+  if (!isOom && !isDie) return;
+
+  const attrs = ev.Actor?.Attributes ?? {};
+  const appId = attrs["sohwe.app"];
+  if (!appId) return;
+
+  const exitCode = attrs.exitCode ?? "";
+  // A clean stop (exit 0) is not a crash; an OOM kill always is.
+  if (isDie && (exitCode === "0" || exitCode === "")) return;
+
+  const containerId = ev.Actor?.ID ?? ev.id ?? "";
+  await prisma.application
+    .update({ where: { id: appId }, data: { status: "crashed" } })
+    .catch(() => {});
+  await sendCrashAlerts(appId, isOom ? "out of memory" : "crashed", exitCode, containerId);
+}
+
+async function startDockerEventWatcher(): Promise<void> {
+  if (eventsStopping) return;
+  try {
+    eventsStream = (await docker.getEvents({
+      filters: {
+        type: ["container"],
+        event: ["die", "oom"],
+        label: ["sohwe.managed=true"]
+      }
+    })) as NodeJS.ReadableStream & { destroy?(): void };
+  } catch (e) {
+    console.error("Failed to subscribe to Docker events", e);
+    return;
+  }
+
+  let buffer = "";
+  const onData = (chunk: Buffer) => {
+    buffer += chunk.toString("utf8");
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        void handleDockerEvent(JSON.parse(trimmed) as DockerEvent);
+      } catch {
+        // ignore malformed line
+      }
+    }
+  };
+
+  const reconnect = () => {
+    eventsStream = null;
+    if (eventsStopping) return;
+    setTimeout(() => {
+      void startDockerEventWatcher();
+    }, 1000);
+  };
+
+  eventsStream.on("data", onData);
+  eventsStream.on("end", reconnect);
+  eventsStream.on("close", reconnect);
+  eventsStream.on("error", (e) => {
+    console.error("Docker events stream error", e);
+    reconnect();
+  });
+}
+
+function stopDockerEventWatcher(): void {
+  eventsStopping = true;
+  eventsStream?.destroy?.();
+  eventsStream = null;
 }
 
 async function runDeploy(job: { data: DeployJobData }): Promise<void> {
@@ -521,6 +802,11 @@ await startRuntimeLogTailsForRunningContainers().catch((e) => {
   console.error("Failed to attach runtime log tails", e);
 });
 
+startStatsCollector();
+await startDockerEventWatcher().catch((e) => {
+  console.error("Failed to start Docker event watcher", e);
+});
+
 worker.on("failed", (job, err) => {
   console.error("Job failed", job?.id, err);
 });
@@ -529,6 +815,8 @@ worker.on("error", (err) => {
 });
 
 const shutdown = async () => {
+  stopStatsCollector();
+  stopDockerEventWatcher();
   for (const appId of runtimeLogTails.keys()) stopRuntimeLogTail(appId);
   await worker.close();
   await publishRedis.quit();

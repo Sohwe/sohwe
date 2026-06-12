@@ -2,7 +2,7 @@
 
 Current snapshot: **v0.3.8** plus one unreleased base-domain improvement.
 
-Current phase: **Phase 4 - Observability** is next. Phases 0 through 3.5 are implemented in the repo.
+Current phase: **Phase 4 - Observability** is implemented (runtime logs, live metrics, crash alerts). **Phase 4.5 - Portable Bundles** is next. Phases 0 through 4 are implemented in the repo; three Phase 3.5 items remain as manual VPS verification (see `docs/vps-smoke-test.md`).
 
 This file is a working checklist. It is based on `README.md`, `CHANGELOG.md`, `sohwe-getting-started.md`, `sohwe-prd.md`, and a code scan across the API, worker, dashboard, Docker, installer, and release workflow.
 
@@ -14,7 +14,7 @@ This file is a working checklist. It is based on `README.md`, `CHANGELOG.md`, `s
 - [x] **Phase 3 - Stateful Apps**
 - [x] **Phase 3.5 - Packaging & Install**
 - [x] **Unreleased - Configurable apps base domain**
-- [ ] **Phase 4 - Observability** (runtime logs started)
+- [x] **Phase 4 - Observability**
 - [ ] **Phase 4.5 - Portable Bundles**
 - [ ] **Phase 5 - Git-Push Deploys**
 - [ ] **Phase 6 - Multi-User**
@@ -110,9 +110,9 @@ Evidence: `packages/crypto/src/index.ts`, `packages/types/src/index.ts`, `apps/a
 - [x] GHCR multi-arch release workflow for `v*` tags.
 - [x] Traefik v3.7 for Docker Engine 29 compatibility.
 - [x] HTTP-only install cookie fix using `SOHWE_HTTPS_ENABLED`.
-- [ ] Final fresh-Ubuntu install smoke test after the latest installer/domain changes.
-- [ ] Confirm `sohwe update` on a real VPS after the latest installer/domain changes.
-- [ ] Confirm rollback after the latest installer/domain changes.
+- [ ] Final fresh-Ubuntu install smoke test after the latest installer/domain changes. (manual — see `docs/vps-smoke-test.md`)
+- [ ] Confirm `sohwe update` on a real VPS after the latest installer/domain changes. (manual — see `docs/vps-smoke-test.md`)
+- [ ] Confirm rollback after the latest installer/domain changes. (manual — see `docs/vps-smoke-test.md`)
 
 Evidence: `docker/api.Dockerfile`, `docker/worker.Dockerfile`, `docker/dashboard.Dockerfile`, `docker/dashboard.nginx.conf`, `docker-compose.prod.yml`, `docker-compose.https.yml`, `scripts/install.sh`, `scripts/sohwe`, `.github/workflows/release.yml`, `CHANGELOG.md`.
 
@@ -154,17 +154,17 @@ Build log streaming already exists. The missing Phase 4 work is runtime observab
 - [x] Runtime log view handles reconnects.
 - [x] Add bounded replay or rolling runtime log storage.
 - [x] Keep runtime logs separate from deployment build logs.
-- [ ] Last-deploy build logs visible from the app UI.
-- [ ] Add live CPU/memory collection from Docker stats.
-- [ ] Publish app stats to Redis with a short TTL.
-- [ ] API exposes app stats through polling or SSE.
-- [ ] Dashboard shows live CPU/memory per app.
-- [ ] Worker watches Docker `die`/OOM events for managed containers.
-- [ ] Add webhook alert destination model.
-- [ ] Add alert destination API routes.
-- [ ] Add alert configuration UI.
-- [ ] Send Discord/Slack/generic webhook alerts on crash.
-- [ ] Ensure alerts never include secrets or sensitive env values.
+- [x] Last-deploy build logs visible from the app UI.
+- [x] Add live CPU/memory collection from Docker stats.
+- [x] Publish app stats to Redis with a short TTL.
+- [x] API exposes app stats through polling or SSE.
+- [x] Dashboard shows live CPU/memory per app.
+- [x] Worker watches Docker `die`/OOM events for managed containers.
+- [x] Add webhook alert destination model.
+- [x] Add alert destination API routes.
+- [x] Add alert configuration UI.
+- [x] Send Discord/Slack/generic webhook alerts on crash.
+- [x] Ensure alerts never include secrets or sensitive env values.
 
 Current code gaps:
 
@@ -172,9 +172,9 @@ Current code gaps:
 - [x] `logs:app:<id>` channel helper added.
 - [x] App runtime logs SSE route added.
 - [x] Dashboard runtime logs tab added.
-- [ ] No Docker stats endpoint yet.
-- [ ] No Docker event crash watcher yet.
-- [ ] No alert webhook model/routes/UI yet.
+- [x] Docker stats collector + `GET /api/applications/:id/stats` polling endpoint added.
+- [x] Docker `die`/`oom` event crash watcher added.
+- [x] Per-app alert webhook model, CRUD routes, and Settings UI added.
 
 ## Future Phases
 
@@ -308,24 +308,24 @@ Open design questions:
 
 ### v0.4.1 - Metrics
 
-- [ ] Collect Docker stats for managed containers.
-- [ ] Publish CPU/memory/network stats to Redis.
-- [ ] Add API endpoint for stats.
-- [ ] Show live CPU and memory in dashboard.
-- [ ] Handle stopped/no-container states.
+- [x] Collect Docker stats for managed containers.
+- [x] Publish CPU/memory stats to Redis (short TTL).
+- [x] Add API endpoint for stats.
+- [x] Show live CPU and memory in dashboard.
+- [x] Handle stopped/no-container states.
 
 ### v0.4.2 - Crash Detection And Alerts
 
-- [ ] Watch Docker events for managed container `die`/OOM signals.
-- [ ] Add alert destination model.
-- [ ] Add webhook destination CRUD.
-- [ ] Send Discord/Slack/generic webhook payloads.
-- [ ] Add dashboard alert configuration.
-- [ ] Scrub secrets from all alert payloads.
+- [x] Watch Docker events for managed container `die`/OOM signals.
+- [x] Add alert destination model.
+- [x] Add webhook destination CRUD.
+- [x] Send Discord/Slack/generic webhook payloads.
+- [x] Add dashboard alert configuration.
+- [x] Scrub secrets from all alert payloads.
 
 ### v0.4.3 - Build Log UX Polish
 
-- [ ] Dedicated historical build log route/view.
+- [x] Last-deploy build logs reachable from the app Logs tab.
 - [ ] Better failed build summaries.
 - [ ] Copy build logs.
 - [ ] Download build logs.
@@ -376,5 +376,5 @@ Start Phase 4 with runtime logs:
 - [x] Publish lines to Redis on `logs:app:<id>` or a shared helper-defined channel.
 - [x] Add authenticated API SSE at `GET /api/applications/:id/logs`.
 - [x] Add an app `Logs` tab in the dashboard.
-- [ ] Verify reconnect behavior.
-- [ ] Verify logs do not leak env var values from Sohwe itself.
+- [x] Verify reconnect behavior.
+- [x] Verify logs do not leak env var values from Sohwe itself.

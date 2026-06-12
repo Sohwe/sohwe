@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Phase 4 runtime logs slice.** The worker now attaches to managed app containers with Docker log streaming, publishes stdout/stderr lines to Redis on per-app channels, and re-attaches to already-running managed containers on worker startup. The API exposes authenticated, organization-scoped runtime log SSE at `GET /api/applications/:id/logs`, including a short replay from the running container's recent Docker logs. The dashboard adds a per-app **Logs** tab that streams runtime output separately from deployment build logs.
+- **Phase 4 live metrics.** The worker samples one-shot Docker stats for managed running containers every ~3s and writes a compact `{cpuPercent, memUsedBytes, memLimitBytes, memPercent}` snapshot to Redis under `stats:app:<id>` with a 10s TTL. The API exposes `GET /api/applications/:id/stats` (organization-scoped polling read), returning `{ running: false }` when no fresh sample exists. The dashboard adds a per-app **Metrics** tab showing live CPU and memory meters (polled every 3s).
+- **Phase 4 crash alerts.** The worker watches Docker `die`/`oom` events for managed containers; on a non-zero-exit crash or OOM kill it marks the app `crashed` and POSTs a webhook to each enabled per-app destination. A new `AlertDestination` model (per-app, `slack`/`discord`/`generic`) is managed via CRUD routes under `/api/applications/:id/alert-destinations` and a **Crash alerts** section on the app Settings page. Alert payloads carry only app name/slug, event, exit code, container id, and timestamp — never env var values or other secrets.
+- **Last-deploy build logs in the app UI.** The **Logs** tab gains a Runtime / Last build toggle; "Last build" replays the most recent deployment's build logs via the existing `GET /api/deployments/:id/logs` SSE.
 
 ### Changed
 
