@@ -88,6 +88,52 @@ export type AlertDestination = {
   updatedAt: string;
 };
 
+export type BackupDestination = {
+  id: string;
+  name: string;
+  kind: "local";
+  config: { path: string };
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type BundleRecord = {
+  id: string;
+  destinationId: string | null;
+  filename: string;
+  sizeBytes: string | null;
+  appCount: number;
+  includesSecrets: boolean;
+  status: string;
+  errorMessage: string | null;
+  createdAt: string;
+};
+
+export type SlugCollisionPolicy = "rename" | "overwrite" | "skip";
+
+export type RestorePreflightApp = {
+  name: string;
+  slug: string;
+  collides: boolean;
+  volumeCount: number;
+  alertCount: number;
+  envKeyCount: number;
+};
+
+export type RestorePreflight = {
+  sourceOrgName: string;
+  createdAt: string;
+  includesSecrets: boolean;
+  apps: RestorePreflightApp[];
+};
+
+export type RestoreResult = {
+  created: number;
+  overwritten: number;
+  skipped: number;
+  renamed: number;
+};
+
 export type FsListEntry = { name: string; kind: "file" | "dir" | "symlink" };
 export type FsListResponse = { path: string; entries: FsListEntry[] };
 export type FsFileResponse = {

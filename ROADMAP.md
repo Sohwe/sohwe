@@ -2,7 +2,7 @@
 
 Current snapshot: **v0.3.8** plus one unreleased base-domain improvement.
 
-Current phase: **Phase 4 - Observability** is implemented (runtime logs, live metrics, crash alerts). **Phase 4.5 - Portable Bundles** is next. Phases 0 through 4 are implemented in the repo; three Phase 3.5 items remain as manual VPS verification (see `docs/vps-smoke-test.md`).
+Current phase: **Phase 4 - Observability** is implemented (runtime logs, live metrics, crash alerts). **Phase 4.5 - Portable Bundles** has its v0.5.0 MVP slice implemented (signed config + re-encrypted env var bundles, local + download destinations, restore preflight/apply, org-level Backups UI); S3 destinations, scheduled exports, and retention are deferred. Phases 0 through 4 are implemented in the repo; three Phase 3.5 items remain as manual VPS verification (see `docs/vps-smoke-test.md`).
 
 This file is a working checklist. It is based on `README.md`, `CHANGELOG.md`, `sohwe-getting-started.md`, `sohwe-prd.md`, and a code scan across the API, worker, dashboard, Docker, installer, and release workflow.
 
@@ -15,7 +15,7 @@ This file is a working checklist. It is based on `README.md`, `CHANGELOG.md`, `s
 - [x] **Phase 3.5 - Packaging & Install**
 - [x] **Unreleased - Configurable apps base domain**
 - [x] **Phase 4 - Observability**
-- [ ] **Phase 4.5 - Portable Bundles**
+- [~] **Phase 4.5 - Portable Bundles** (v0.5.0 slice done; S3/scheduling/retention deferred)
 - [ ] **Phase 5 - Git-Push Deploys**
 - [ ] **Phase 6 - Multi-User**
 - [ ] **Phase 7 - Managed Datastores** (post-v1/v2)
@@ -180,32 +180,36 @@ Current code gaps:
 
 ### Phase 4.5 - Portable Bundles
 
-- [ ] Add `BackupDestination` table.
-- [ ] Add `Bundle` table.
-- [ ] Add `BackupSchedule` table.
-- [ ] Create `packages/bundler`.
-- [ ] Implement config-mode signed bundle export.
-- [ ] Implement local storage destination.
-- [ ] Implement S3-compatible storage destination.
-- [ ] Re-encrypt env vars with a passphrase-derived bundle key.
-- [ ] Add restore preflight.
-- [ ] Add restore apply flow.
-- [ ] Add slug collision policies: `rename`, `overwrite`, `skip`.
-- [ ] Ensure restored domains do not auto-request certs before DNS confirmation.
-- [ ] Add scheduled exports.
-- [ ] Add retention policy.
-- [ ] Add bundle API routes.
-- [ ] Add bundle worker jobs.
-- [ ] Add dashboard backup/bundle UI.
-- [ ] Add bundle operation logs without secret values.
+v0.5.0 MVP slice implemented (config + re-encrypted env vars, local + download,
+restore preflight/apply, org-level Backups UI). S3, scheduling, and retention
+are deferred to a follow-up slice.
+
+- [x] Add `BackupDestination` table.
+- [x] Add `Bundle` table.
+- [x] Add `BackupSchedule` table. (schema only; no scheduler yet)
+- [x] Create `packages/bundler`.
+- [x] Implement config-mode signed bundle export.
+- [x] Implement local storage destination.
+- [ ] Implement S3-compatible storage destination. (deferred)
+- [x] Re-encrypt env vars with a passphrase-derived bundle key.
+- [x] Add restore preflight.
+- [x] Add restore apply flow.
+- [x] Add slug collision policies: `rename`, `overwrite`, `skip`.
+- [x] Ensure restored domains do not auto-request certs before DNS confirmation. (restore lands apps in `idle`; nothing deploys until the user does)
+- [ ] Add scheduled exports. (deferred)
+- [ ] Add retention policy. (deferred)
+- [x] Add bundle API routes.
+- [ ] Add bundle worker jobs. (not needed for the synchronous config-bundle slice)
+- [x] Add dashboard backup/bundle UI.
+- [x] Add bundle operation logs without secret values. (Bundle history records metadata only)
 
 Current code gaps:
 
-- [ ] No bundle/backup tables in Prisma.
-- [ ] No `packages/bundler`.
-- [ ] No bundle API routes.
-- [ ] No bundle worker jobs.
-- [ ] No backup dashboard routes.
+- [x] Bundle/backup tables added to Prisma.
+- [x] `packages/bundler` added.
+- [x] Bundle API routes added (`/api/backups/*`).
+- [ ] No bundle worker jobs (export/restore run synchronously in the API).
+- [x] Backup dashboard routes added (`/backups`).
 
 ### Phase 5 - Git-Push Deploys
 
@@ -334,12 +338,12 @@ Open design questions:
 
 ### v0.5.0 - Portable Config Bundles
 
-- [ ] Add bundle/destination/schedule schema.
-- [ ] Create `@sohwe/bundler`.
-- [ ] Implement local destination first.
-- [ ] Implement config export without git mirrors first.
-- [ ] Add passphrase re-encryption for env vars.
-- [ ] Add restore preflight before mutating restore.
+- [x] Add bundle/destination/schedule schema.
+- [x] Create `@sohwe/bundler`.
+- [x] Implement local destination first.
+- [x] Implement config export without git mirrors first.
+- [x] Add passphrase re-encryption for env vars.
+- [x] Add restore preflight before mutating restore.
 
 ### v0.6.0 - GitHub App And Push Deploys
 

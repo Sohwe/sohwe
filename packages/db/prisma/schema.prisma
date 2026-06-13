@@ -14,6 +14,9 @@ model Organization {
   createdAt    DateTime      @default(now()) @map("created_at")
   users        User[]
   applications Application[]
+  backupDestinations BackupDestination[]
+  bundles            Bundle[]
+  backupSchedules    BackupSchedule[]
 
   @@map("organizations")
 }
@@ -112,4 +115,59 @@ model AlertDestination {
 
   @@index([applicationId])
   @@map("alert_destinations")
+}
+
+// --- Phase 4.5: Portable config bundles ------------------------------------
+
+model BackupDestination {
+  id              String           @id @default(uuid())
+  organizationId  String           @map("organization_id")
+  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name            String
+  kind            String           // local | s3 (only "local" wired in v0.5.0)
+  config          Json             // local: { path }; s3 (future): { bucket, region, endpoint, prefix }
+  secretEncrypted Bytes?           @map("secret_encrypted") // future: encrypted S3 credentials
+  createdAt       DateTime         @default(now()) @map("created_at")
+  updatedAt       DateTime         @updatedAt @map("updated_at")
+  bundles         Bundle[]
+  schedules       BackupSchedule[]
+
+  @@index([organizationId])
+  @@map("backup_destinations")
+}
+
+model Bundle {
+  id              String             @id @default(uuid())
+  organizationId  String             @map("organization_id")
+  organization    Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  destinationId   String?            @map("destination_id")
+  destination     BackupDestination? @relation(fields: [destinationId], references: [id], onDelete: SetNull)
+  filename        String
+  sizeBytes       BigInt?            @map("size_bytes")
+  appCount        Int                @map("app_count")
+  includesSecrets Boolean            @map("includes_secrets")
+  status          String             @default("ready") // ready | failed
+  errorMessage    String?            @map("error_message") @db.Text
+  createdAt       DateTime           @default(now()) @map("created_at")
+
+  @@index([organizationId, createdAt])
+  @@map("bundles")
+}
+
+// Schema only in v0.5.0; the scheduler/runner arrives in a later phase.
+model BackupSchedule {
+  id             String            @id @default(uuid())
+  organizationId String            @map("organization_id")
+  organization   Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  destinationId  String            @map("destination_id")
+  destination    BackupDestination @relation(fields: [destinationId], references: [id], onDelete: Cascade)
+  cron           String
+  enabled        Boolean           @default(true)
+  retentionCount Int?              @map("retention_count")
+  lastRunAt      DateTime?         @map("last_run_at")
+  createdAt      DateTime          @default(now()) @map("created_at")
+  updatedAt      DateTime          @updatedAt @map("updated_at")
+
+  @@index([organizationId])
+  @@map("backup_schedules")
 }

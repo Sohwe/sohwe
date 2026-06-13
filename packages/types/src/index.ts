@@ -183,6 +183,59 @@ export type UpdateAlertDestinationInput = z.infer<
   typeof UpdateAlertDestinationSchema
 >;
 
+// --- Phase 4.5: Portable config bundles ------------------------------------
+
+/** Backup destination kinds. Only `local` is wired in v0.5.0; `s3` is future. */
+export const BackupDestinationKindSchema = z.enum(["local"]);
+export type BackupDestinationKind = z.infer<typeof BackupDestinationKindSchema>;
+
+/** Absolute filesystem path for a local backup destination (no `..`). */
+const LocalDestPathSchema = z
+  .string()
+  .min(1)
+  .max(1024)
+  .regex(/^\/[A-Za-z0-9._\-/]+$/, "Must be an absolute path like /var/sohwe/backups")
+  .refine((p) => !p.includes(".."), "Path must not contain ..");
+
+export const CreateBackupDestinationSchema = z.object({
+  name: z.string().min(1).max(100),
+  kind: BackupDestinationKindSchema,
+  config: z.object({ path: LocalDestPathSchema })
+});
+export type CreateBackupDestinationInput = z.infer<
+  typeof CreateBackupDestinationSchema
+>;
+
+/** Minimum passphrase length for bundle encryption/signing. */
+export const BUNDLE_PASSPHRASE_MIN = 8;
+
+export const BackupExportSchema = z.object({
+  passphrase: z.string().min(BUNDLE_PASSPHRASE_MIN),
+  includeSecrets: z.boolean().default(true),
+  /** When set, write to this destination; otherwise the bundle is downloaded. */
+  destinationId: z.string().uuid().optional()
+});
+export type BackupExportInput = z.infer<typeof BackupExportSchema>;
+
+/** How to handle a restored app whose slug already exists in the org. */
+export const SlugCollisionPolicySchema = z.enum([
+  "rename",
+  "overwrite",
+  "skip"
+]);
+export type SlugCollisionPolicy = z.infer<typeof SlugCollisionPolicySchema>;
+
+export const RestorePreflightSchema = z.object({
+  bundle: z.record(z.string(), z.unknown()),
+  passphrase: z.string().min(1)
+});
+export type RestorePreflightInput = z.infer<typeof RestorePreflightSchema>;
+
+export const RestoreApplySchema = RestorePreflightSchema.extend({
+  collisionPolicy: SlugCollisionPolicySchema
+});
+export type RestoreApplyInput = z.infer<typeof RestoreApplySchema>;
+
 /** Docker named volume for a persist mount (Prisma `Volume.id`). */
 export function appDockerVolumeName(
   appId: string,

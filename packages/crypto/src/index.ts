@@ -1,7 +1,10 @@
 import {
   createCipheriv,
   createDecipheriv,
-  randomBytes
+  createHmac,
+  randomBytes,
+  scryptSync,
+  timingSafeEqual
 } from "node:crypto";
 
 const ALG = "aes-256-gcm";
@@ -90,4 +93,46 @@ export function maskedPreview(value: string): string {
 /** Docker `Env` name=value entries for a variable map. */
 export function toDockerEnvList(vars: Record<string, string>): string[] {
   return Object.entries(vars).map(([k, v]) => `${k}=${v}`);
+}
+
+// --- Passphrase-derived keys for portable bundles (Phase 4.5) --------------
+//
+// Portable bundles move between Sohwe instances, so they cannot use the
+// instance `SOHWE_ENCRYPTION_KEY`. Instead a 32-byte key is derived from a
+// user passphrase with scrypt (salt stored in the bundle). The same derived
+// key both AES-encrypts the bundled env vars and HMAC-signs the manifest, so a
+// correct passphrase is required to read secrets *and* to pass signature
+// verification. These parameters are recorded in the bundle for portability.
+
+export const SCRYPT_PARAMS = { N: 16384, r: 8, p: 1 } as const;
+const DERIVED_KEY_LEN = 32;
+const SCRYPT_SALT_LEN = 16;
+
+/** Random salt for `deriveBundleKey` (store alongside the ciphertext). */
+export function randomBundleSalt(): Buffer {
+  return randomBytes(SCRYPT_SALT_LEN);
+}
+
+/** Derive a 32-byte AES/HMAC key from a passphrase + salt via scrypt. */
+export function deriveBundleKey(passphrase: string, salt: Buffer): Buffer {
+  if (!passphrase) throw new Error("Passphrase is required");
+  return scryptSync(passphrase, salt, DERIVED_KEY_LEN, {
+    N: SCRYPT_PARAMS.N,
+    r: SCRYPT_PARAMS.r,
+    p: SCRYPT_PARAMS.p,
+    // scrypt's default maxmem is too low for N=16384; raise it explicitly.
+    maxmem: 64 * 1024 * 1024
+  });
+}
+
+/** HMAC-SHA256 of `data` under `key`. */
+export function hmacSign(key: Buffer, data: string): Buffer {
+  return createHmac("sha256", key).update(data, "utf8").digest();
+}
+
+/** Constant-time verification of an HMAC-SHA256 signature. */
+export function hmacVerify(key: Buffer, data: string, signature: Buffer): boolean {
+  const expected = hmacSign(key, data);
+  if (expected.length !== signature.length) return false;
+  return timingSafeEqual(expected, signature);
 }

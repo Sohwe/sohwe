@@ -15,6 +15,7 @@ import { AppLogsPage } from "@/routes/app.$appId.logs";
 import { AppMetricsPage } from "@/routes/app.$appId.metrics";
 import { AppFilesPage } from "@/routes/app.$appId.files";
 import { AppSettingsPage } from "@/routes/app.$appId.settings";
+import { BackupsPage } from "@/routes/backups";
 import { DeploymentsPage } from "@/components/apps/DeploymentsPage";
 
 const rootRoute = createRootRouteWithContext<{ queryClient: QueryClient }>()({
@@ -71,7 +72,7 @@ const loginRoute = createRoute({
 
 const authedLayoutRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "apps",
+  id: "authed",
   beforeLoad: async ({ context: { queryClient } }) => {
     const s = await queryClient.fetchQuery<SetupStatus>({
       queryKey: ["setup", "status"],
@@ -84,16 +85,28 @@ const authedLayoutRoute = createRoute({
   component: AuthedLayout
 });
 
-const appsIndexRoute = createRoute({
+const appsLayoutRoute = createRoute({
   getParentRoute: () => authedLayoutRoute,
+  path: "apps",
+  component: () => <Outlet />
+});
+
+const appsIndexRoute = createRoute({
+  getParentRoute: () => appsLayoutRoute,
   path: "/",
   component: AppsListPage
 });
 
 const appLayoutRoute = createRoute({
-  getParentRoute: () => authedLayoutRoute,
+  getParentRoute: () => appsLayoutRoute,
   path: "$appId",
   component: AppLayout
+});
+
+const backupsRoute = createRoute({
+  getParentRoute: () => authedLayoutRoute,
+  path: "backups",
+  component: BackupsPage
 });
 
 const appIdIndexRoute = createRoute({
@@ -169,18 +182,21 @@ const routeTree = rootRoute.addChildren([
   setupRoute,
   loginRoute,
   authedLayoutRoute.addChildren([
-    appsIndexRoute,
-    appLayoutRoute.addChildren([
-      appIdIndexRoute,
-      appOverviewRoute,
-      appVariablesRoute,
-      appVolumesRoute,
-      appLogsRoute,
-      appMetricsRoute,
-      appFilesRoute,
-      appSettingsRoute,
-      deploymentsLayoutRoute.addChildren([deploymentsIndexRoute, deploymentsWithIdRoute])
-    ])
+    appsLayoutRoute.addChildren([
+      appsIndexRoute,
+      appLayoutRoute.addChildren([
+        appIdIndexRoute,
+        appOverviewRoute,
+        appVariablesRoute,
+        appVolumesRoute,
+        appLogsRoute,
+        appMetricsRoute,
+        appFilesRoute,
+        appSettingsRoute,
+        deploymentsLayoutRoute.addChildren([deploymentsIndexRoute, deploymentsWithIdRoute])
+      ])
+    ]),
+    backupsRoute
   ])
 ]);
 

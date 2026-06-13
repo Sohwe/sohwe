@@ -1,5 +1,5 @@
 import { Link, useLocation } from "@tanstack/react-router";
-import { Box, ChevronsLeft, ChevronsRight, LayoutGrid, Menu } from "lucide-react";
+import { Box, ChevronsLeft, ChevronsRight, DatabaseBackup, LayoutGrid, Menu } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
@@ -48,6 +48,9 @@ function SidebarContent({ onNavigate, me }: { onNavigate?: () => void; me: Me })
         <NavLink to="/apps" icon={LayoutGrid} onClick={onNavigate}>
           Applications
         </NavLink>
+        <NavLink to="/backups" icon={DatabaseBackup} onClick={onNavigate}>
+          Backups
+        </NavLink>
       </nav>
       <Separator />
       <div className="p-2 text-xs text-muted-foreground">
@@ -77,6 +80,13 @@ export function AppSidebar({ me, collapsed, onToggleCollapse }: { me: Me; collap
             title="Applications"
           >
             <LayoutGrid className="h-4 w-4" />
+          </Link>
+          <Link
+            to="/backups"
+            className="mt-1 flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-accent"
+            title="Backups"
+          >
+            <DatabaseBackup className="h-4 w-4" />
           </Link>
         </div>
       ) : (

@@ -25,6 +25,7 @@ import {
 } from "./setup-gate";
 import { registerAlertDestinationRoutes } from "./routes/alert-destinations";
 import { registerAppFilesystemRoutes } from "./routes/app-filesystem";
+import { registerBackupRoutes } from "./routes/backups";
 import { registerApplicationRoutes } from "./routes/applications";
 import { registerEnvVarRoutes } from "./routes/env-vars";
 import { registerVolumeRoutes } from "./routes/volumes";
@@ -178,6 +179,7 @@ await registerEnvVarRoutes(app);
 await registerVolumeRoutes(app);
 await registerAlertDestinationRoutes(app);
 await registerAppFilesystemRoutes(app);
+await registerBackupRoutes(app);
 
 const port = Number(process.env.PORT ?? 3001);
 await app.listen({ port, host: "0.0.0.0" });

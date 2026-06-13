@@ -26,6 +26,9 @@ importers:
       '@fastify/sensible':
         specifier: ^5.6.0
         version: 5.6.0
+      '@sohwe/bundler':
+        specifier: workspace:*
+        version: link:../../packages/bundler
       '@sohwe/crypto':
         specifier: workspace:*
         version: link:../../packages/crypto
@@ -229,6 +232,22 @@ importers:
         version: 5.9.3
 
   packages/builder:
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.12.2
+      typescript:
+        specifier: ^5.5.0
+        version: 5.9.3
+
+  packages/bundler:
+    dependencies:
+      '@sohwe/crypto':
+        specifier: workspace:*
+        version: link:../crypto
+      zod:
+        specifier: ^3.23.0
+        version: 3.25.76
     devDependencies:
       '@types/node':
         specifier: ^24.0.0

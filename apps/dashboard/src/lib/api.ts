@@ -63,3 +63,36 @@ export async function fetchMe<T>(): Promise<T | null> {
   }
   return (await res.json()) as T;
 }
+
+/**
+ * POST a JSON body and save the response as a downloaded file. Used for bundle
+ * export: the server returns the bundle document with a `Content-Disposition`.
+ */
+export async function downloadPost(
+  path: string,
+  body: unknown,
+  fallbackName: string
+): Promise<void> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => null);
+    throw new Error(errMessage(errBody, res.statusText));
+  }
+  const disposition = res.headers.get("content-disposition") ?? "";
+  const match = /filename="?([^"]+)"?/.exec(disposition);
+  const filename = match?.[1] ?? fallbackName;
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
