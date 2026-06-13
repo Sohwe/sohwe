@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@sohwe/backups": "workspace:*",
     "@sohwe/bundler": "workspace:*",
     "@sohwe/crypto": "workspace:*",
     "@fastify/cookie": "^9.3.0",
@@ -19,6 +20,7 @@
     "@sohwe/queue": "workspace:*",
     "@sohwe/types": "workspace:*",
     "argon2": "^0.40.0",
+    "cron-parser": "^4.9.0",
     "dockerode": "^4.0.2",
     "dotenv": "^16.4.0",
     "fastify": "^4.28.0",

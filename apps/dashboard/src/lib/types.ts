@@ -88,11 +88,20 @@ export type AlertDestination = {
   updatedAt: string;
 };
 
+export type S3DestinationConfig = {
+  bucket: string;
+  region: string;
+  endpoint?: string;
+  prefix?: string;
+  forcePathStyle?: boolean;
+};
+
 export type BackupDestination = {
   id: string;
   name: string;
-  kind: "local";
-  config: { path: string };
+  kind: "local" | "s3";
+  /** `{ path }` for local; S3 config (no credentials) for s3. */
+  config: { path: string } | S3DestinationConfig;
   createdAt: string;
   updatedAt: string;
 };
@@ -100,6 +109,7 @@ export type BackupDestination = {
 export type BundleRecord = {
   id: string;
   destinationId: string | null;
+  scheduleId: string | null;
   filename: string;
   sizeBytes: string | null;
   appCount: number;
@@ -107,6 +117,30 @@ export type BundleRecord = {
   status: string;
   errorMessage: string | null;
   createdAt: string;
+};
+
+/** Short, non-sensitive summary of a destination's target for list/select UI. */
+export function describeDestinationConfig(d: BackupDestination): string {
+  if (d.kind === "s3") {
+    const c = d.config as S3DestinationConfig;
+    const prefix = c.prefix ? `/${c.prefix.replace(/^\/+|\/+$/g, "")}` : "";
+    return `s3://${c.bucket}${prefix}`;
+  }
+  return (d.config as { path: string }).path;
+}
+
+export type BackupSchedule = {
+  id: string;
+  destinationId: string;
+  destinationName: string | null;
+  destinationKind: string | null;
+  cron: string;
+  enabled: boolean;
+  includeSecrets: boolean;
+  retentionCount: number | null;
+  lastRunAt: string | null;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type SlugCollisionPolicy = "rename" | "overwrite" | "skip";

@@ -185,8 +185,8 @@ export type UpdateAlertDestinationInput = z.infer<
 
 // --- Phase 4.5: Portable config bundles ------------------------------------
 
-/** Backup destination kinds. Only `local` is wired in v0.5.0; `s3` is future. */
-export const BackupDestinationKindSchema = z.enum(["local"]);
+/** Backup destination kinds. */
+export const BackupDestinationKindSchema = z.enum(["local", "s3"]);
 export type BackupDestinationKind = z.infer<typeof BackupDestinationKindSchema>;
 
 /** Absolute filesystem path for a local backup destination (no `..`). */
@@ -197,11 +197,44 @@ const LocalDestPathSchema = z
   .regex(/^\/[A-Za-z0-9._\-/]+$/, "Must be an absolute path like /var/sohwe/backups")
   .refine((p) => !p.includes(".."), "Path must not contain ..");
 
-export const CreateBackupDestinationSchema = z.object({
-  name: z.string().min(1).max(100),
-  kind: BackupDestinationKindSchema,
-  config: z.object({ path: LocalDestPathSchema })
+/** Public (non-secret) config for an S3-compatible destination. */
+export const S3DestConfigSchema = z.object({
+  bucket: z.string().min(1).max(255),
+  region: z.string().min(1).max(64),
+  /** Custom endpoint for S3-compatible providers (MinIO, R2, Spaces, …). */
+  endpoint: z.string().url().max(512).optional(),
+  /** Key prefix within the bucket; bundles are written under `<prefix>/<filename>`. */
+  prefix: z
+    .string()
+    .max(512)
+    .regex(/^[A-Za-z0-9._\-/]*$/, "Prefix may only contain letters, numbers, . _ - /")
+    .refine((p) => !p.includes(".."), "Prefix must not contain ..")
+    .optional(),
+  /** Force path-style addressing (required by most S3-compatible servers). */
+  forcePathStyle: z.boolean().optional()
 });
+export type S3DestConfig = z.infer<typeof S3DestConfigSchema>;
+
+/** S3 credentials, supplied on create and stored encrypted at rest. */
+export const S3CredentialsSchema = z.object({
+  accessKeyId: z.string().min(1).max(256),
+  secretAccessKey: z.string().min(1).max(256)
+});
+export type S3Credentials = z.infer<typeof S3CredentialsSchema>;
+
+export const CreateBackupDestinationSchema = z.discriminatedUnion("kind", [
+  z.object({
+    name: z.string().min(1).max(100),
+    kind: z.literal("local"),
+    config: z.object({ path: LocalDestPathSchema })
+  }),
+  z.object({
+    name: z.string().min(1).max(100),
+    kind: z.literal("s3"),
+    config: S3DestConfigSchema,
+    credentials: S3CredentialsSchema
+  })
+]);
 export type CreateBackupDestinationInput = z.infer<
   typeof CreateBackupDestinationSchema
 >;
@@ -235,6 +268,55 @@ export const RestoreApplySchema = RestorePreflightSchema.extend({
   collisionPolicy: SlugCollisionPolicySchema
 });
 export type RestoreApplyInput = z.infer<typeof RestoreApplySchema>;
+
+// --- Scheduled exports & retention -----------------------------------------
+
+/**
+ * Lightweight 5-field cron shape check (minute hour day-of-month month
+ * day-of-week). Strict validation happens server-side with `cron-parser`.
+ */
+export const CronSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(128)
+  .refine(
+    (s) => s.split(/\s+/).length === 5,
+    "Cron must have 5 space-separated fields (e.g. 0 3 * * *)"
+  )
+  .refine(
+    (s) => s.split(/\s+/).every((f) => /^[0-9*/,\-]+$/.test(f)),
+    "Cron fields may only contain digits and * / , -"
+  );
+
+/** Keep at most this many of a schedule's most recent bundles. */
+const RetentionCountSchema = z.number().int().min(1).max(1000);
+
+export const CreateBackupScheduleSchema = z.object({
+  destinationId: z.string().uuid(),
+  cron: CronSchema,
+  includeSecrets: z.boolean().default(true),
+  passphrase: z.string().min(BUNDLE_PASSPHRASE_MIN),
+  retentionCount: RetentionCountSchema.optional(),
+  enabled: z.boolean().default(true)
+});
+export type CreateBackupScheduleInput = z.infer<
+  typeof CreateBackupScheduleSchema
+>;
+
+export const UpdateBackupScheduleSchema = z
+  .object({
+    cron: CronSchema.optional(),
+    includeSecrets: z.boolean().optional(),
+    passphrase: z.string().min(BUNDLE_PASSPHRASE_MIN).optional(),
+    /** `null` clears retention (keep everything); omit to leave unchanged. */
+    retentionCount: RetentionCountSchema.nullable().optional(),
+    enabled: z.boolean().optional()
+  })
+  .refine((v) => Object.keys(v).length > 0, "No fields to update");
+export type UpdateBackupScheduleInput = z.infer<
+  typeof UpdateBackupScheduleSchema
+>;
 
 /** Docker named volume for a persist mount (Prisma `Volume.id`). */
 export function appDockerVolumeName(

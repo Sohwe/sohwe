@@ -14,6 +14,7 @@ import { apiGet } from "@/lib/api";
 import { formatBytes, formatRelativeTime } from "@/lib/format";
 import type { BundleRecord } from "@/lib/types";
 import { DestinationsManager } from "@/components/backups/DestinationsManager";
+import { SchedulesManager } from "@/components/backups/SchedulesManager";
 import { ExportDialog } from "@/components/backups/ExportDialog";
 import { RestoreDialog } from "@/components/backups/RestoreDialog";
 
@@ -77,8 +78,12 @@ export function BackupsPage() {
                     <p className="text-xs text-muted-foreground">
                       {b.appCount} app{b.appCount === 1 ? "" : "s"}
                       {b.includesSecrets ? " · env vars" : " · config only"}
-                      {b.destinationId ? " · destination" : " · download"} ·{" "}
-                      {formatRelativeTime(b.createdAt)}
+                      {b.scheduleId
+                        ? " · scheduled"
+                        : b.destinationId
+                          ? " · destination"
+                          : " · download"}{" "}
+                      · {formatRelativeTime(b.createdAt)}
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-2 text-xs">
@@ -105,6 +110,8 @@ export function BackupsPage() {
       </Card>
 
       <DestinationsManager />
+
+      <SchedulesManager />
 
       <ExportDialog open={exportOpen} onOpenChange={setExportOpen} />
       <RestoreDialog open={restoreOpen} onOpenChange={setRestoreOpen} />

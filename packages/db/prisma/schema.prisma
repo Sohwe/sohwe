@@ -124,9 +124,9 @@ model BackupDestination {
   organizationId  String           @map("organization_id")
   organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   name            String
-  kind            String           // local | s3 (only "local" wired in v0.5.0)
-  config          Json             // local: { path }; s3 (future): { bucket, region, endpoint, prefix }
-  secretEncrypted Bytes?           @map("secret_encrypted") // future: encrypted S3 credentials
+  kind            String           // local | s3
+  config          Json             // local: { path }; s3: { bucket, region, endpoint?, prefix? }
+  secretEncrypted Bytes?           @map("secret_encrypted") // s3: encrypted { accessKeyId, secretAccessKey }
   createdAt       DateTime         @default(now()) @map("created_at")
   updatedAt       DateTime         @updatedAt @map("updated_at")
   bundles         Bundle[]
@@ -142,6 +142,8 @@ model Bundle {
   organization    Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   destinationId   String?            @map("destination_id")
   destination     BackupDestination? @relation(fields: [destinationId], references: [id], onDelete: SetNull)
+  scheduleId      String?            @map("schedule_id")
+  schedule        BackupSchedule?    @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
   filename        String
   sizeBytes       BigInt?            @map("size_bytes")
   appCount        Int                @map("app_count")
@@ -151,22 +153,27 @@ model Bundle {
   createdAt       DateTime           @default(now()) @map("created_at")
 
   @@index([organizationId, createdAt])
+  @@index([scheduleId, createdAt])
   @@map("bundles")
 }
 
-// Schema only in v0.5.0; the scheduler/runner arrives in a later phase.
 model BackupSchedule {
-  id             String            @id @default(uuid())
-  organizationId String            @map("organization_id")
-  organization   Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  destinationId  String            @map("destination_id")
-  destination    BackupDestination @relation(fields: [destinationId], references: [id], onDelete: Cascade)
-  cron           String
-  enabled        Boolean           @default(true)
-  retentionCount Int?              @map("retention_count")
-  lastRunAt      DateTime?         @map("last_run_at")
-  createdAt      DateTime          @default(now()) @map("created_at")
-  updatedAt      DateTime          @updatedAt @map("updated_at")
+  id                  String            @id @default(uuid())
+  organizationId      String            @map("organization_id")
+  organization        Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  destinationId       String            @map("destination_id")
+  destination         BackupDestination @relation(fields: [destinationId], references: [id], onDelete: Cascade)
+  cron                String
+  enabled             Boolean           @default(true)
+  includeSecrets      Boolean           @default(true) @map("includes_secrets")
+  // Passphrase to sign/encrypt scheduled bundles, encrypted at rest with the
+  // instance key (SOHWE_ENCRYPTION_KEY). Required to restore scheduled bundles.
+  passphraseEncrypted Bytes             @map("passphrase_encrypted")
+  retentionCount      Int?              @map("retention_count")
+  lastRunAt           DateTime?         @map("last_run_at")
+  createdAt           DateTime          @default(now()) @map("created_at")
+  updatedAt           DateTime          @updatedAt @map("updated_at")
+  bundles             Bundle[]
 
   @@index([organizationId])
   @@map("backup_schedules")

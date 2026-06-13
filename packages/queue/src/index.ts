@@ -10,6 +10,20 @@ export type DeployJobData = {
   promoteImageFromDeploymentId?: string;
 };
 
+// --- Backups (Phase 4.5): scheduled exports + retention --------------------
+
+export const BACKUP_QUEUE = "backup";
+
+/** Repeatable tick that scans for due schedules; fixed id keeps it singular. */
+export const BACKUP_TICK_JOB = "backup-tick";
+export const BACKUP_TICK_SCHEDULER_ID = "backup-tick";
+/** A single due schedule, enqueued by the tick for the export worker to run. */
+export const BACKUP_EXPORT_JOB = "backup-export";
+
+export type BackupTickJobData = Record<string, never>;
+export type BackupExportJobData = { scheduleId: string };
+export type BackupJobData = BackupTickJobData | BackupExportJobData;
+
 export function logChannelName(deploymentId: string): string {
   return `logs:deployment:${deploymentId}`;
 }
@@ -43,8 +57,15 @@ export function createQueue(): Queue<DeployJobData> {
   });
 }
 
+export function createBackupQueue(): Queue<BackupJobData> {
+  return new Queue<BackupJobData>(BACKUP_QUEUE, {
+    connection: getConnectionOptionsForBull(),
+    defaultJobOptions: { removeOnComplete: 100, removeOnFail: 100 }
+  });
+}
+
 export function createRedisForPublish(): Redis {
   return new IORedis(getRedisUrl());
 }
 
-export { Job, Worker } from "bullmq";
+export { Job, Queue, Worker } from "bullmq";

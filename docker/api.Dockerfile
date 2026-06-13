@@ -35,7 +35,9 @@ COPY pnpm-workspace.yaml pnpm-lock.yaml package.json turbo.json tsconfig.base.js
 COPY apps/api/package.json          apps/api/package.json
 COPY apps/worker/package.json       apps/worker/package.json
 COPY apps/dashboard/package.json    apps/dashboard/package.json
+COPY packages/backups/package.json  packages/backups/package.json
 COPY packages/builder/package.json  packages/builder/package.json
+COPY packages/bundler/package.json  packages/bundler/package.json
 COPY packages/crypto/package.json   packages/crypto/package.json
 COPY packages/db/package.json       packages/db/package.json
 COPY packages/queue/package.json    packages/queue/package.json

@@ -2,7 +2,7 @@
 
 Current snapshot: **v0.3.8** plus one unreleased base-domain improvement.
 
-Current phase: **Phase 4 - Observability** is implemented (runtime logs, live metrics, crash alerts). **Phase 4.5 - Portable Bundles** has its v0.5.0 MVP slice implemented (signed config + re-encrypted env var bundles, local + download destinations, restore preflight/apply, org-level Backups UI); S3 destinations, scheduled exports, and retention are deferred. Phases 0 through 4 are implemented in the repo; three Phase 3.5 items remain as manual VPS verification (see `docs/vps-smoke-test.md`).
+Current phase: **Phase 4 - Observability** is implemented (runtime logs, live metrics, crash alerts). **Phase 4.5 - Portable Bundles** is now feature-complete: signed config + re-encrypted env var bundles, local + S3-compatible + download destinations, restore preflight/apply, scheduled exports with cron + retention (worker-driven), and the org-level Backups UI. Phases 0 through 4.5 are implemented in the repo; three Phase 3.5 items remain as manual VPS verification (see `docs/vps-smoke-test.md`).
 
 This file is a working checklist. It is based on `README.md`, `CHANGELOG.md`, `sohwe-getting-started.md`, `sohwe-prd.md`, and a code scan across the API, worker, dashboard, Docker, installer, and release workflow.
 
@@ -15,7 +15,7 @@ This file is a working checklist. It is based on `README.md`, `CHANGELOG.md`, `s
 - [x] **Phase 3.5 - Packaging & Install**
 - [x] **Unreleased - Configurable apps base domain**
 - [x] **Phase 4 - Observability**
-- [~] **Phase 4.5 - Portable Bundles** (v0.5.0 slice done; S3/scheduling/retention deferred)
+- [x] **Phase 4.5 - Portable Bundles**
 - [ ] **Phase 5 - Git-Push Deploys**
 - [ ] **Phase 6 - Multi-User**
 - [ ] **Phase 7 - Managed Datastores** (post-v1/v2)
@@ -180,35 +180,36 @@ Current code gaps:
 
 ### Phase 4.5 - Portable Bundles
 
-v0.5.0 MVP slice implemented (config + re-encrypted env vars, local + download,
-restore preflight/apply, org-level Backups UI). S3, scheduling, and retention
-are deferred to a follow-up slice.
+Feature-complete. The v0.5.0 MVP slice (config + re-encrypted env vars, local +
+download, restore preflight/apply, org-level Backups UI) was extended with
+S3-compatible destinations, worker-driven scheduled exports, and retention.
 
 - [x] Add `BackupDestination` table.
-- [x] Add `Bundle` table.
-- [x] Add `BackupSchedule` table. (schema only; no scheduler yet)
+- [x] Add `Bundle` table. (now links to its `BackupSchedule` for per-schedule retention)
+- [x] Add `BackupSchedule` table. (stores an encrypted passphrase + `includeSecrets`; scheduler is live)
 - [x] Create `packages/bundler`.
 - [x] Implement config-mode signed bundle export.
 - [x] Implement local storage destination.
-- [ ] Implement S3-compatible storage destination. (deferred)
+- [x] Implement S3-compatible storage destination. (`@aws-sdk/client-s3`; works with AWS, MinIO, R2, Spaces — credentials encrypted at rest)
 - [x] Re-encrypt env vars with a passphrase-derived bundle key.
 - [x] Add restore preflight.
 - [x] Add restore apply flow.
 - [x] Add slug collision policies: `rename`, `overwrite`, `skip`.
 - [x] Ensure restored domains do not auto-request certs before DNS confirmation. (restore lands apps in `idle`; nothing deploys until the user does)
-- [ ] Add scheduled exports. (deferred)
-- [ ] Add retention policy. (deferred)
-- [x] Add bundle API routes.
-- [ ] Add bundle worker jobs. (not needed for the synchronous config-bundle slice)
-- [x] Add dashboard backup/bundle UI.
+- [x] Add scheduled exports. (cron-driven; a 60s worker tick enqueues due schedules)
+- [x] Add retention policy. (`retentionCount` keeps the newest N bundles per schedule; prunes the destination file and history row)
+- [x] Add bundle API routes. (destinations, export, restore, and schedule CRUD under `/api/backups/*`)
+- [x] Add bundle worker jobs. (`backup` queue: a repeatable tick + per-schedule export jobs in `@sohwe/worker`)
+- [x] Add dashboard backup/bundle UI. (destinations now support S3; a Scheduled exports panel manages schedules)
 - [x] Add bundle operation logs without secret values. (Bundle history records metadata only)
 
-Current code gaps:
+Implementation notes:
 
 - [x] Bundle/backup tables added to Prisma.
 - [x] `packages/bundler` added.
-- [x] Bundle API routes added (`/api/backups/*`).
-- [ ] No bundle worker jobs (export/restore run synchronously in the API).
+- [x] `packages/backups` added — shared destination storage (local + S3) and export/retention orchestration used by both the API (manual export) and the worker (scheduled export).
+- [x] Bundle + schedule API routes added (`/api/backups/*`).
+- [x] Bundle worker jobs added (`backup` queue, cron tick, retention). Manual export/restore still run synchronously in the API.
 - [x] Backup dashboard routes added (`/backups`).
 
 ### Phase 5 - Git-Push Deploys

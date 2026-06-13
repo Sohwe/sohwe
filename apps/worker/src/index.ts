@@ -20,6 +20,7 @@ import {
   type DeployJobData
 } from "@sohwe/queue";
 import Docker from "dockerode";
+import { startBackupSubsystem, type BackupSubsystem } from "./backups";
 
 const _here = dirname(fileURLToPath(import.meta.url));
 config({ path: join(_here, "../../../.env") });
@@ -807,6 +808,13 @@ await startDockerEventWatcher().catch((e) => {
   console.error("Failed to start Docker event watcher", e);
 });
 
+let backups: BackupSubsystem | null = null;
+try {
+  backups = await startBackupSubsystem();
+} catch (e) {
+  console.error("Failed to start backup subsystem", e);
+}
+
 worker.on("failed", (job, err) => {
   console.error("Job failed", job?.id, err);
 });
@@ -819,6 +827,7 @@ const shutdown = async () => {
   stopDockerEventWatcher();
   for (const appId of runtimeLogTails.keys()) stopRuntimeLogTail(appId);
   await worker.close();
+  if (backups) await backups.close();
   await publishRedis.quit();
   await prisma.$disconnect();
   process.exit(0);

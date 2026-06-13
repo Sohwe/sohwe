@@ -1,18 +1,24 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
+import parser from "cron-parser";
 import { prisma } from "@sohwe/db";
+import { buildBundle, parseBundle } from "@sohwe/bundler";
+import { encryptJson } from "@sohwe/crypto";
 import {
-  buildBundle,
-  parseBundle,
-  type BundleAppInput
-} from "@sohwe/bundler";
-import { decryptJson, encryptJson } from "@sohwe/crypto";
+  describeDestination,
+  encryptS3Credentials,
+  encryptSchedulePassphrase,
+  gatherBundleApps,
+  makeBundleFilename,
+  resolveDestination,
+  writeBundle
+} from "@sohwe/backups";
 import {
   BackupExportSchema,
   CreateBackupDestinationSchema,
+  CreateBackupScheduleSchema,
   RestoreApplySchema,
-  RestorePreflightSchema
+  RestorePreflightSchema,
+  UpdateBackupScheduleSchema
 } from "@sohwe/types";
 import { z } from "zod";
 import { authPreHandler } from "../session";
@@ -20,14 +26,16 @@ import { authPreHandler } from "../session";
 const SOHWE_VERSION = process.env.SOHWE_VERSION ?? "0.5.0";
 
 const DestIdParam = z.object({ destId: z.string().uuid() });
+const ScheduleIdParam = z.object({ scheduleId: z.string().uuid() });
 
-function slugifyOrgName(name: string): string {
-  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "org";
-}
-
-function readEnv(enc: Buffer | null | undefined): Record<string, string> {
-  if (!enc || enc.length === 0) return {};
-  return decryptJson(Buffer.isBuffer(enc) ? enc : Buffer.from(enc));
+/** Validate a cron string; returns an error message or null. */
+function cronError(cron: string): string | null {
+  try {
+    parser.parseExpression(cron);
+    return null;
+  } catch (e) {
+    return e instanceof Error ? e.message : "Invalid cron expression";
+  }
 }
 
 type DestinationRow = {
@@ -39,7 +47,10 @@ type DestinationRow = {
   updatedAt: Date;
 };
 
-/** Never exposes `secretEncrypted`; local `config.path` is non-sensitive. */
+/**
+ * Never exposes `secretEncrypted` (S3 credentials). The `config` is
+ * non-sensitive for both kinds (local path; S3 bucket/region/endpoint/prefix).
+ */
 function serializeDestination(d: DestinationRow) {
   return {
     id: d.id,
@@ -54,6 +65,7 @@ function serializeDestination(d: DestinationRow) {
 type BundleRow = {
   id: string;
   destinationId: string | null;
+  scheduleId: string | null;
   filename: string;
   sizeBytes: bigint | null;
   appCount: number;
@@ -67,6 +79,7 @@ function serializeBundle(b: BundleRow) {
   return {
     id: b.id,
     destinationId: b.destinationId,
+    scheduleId: b.scheduleId,
     filename: b.filename,
     sizeBytes: b.sizeBytes == null ? null : b.sizeBytes.toString(),
     appCount: b.appCount,
@@ -74,6 +87,36 @@ function serializeBundle(b: BundleRow) {
     status: b.status,
     errorMessage: b.errorMessage,
     createdAt: b.createdAt
+  };
+}
+
+type ScheduleRow = {
+  id: string;
+  destinationId: string;
+  cron: string;
+  enabled: boolean;
+  includeSecrets: boolean;
+  retentionCount: number | null;
+  lastRunAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+  destination?: { name: string; kind: string } | null;
+};
+
+/** Never exposes `passphraseEncrypted`. */
+function serializeSchedule(s: ScheduleRow) {
+  return {
+    id: s.id,
+    destinationId: s.destinationId,
+    destinationName: s.destination?.name ?? null,
+    destinationKind: s.destination?.kind ?? null,
+    cron: s.cron,
+    enabled: s.enabled,
+    includeSecrets: s.includeSecrets,
+    retentionCount: s.retentionCount,
+    lastRunAt: s.lastRunAt,
+    createdAt: s.createdAt,
+    updatedAt: s.updatedAt
   };
 }
 
@@ -100,17 +143,22 @@ export async function registerBackupRoutes(app: FastifyInstance) {
     "/api/backups/destinations",
     {
       preHandler: [authPreHandler],
-      schema: { body: CreateBackupDestinationSchema }
+      schema: { body: CreateBackupDestinationSchema },
+      ...secretOpts
     },
     async (req, reply) => {
       const u = req.user!;
       const body = CreateBackupDestinationSchema.parse(req.body);
+      // S3 credentials are encrypted at rest and never stored in `config`.
+      const secretEncrypted =
+        body.kind === "s3" ? encryptS3Credentials(body.credentials) : null;
       const row = await prisma.backupDestination.create({
         data: {
           organizationId: u.organizationId,
           name: body.name,
           kind: body.kind,
-          config: body.config
+          config: body.config,
+          secretEncrypted
         }
       });
       return reply.status(201).send(serializeDestination(row));
@@ -154,41 +202,12 @@ export async function registerBackupRoutes(app: FastifyInstance) {
       const u = req.user!;
       const body = BackupExportSchema.parse(req.body);
 
-      const apps = await prisma.application.findMany({
-        where: { organizationId: u.organizationId },
-        include: {
-          volumes: { orderBy: { createdAt: "asc" } },
-          alertDestinations: { orderBy: { createdAt: "asc" } }
-        },
-        orderBy: { createdAt: "asc" }
-      });
-
-      let bundleApps: BundleAppInput[];
+      let bundleApps;
       try {
-        bundleApps = apps.map((a) => ({
-          name: a.name,
-          slug: a.slug,
-          gitRepo: a.gitRepo,
-          gitBranch: a.gitBranch,
-          buildMode: a.buildMode,
-          buildCmd: a.buildCmd,
-          startCmd: a.startCmd,
-          port: a.port,
-          domain: a.domain,
-          memoryLimitMb: a.memoryLimitMb,
-          cpuLimit: a.cpuLimit == null ? null : Number(a.cpuLimit),
-          volumes: a.volumes.map((v) => ({
-            mountPath: v.mountPath,
-            sizeBytes: v.sizeBytes == null ? null : v.sizeBytes.toString()
-          })),
-          alertDestinations: a.alertDestinations.map((d) => ({
-            type: d.type,
-            name: d.name,
-            url: d.url,
-            enabled: d.enabled
-          })),
-          envVars: body.includeSecrets ? readEnv(a.envVarsEncrypted) : {}
-        }));
+        bundleApps = await gatherBundleApps(
+          u.organizationId,
+          body.includeSecrets
+        );
       } catch {
         return reply
           .status(500)
@@ -205,38 +224,38 @@ export async function registerBackupRoutes(app: FastifyInstance) {
 
       const json = JSON.stringify(manifest);
       const sizeBytes = Buffer.byteLength(json, "utf8");
-      const stamp = createdAtIso.replace(/[:.]/g, "-");
-      const filename = `sohwe-backup-${slugifyOrgName(u.organization.name)}-${stamp}.sohwe.json`;
+      const filename = makeBundleFilename(u.organization.name, createdAtIso);
 
-      // Write to a configured local destination, or stream as a download.
+      // Write to a configured destination (local or S3), or stream as a download.
       if (body.destinationId) {
-        const dest = await prisma.backupDestination.findFirst({
+        const destRow = await prisma.backupDestination.findFirst({
           where: { id: body.destinationId, organizationId: u.organizationId }
         });
-        if (!dest) return reply.notFound();
-        if (dest.kind !== "local") {
-          return reply.badRequest("Only local destinations are supported");
-        }
-        const cfg = dest.config as { path?: unknown } | null;
-        const dir = typeof cfg?.path === "string" ? cfg.path : null;
-        if (!dir) {
-          return reply.badRequest("Destination is missing a path");
-        }
+        if (!destRow) return reply.notFound();
+
+        let dest;
         try {
-          await mkdir(dir, { recursive: true });
-          await writeFile(join(dir, filename), json, "utf8");
+          dest = resolveDestination(destRow);
+        } catch (e) {
+          return reply.badRequest(
+            e instanceof Error ? e.message : "Invalid destination"
+          );
+        }
+
+        try {
+          await writeBundle(dest, filename, json);
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           await prisma.bundle.create({
             data: {
               organizationId: u.organizationId,
-              destinationId: dest.id,
+              destinationId: destRow.id,
               filename,
               sizeBytes: BigInt(sizeBytes),
               appCount: bundleApps.length,
               includesSecrets: body.includeSecrets,
               status: "failed",
-              errorMessage: msg
+              errorMessage: `Write to ${describeDestination(dest)} failed: ${msg}`
             }
           });
           return reply
@@ -246,7 +265,7 @@ export async function registerBackupRoutes(app: FastifyInstance) {
         const row = await prisma.bundle.create({
           data: {
             organizationId: u.organizationId,
-            destinationId: dest.id,
+            destinationId: destRow.id,
             filename,
             sizeBytes: BigInt(sizeBytes),
             appCount: bundleApps.length,
@@ -423,6 +442,117 @@ export async function registerBackupRoutes(app: FastifyInstance) {
       });
 
       return result;
+    }
+  );
+
+  // --- Schedules (scheduled exports + retention) ---------------------------
+
+  app.get(
+    "/api/backups/schedules",
+    { preHandler: [authPreHandler] },
+    async (req) => {
+      const u = req.user!;
+      const rows = await prisma.backupSchedule.findMany({
+        where: { organizationId: u.organizationId },
+        orderBy: { createdAt: "asc" },
+        include: { destination: { select: { name: true, kind: true } } }
+      });
+      return { schedules: rows.map(serializeSchedule) };
+    }
+  );
+
+  app.post(
+    "/api/backups/schedules",
+    {
+      preHandler: [authPreHandler],
+      schema: { body: CreateBackupScheduleSchema },
+      ...secretOpts
+    },
+    async (req, reply) => {
+      const u = req.user!;
+      const body = CreateBackupScheduleSchema.parse(req.body);
+
+      const cronMsg = cronError(body.cron);
+      if (cronMsg) return reply.badRequest(`Invalid cron: ${cronMsg}`);
+
+      // The destination must belong to the caller's org.
+      const dest = await prisma.backupDestination.findFirst({
+        where: { id: body.destinationId, organizationId: u.organizationId },
+        select: { id: true }
+      });
+      if (!dest) return reply.badRequest("Unknown destination");
+
+      const row = await prisma.backupSchedule.create({
+        data: {
+          organizationId: u.organizationId,
+          destinationId: body.destinationId,
+          cron: body.cron,
+          enabled: body.enabled,
+          includeSecrets: body.includeSecrets,
+          passphraseEncrypted: encryptSchedulePassphrase(body.passphrase),
+          retentionCount: body.retentionCount ?? null
+        },
+        include: { destination: { select: { name: true, kind: true } } }
+      });
+      return reply.status(201).send(serializeSchedule(row));
+    }
+  );
+
+  app.patch(
+    "/api/backups/schedules/:scheduleId",
+    {
+      preHandler: [authPreHandler],
+      schema: { params: ScheduleIdParam, body: UpdateBackupScheduleSchema },
+      ...secretOpts
+    },
+    async (req, reply) => {
+      const u = req.user!;
+      const { scheduleId } = req.params as z.infer<typeof ScheduleIdParam>;
+      const body = UpdateBackupScheduleSchema.parse(req.body);
+
+      const existing = await prisma.backupSchedule.findFirst({
+        where: { id: scheduleId, organizationId: u.organizationId },
+        select: { id: true }
+      });
+      if (!existing) return reply.notFound();
+
+      if (body.cron !== undefined) {
+        const cronMsg = cronError(body.cron);
+        if (cronMsg) return reply.badRequest(`Invalid cron: ${cronMsg}`);
+      }
+
+      const row = await prisma.backupSchedule.update({
+        where: { id: scheduleId },
+        data: {
+          cron: body.cron,
+          enabled: body.enabled,
+          includeSecrets: body.includeSecrets,
+          retentionCount:
+            body.retentionCount === undefined ? undefined : body.retentionCount,
+          passphraseEncrypted:
+            body.passphrase === undefined
+              ? undefined
+              : encryptSchedulePassphrase(body.passphrase)
+        },
+        include: { destination: { select: { name: true, kind: true } } }
+      });
+      return serializeSchedule(row);
+    }
+  );
+
+  app.delete(
+    "/api/backups/schedules/:scheduleId",
+    { preHandler: [authPreHandler], schema: { params: ScheduleIdParam } },
+    async (req, reply) => {
+      const u = req.user!;
+      const { scheduleId } = req.params as z.infer<typeof ScheduleIdParam>;
+      const existing = await prisma.backupSchedule.findFirst({
+        where: { id: scheduleId, organizationId: u.organizationId },
+        select: { id: true }
+      });
+      if (!existing) return reply.notFound();
+      await prisma.backupSchedule.delete({ where: { id: scheduleId } });
+      return { ok: true };
     }
   );
 }

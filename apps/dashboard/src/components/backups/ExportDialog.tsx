@@ -20,7 +20,7 @@ import {
   SelectValue
 } from "@/components/ui/select";
 import { api, apiGet, downloadPost } from "@/lib/api";
-import type { BackupDestination } from "@/lib/types";
+import { describeDestinationConfig, type BackupDestination } from "@/lib/types";
 
 const DOWNLOAD = "__download__";
 const PASSPHRASE_MIN = 8;
@@ -139,7 +139,7 @@ export function ExportDialog({
                 <SelectItem value={DOWNLOAD}>Download to this device</SelectItem>
                 {(destQ.data?.destinations ?? []).map((d) => (
                   <SelectItem key={d.id} value={d.id}>
-                    {d.name} ({d.config.path})
+                    {d.name} ({describeDestinationConfig(d)})
                   </SelectItem>
                 ))}
               </SelectContent>
