@@ -15,6 +15,11 @@
 #
 #   SOHWE_HTTP_PORT      host port published for Traefik HTTP (default: 8080)
 #   SOHWE_SETUP_PASSWORD installer password for first dashboard access (min 8 chars)
+#   SOHWE_BASE_DOMAIN    wildcard parent domain for deployed app URLs, e.g.
+#                        apps.example.com -> myapp.apps.example.com. Defaults to
+#                        SOHWE_HOST, falling back to sohwe.localhost. Needs a
+#                        wildcard DNS record (*.apps.example.com A <ip>) to
+#                        resolve. Read by both the api and the worker.
 #
 # The script is idempotent. Re-running it upgrades compose files and the
 # `sohwe` wrapper without touching secrets in /etc/sohwe/sohwe.env.

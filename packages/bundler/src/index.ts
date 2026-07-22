@@ -9,8 +9,8 @@ import {
 } from "@sohwe/crypto";
 import { z } from "zod";
 
-export const BUNDLE_FORMAT: "sohwe-backup" = "sohwe-backup";
-export const BUNDLE_VERSION: 1 = 1;
+export const BUNDLE_FORMAT = "sohwe-backup" as const;
+export const BUNDLE_VERSION = 1 as const;
 
 // --- Input shapes (plaintext, supplied by the API) -------------------------
 

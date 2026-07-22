@@ -152,6 +152,9 @@ function parseStatOutput(raw: string, stderr: string): "file" | "directory" {
   const combined = (raw + stderr)
     .split(/\r?\n/)
     .map((l) => l.replace(/\r$/, ""))
+    // The ESC control character below is intentional: container `stat` output
+    // can carry ANSI colour codes, which we strip before matching.
+    // eslint-disable-next-line no-control-regex
     .map((l) => l.replace(/\u001b\[[0-9;]*m/g, ""))
     .map((l) => l.trim())
     .find((l) => l.length > 0) ?? "";

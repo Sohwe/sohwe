@@ -389,6 +389,30 @@ Security requirements for bundles (additive to §11.3):
 - Bundle creation and restore are **logged in the audit trail** (`P6`) with actor, destination, mode, and affected app IDs — but never secret values.
 - The signature over the manifest is verified **before** any side effects (file extraction, DB writes) during restore.
 
+#### As built — deviations from the above
+
+The P4.5 slice shipped in the Unreleased line. Requirements above are retained as
+written; this records where the implementation diverged. See
+`sohwe-getting-started.md` → *As Built: Portable Bundles* for the shipped design.
+
+**Deliberate simplifications:**
+
+- **Format** — a single `.sohwe.json` document, not a zstd-compressed tar. Config-only bundles are small enough that an archive added no value.
+- **KDF** — scrypt, not Argon2id. Both memory-hard; scrypt is in the Node standard library and avoided a native dependency.
+- **Routes** — everything is org-scoped under `/api/backups/*` rather than split across `/api/bundles` and `/api/backup-destinations`.
+- **Restore / DNS safety** — instead of a `pending-dns` domain flag, restored apps land in `idle`. Nothing deploys and no Traefik router or ACME request exists until the operator deploys, which satisfies the "never auto-requests certificates" requirement by a different route.
+
+**Weakened — worth a decision before v1:**
+
+- **Signing** — the manifest is HMAC-SHA256'd with the *passphrase-derived* key, not an ed25519 key held by the instance. This gives tamper-evidence but **not** origin attestation: a verifier needs the passphrase, and any holder of the passphrase can forge a valid bundle. The requirement's intent — "the signature proves the manifest wasn't tampered with in transit" — is met; "signed by *this instance*" is not.
+
+**Unmet:**
+
+- **Git mirror mode** (`--mirror` clone into the bundle) — not implemented. Restore therefore depends on the upstream repo still being reachable, which is exactly the failure this requirement existed to cover.
+- **CLI** — no `sohwe bundle create` / `sohwe bundle restore`. Export and restore are dashboard/API only.
+- **Cross-version restore** — bundles carry `version: 1`, but no older-version bundle exists to test against, so the "restore across at least one major version" guarantee is unverified.
+- **Audit trail** — deferred with the rest of `P6`.
+
 ### 10.10 Managed Datastores (Post-v1 / v2)
 
 Managed datastores let Sohwe provision first-party Postgres and Redis containers on the same VPS as user applications. They are intentionally post-v1 because they turn Sohwe from a deployment control plane into a data-hosting tool, which raises the bar for backups, restore, upgrades, and operational safety.

@@ -6,9 +6,16 @@ This repository is a **pnpm + Turborepo** monorepo. The detailed bootstrap and p
 
 ## Current status
 
-**v0.3.8** is the latest release. **Phase 3 (stateful apps)** is complete: Nixpacks + custom domains, **encrypted env vars** (dashboard + API; worker injects at deploy), **named persistent volumes** with Docker `Binds`, **memory/CPU limits**, and a per-app **internal Docker network** (`sohwe_app_<id>_net` plus the Traefik network). **Phase 3.5 (packaging & install)** is also live: production Dockerfiles, `docker-compose.prod.yml` + HTTPS overlay, multi-arch GHCR publishing on tag, and a one-command installer for fresh Ubuntu 22.04/24.04 VPS hosts. v0.3.6–v0.3.8 patched fresh-install issues uncovered on real VPS hardware — most notably, Docker Engine 29 compatibility (Traefik bumped to v3.7) and a setup/login cookie regression on HTTP-only installs.
+**v0.3.8** is the latest tagged release; a substantial amount of work sits unreleased on `main`.
 
-Next milestone: **Phase 4 (observability)**. See [`CHANGELOG.md`](./CHANGELOG.md) and [`sohwe-getting-started.md`](./sohwe-getting-started.md).
+Shipped through **Phase 4.5**:
+
+- **Phases 0–3** — deploys from Git, Dockerfile + Nixpacks builds, custom domains with opt-in HTTPS, encrypted env vars, named persistent volumes, memory/CPU limits, per-app internal Docker networks.
+- **Phase 3.5 (packaging & install)** — production Dockerfiles, `docker-compose.prod.yml` + HTTPS overlay, multi-arch GHCR publishing on tag, and a one-command installer for fresh Ubuntu 22.04/24.04 hosts.
+- **Phase 4 (observability)** — runtime log streaming, live CPU/memory metrics, and crash/OOM webhook alerts.
+- **Phase 4.5 (portable bundles)** — signed, passphrase-encrypted config bundles with local and S3-compatible destinations, restore preflight/apply, and scheduled exports with retention.
+
+Next milestone: **Phase 5 (git-push deploys)**. [`ROADMAP.md`](./ROADMAP.md) is the authoritative per-item checklist; see also [`CHANGELOG.md`](./CHANGELOG.md).
 
 ## Install on a server (production)
 
@@ -23,15 +30,18 @@ The installer will:
 1. Install Docker Engine + the compose plugin if they aren't already present.
 2. Prompt for an **HTTP port** for the dashboard (default **8080**) and verify it is free on the host.
 3. Optionally prompt for a **public domain** and Let's Encrypt email — skip to use `http://<server-ip>:<port>` only.
-4. Prompt for an **installer password** (confirmed twice); this unlocks the dashboard for first-run setup before anyone can create the owner account.
-5. Generate `/etc/sohwe/sohwe.env` with random `SESSION_SECRET`, `SOHWE_ENCRYPTION_KEY`, Postgres password, and your chosen values (mode 0600).
-6. Pull the `api`, `worker`, and `dashboard` images from GHCR and start the stack.
-7. Apply the database schema (`prisma migrate deploy` via the running API container).
-8. Print the dashboard URL(s).
+4. Prompt for an **apps base domain** (`SOHWE_BASE_DOMAIN`) — the wildcard parent for deployed app URLs, e.g. `apps.example.com` gives you `myapp.apps.example.com`. Defaults to the dashboard host, falling back to `sohwe.localhost`. Point a wildcard DNS record (`*.apps.example.com A <ip>`) at the box for this to resolve.
+5. Prompt for an **installer password** (confirmed twice); this unlocks the dashboard for first-run setup before anyone can create the owner account.
+6. Generate `/etc/sohwe/sohwe.env` with random `SESSION_SECRET`, `SOHWE_ENCRYPTION_KEY`, Postgres password, and your chosen values (mode 0600).
+7. Pull the `api`, `worker`, and `dashboard` images from GHCR and start the stack.
+8. Apply the database schema via the running API container.
+9. Print the dashboard URL(s).
 
 Unlock first-run setup with your installer password, then complete setup (owner account + organization) in the dashboard.
 
-Non-interactive installs can pass **`SOHWE_HTTP_PORT`**, **`SOHWE_SETUP_PASSWORD`**, and other inputs via the environment (see comments in `scripts/install.sh`).
+Non-interactive installs can pass **`SOHWE_HTTP_PORT`**, **`SOHWE_SETUP_PASSWORD`**, **`SOHWE_BASE_DOMAIN`**, **`SOHWE_HOST`**, **`SOHWE_ACME_EMAIL`**, and **`SOHWE_VERSION`** via the environment, with `SOHWE_NONINTERACTIVE=1` (see the header comments in `scripts/install.sh`).
+
+> **Schema updates are a force-push, not a migration.** There is no Prisma migrations directory yet: `sohwe migrate` — which `sohwe update` runs for you — executes `prisma db push --accept-data-loss` inside the api container. Back up before upgrading across a schema change.
 
 ### Managing the instance
 
@@ -106,11 +116,14 @@ Use strong, unique values for secrets in any shared or deployed environment. The
 | --- | --- |
 | `apps/api` | Fastify HTTP API |
 | `apps/dashboard` | Vite + React control plane UI |
-| `apps/worker` | BullMQ consumer: git clone, build, dockerode, Traefik labels, log pub/sub |
+| `apps/worker` | BullMQ consumer: git clone, build, dockerode, Traefik labels, log/stats streaming, crash watcher, backup scheduler |
 | `packages/db` | Prisma schema and client |
-| `packages/types` | Shared Zod schemas and types |
-| `packages/queue` | BullMQ deploy job types and queue config (API + worker) |
+| `packages/types` | Shared Zod schemas, types, and Docker naming helpers |
+| `packages/queue` | BullMQ job types, queue config, channel/key helpers (API + worker) |
+| `packages/builder` | Dockerfile / Nixpacks image build wrapper |
 | `packages/crypto` | AES-256-GCM env encryption helpers (API + worker) |
+| `packages/bundler` | Signed, passphrase-encrypted config bundles |
+| `packages/backups` | Backup destinations (local + S3) and export orchestration |
 | `docker-compose.dev.yml` | Local Postgres, Redis, Traefik |
 | `docker-compose.prod.yml` + `docker-compose.https.yml` | Production stack (api + worker + dashboard + infra) |
 | `docker/*.Dockerfile` | Multi-stage production images (api / worker / dashboard) |
@@ -132,11 +145,13 @@ Use strong, unique values for secrets in any shared or deployed environment. The
 
 ## Documentation
 
-- [`AGENTS.md`](./AGENTS.md) — quick context for future coding-agent chats
+- [`CLAUDE.md`](./CLAUDE.md) — working rules and context for coding agents
+- [`ROADMAP.md`](./ROADMAP.md) — per-phase checklist with file-level evidence
 - [`DEVELOPMENT.md`](./DEVELOPMENT.md) — local environment setup and dev deploy notes
-- [`sohwe-prd.md`](./sohwe-prd.md) — Product requirements and release plan  
-- [`sohwe-getting-started.md`](./sohwe-getting-started.md) — Architecture and step-by-step implementation  
+- [`sohwe-getting-started.md`](./sohwe-getting-started.md) — architecture, decisions, and unbuilt-phase design
+- [`sohwe-prd.md`](./sohwe-prd.md) — product requirements and release plan
+- [`docs/vps-smoke-test.md`](./docs/vps-smoke-test.md) — manual VPS verification checklist
 
 ## License
 
-The product is planned as **AGPL-3.0** (see `sohwe-prd.md`). Add a `LICENSE` file at the repo root when you are ready to publish.
+[AGPL-3.0](./LICENSE). You can run, modify, and redistribute Sohwe, but derivative hosted services must also open-source their changes.

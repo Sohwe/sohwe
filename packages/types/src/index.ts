@@ -285,7 +285,7 @@ export const CronSchema = z
     "Cron must have 5 space-separated fields (e.g. 0 3 * * *)"
   )
   .refine(
-    (s) => s.split(/\s+/).every((f) => /^[0-9*/,\-]+$/.test(f)),
+    (s) => s.split(/\s+/).every((f) => /^[0-9*/,-]+$/.test(f)),
     "Cron fields may only contain digits and * / , -"
   );
 

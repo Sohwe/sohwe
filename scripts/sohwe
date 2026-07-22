@@ -69,10 +69,14 @@ Commands:
   status              Show service state.
   logs [service]      Follow logs for the stack or a single service.
   pull                Pull the images pinned in sohwe.env.
-  migrate             Run `prisma migrate deploy` inside the api container.
-  update [version]    Upgrade to `version` (default: latest). Pulls, migrates,
-                      restarts. The previous version is stashed for rollback.
+  migrate             Apply the DB schema inside the api container. NOTE: this
+                      runs `prisma db push --accept-data-loss`, not a versioned
+                      migration -- back up before upgrading across a schema
+                      change.
+  update [version]    Upgrade to `version` (default: latest). Pulls, applies the
+                      schema, restarts. Previous version stashed for rollback.
   rollback            Roll back to the version saved by the last `update`.
+                      Does NOT revert schema changes.
   version             Show the currently installed version.
   env                 Print the path to the env file.
   help                This message.
@@ -110,9 +114,11 @@ cmd_env()     { echo "${ENV_FILE}"; }
 
 cmd_migrate() {
     # The api image has Prisma + schema baked in at /app/packages/db.
-    # v0.3.0 uses `prisma db push` (declarative, no migrations directory).
-    # A proper `prisma migrate` pipeline is planned for a future phase; once
-    # it lands this should switch to `prisma migrate deploy`.
+    # There is no migrations directory, so this is a declarative `db push`.
+    # `--accept-data-loss` means a schema change that drops or narrows a column
+    # WILL drop the data in it, without prompting. A proper `prisma migrate`
+    # pipeline is outstanding work; once it lands, switch this to
+    # `prisma migrate deploy` and update the help text above.
     compose exec -T -w /app/packages/db api pnpm exec prisma db push --accept-data-loss --skip-generate
 }
 
@@ -160,9 +166,10 @@ cmd_rollback() {
     compose pull
     compose up -d
     compose restart traefik >/dev/null 2>&1 || true
-    # Intentionally NOT running `migrate` on rollback. Prisma migrations are
-    # forward-only; if the new version applied schema changes we can't
-    # mechanically undo them here. Operator should restore a DB backup if
+    # Intentionally NOT running `migrate` on rollback. `db push` is forward-only
+    # in practice: if the new version changed the schema we cannot mechanically
+    # undo it here, and re-pushing the OLD schema over the new data would drop
+    # whatever the upgrade added. Operator should restore a DB backup if the
     # schema is incompatible.
     echo "Rolled back to ${prev}. Note: DB schema is NOT reverted."
     rm -f "${PREV_VERSION_FILE}"

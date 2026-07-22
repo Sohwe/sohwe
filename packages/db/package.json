@@ -6,6 +6,7 @@
     "main": "./src/index.ts",
     "types": "./src/index.ts",
   "scripts": {
+    "lint": "eslint .",
     "generate": "prisma generate",
     "build": "prisma generate",
     "typecheck": "prisma validate"

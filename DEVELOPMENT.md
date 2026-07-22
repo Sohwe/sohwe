@@ -41,11 +41,12 @@ Non-Dockerfile apps use Nixpacks. On Windows, install the official Nixpacks bina
 
 The builder checks that location when `nixpacks` is not available on `PATH`.
 
+## Schema Changes
+
+There is no Prisma migrations directory. `pnpm db:push` is the dev workflow, and production upgrades run `prisma db push --accept-data-loss` too (via `sohwe migrate`). After changing `packages/db/prisma/schema.prisma`, run `pnpm db:generate` and `pnpm typecheck`.
+
 ## Roadmap Pointer
 
-The next milestone is Phase 4 observability:
+Phases 0 through 4.5 are implemented. The next milestone is **Phase 5 — git-push deploys** (GitHub App, webhook signature verification, auto-deploy on tracked-branch push).
 
-- Runtime logs in the dashboard.
-- Last-deploy build logs in a dedicated UI.
-- Live CPU/memory per app.
-- Crash webhook alerts.
+See [`ROADMAP.md`](./ROADMAP.md) for the per-item checklist.

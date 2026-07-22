@@ -1,8 +1,8 @@
 # Sohwe Roadmap
 
-Current snapshot: **v0.3.8** plus one unreleased base-domain improvement.
+Current snapshot: latest tag is **v0.3.8**; Phases 4 and 4.5 are implemented on `main` but untagged.
 
-Current phase: **Phase 4 - Observability** is implemented (runtime logs, live metrics, crash alerts). **Phase 4.5 - Portable Bundles** is now feature-complete: signed config + re-encrypted env var bundles, local + S3-compatible + download destinations, restore preflight/apply, scheduled exports with cron + retention (worker-driven), and the org-level Backups UI. Phases 0 through 4.5 are implemented in the repo; three Phase 3.5 items remain as manual VPS verification (see `docs/vps-smoke-test.md`).
+Phases 0 through 4.5 are implemented in the repo. **Phase 4 - Observability** covers runtime logs, live metrics, and crash alerts. **Phase 4.5 - Portable Bundles** is feature-complete: signed config + re-encrypted env var bundles, local + S3-compatible + download destinations, restore preflight/apply, scheduled exports with cron + retention (worker-driven), and the org-level Backups UI. Three Phase 3.5 items remain as manual VPS verification (see `docs/vps-smoke-test.md`). Next unbuilt milestone is **Phase 5 - Git-Push Deploys**.
 
 This file is a working checklist. It is based on `README.md`, `CHANGELOG.md`, `sohwe-getting-started.md`, `sohwe-prd.md`, and a code scan across the API, worker, dashboard, Docker, installer, and release workflow.
 
@@ -137,13 +137,11 @@ Suggested release: **v0.3.9**
 
 Evidence: `CHANGELOG.md`, `apps/api/src/index.ts`, `apps/dashboard/src/lib/config.ts`, `apps/worker/src/index.ts`, `docker-compose.prod.yml`, `scripts/install.sh`.
 
-## Next Up
-
 ### Phase 4 - Observability
 
-Status: **next active phase**
+Status: **complete**
 
-Build log streaming already exists. The missing Phase 4 work is runtime observability for running app containers.
+Build log streaming already existed from Phase 1; this phase added runtime observability for running app containers.
 
 - [x] Add shared Redis channel helper for runtime logs, likely `logs:app:<id>`.
 - [x] Worker tails `docker logs -f` or dockerode equivalent for managed app containers.
@@ -166,17 +164,7 @@ Build log streaming already exists. The missing Phase 4 work is runtime observab
 - [x] Send Discord/Slack/generic webhook alerts on crash.
 - [x] Ensure alerts never include secrets or sensitive env values.
 
-Current code gaps:
-
-- [x] Worker runtime log tailer added.
-- [x] `logs:app:<id>` channel helper added.
-- [x] App runtime logs SSE route added.
-- [x] Dashboard runtime logs tab added.
-- [x] Docker stats collector + `GET /api/applications/:id/stats` polling endpoint added.
-- [x] Docker `die`/`oom` event crash watcher added.
-- [x] Per-app alert webhook model, CRUD routes, and Settings UI added.
-
-## Future Phases
+Evidence: `apps/worker/src/index.ts`, `packages/queue/src/index.ts`, `apps/api/src/routes/applications.ts`, `apps/api/src/routes/alert-destinations.ts`, `apps/dashboard/src/routes/app.$appId.logs.tsx`, `apps/dashboard/src/routes/app.$appId.metrics.tsx`.
 
 ### Phase 4.5 - Portable Bundles
 
@@ -211,6 +199,8 @@ Implementation notes:
 - [x] Bundle + schedule API routes added (`/api/backups/*`).
 - [x] Bundle worker jobs added (`backup` queue, cron tick, retention). Manual export/restore still run synchronously in the API.
 - [x] Backup dashboard routes added (`/backups`).
+
+## Not Yet Built
 
 ### Phase 5 - Git-Push Deploys
 
@@ -375,11 +365,16 @@ Open design questions:
 
 ## Highest-Value Immediate Task
 
-Start Phase 4 with runtime logs:
+Cut a release. A large amount of shipped work (Phases 4 and 4.5) sits untagged on
+`main` behind `v0.3.8`, so the published install is far behind the code.
 
-- [x] Add a worker-side runtime log tailer for managed app containers.
-- [x] Publish lines to Redis on `logs:app:<id>` or a shared helper-defined channel.
-- [x] Add authenticated API SSE at `GET /api/applications/:id/logs`.
-- [x] Add an app `Logs` tab in the dashboard.
-- [x] Verify reconnect behavior.
-- [x] Verify logs do not leak env var values from Sohwe itself.
+- [ ] Run `pnpm typecheck`, `pnpm lint`, `pnpm build`.
+- [ ] Work through `docs/vps-smoke-test.md` to close the three open Phase 3.5 items.
+- [ ] Decide the version number (the release sequence above implies the base-domain
+      change is v0.3.9, but observability + bundles have since landed on top of it).
+- [ ] Tag, and confirm `.github/workflows/release.yml` publishes all three images.
+
+Known outstanding risk, tracked separately: there is no Prisma migrations
+directory, so `sohwe update` applies schema changes with
+`prisma db push --accept-data-loss`. Worth resolving before a release that
+carries the Phase 4/4.5 schema additions onto existing installs.
