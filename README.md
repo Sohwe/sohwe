@@ -41,7 +41,7 @@ Unlock first-run setup with your installer password, then complete setup (owner 
 
 Non-interactive installs can pass **`SOHWE_HTTP_PORT`**, **`SOHWE_SETUP_PASSWORD`**, **`SOHWE_BASE_DOMAIN`**, **`SOHWE_HOST`**, **`SOHWE_ACME_EMAIL`**, and **`SOHWE_VERSION`** via the environment, with `SOHWE_NONINTERACTIVE=1` (see the header comments in `scripts/install.sh`).
 
-> **Schema updates are a force-push, not a migration.** There is no Prisma migrations directory yet: `sohwe migrate` — which `sohwe update` runs for you — executes `prisma db push --accept-data-loss` inside the api container. Back up before upgrading across a schema change.
+> **Schema updates are versioned migrations.** `sohwe migrate` — which `sohwe update` runs for you — executes `prisma migrate deploy` inside the api container, replaying the reviewed SQL in `packages/db/prisma/migrations`. A database created by **v0.3.8 or earlier** predates the migrations directory; the first `sohwe migrate` after upgrading detects it and baselines it automatically (a history-only record — no DDL, no data loss). Migrations are forward-only, so `sohwe rollback` does not revert a schema change; back up before a release whose changelog flags a destructive migration.
 
 ### Managing the instance
 
@@ -54,6 +54,8 @@ sohwe update               # upgrade to latest
 sohwe update v0.4.0        # pin a specific version
 sohwe rollback             # revert to the version before the last update (one hop)
 sohwe restart
+sohwe migrate              # apply pending DB migrations
+sohwe migrate-status       # show applied vs pending migrations
 sohwe env                  # print the path to the env file
 ```
 
@@ -89,7 +91,7 @@ State lives entirely under `/etc/sohwe/`. Postgres data and Let's Encrypt certs 
 
    ```bash
    pnpm db:generate
-   pnpm db:push
+   pnpm db:migrate:deploy
    ```
 
 5. **Run apps**
@@ -106,9 +108,9 @@ State lives entirely under `/etc/sohwe/`. Postgres data and Let's Encrypt certs 
 ### Environment
 
 - **`apps/api/.env`** — API runtime (`DATABASE_URL`, `REDIS_URL`, `PORT`, `SESSION_SECRET`, `SOHWE_ENCRYPTION_KEY`, etc.). The **worker** also needs `SOHWE_ENCRYPTION_KEY` (and `DATABASE_URL` / `REDIS_URL`) to decrypt env at deploy; in local dev, `apps/worker` loads `apps/api/.env` via dotenv, so a single file is enough.
-- **`packages/db/.env`** — Prisma CLI (`DATABASE_URL` for `db:push` / `db:studio`).
+- **`packages/db/.env`** — Prisma CLI (`DATABASE_URL` for `db:migrate` / `db:studio`).
 
-Use strong, unique values for secrets in any shared or deployed environment. The getting-started doc shows the expected variable names and example connection strings.
+Use strong, unique values for secrets in any shared or deployed environment. The API validates its environment at boot and refuses to start if `SESSION_SECRET` (min 16 chars) or `SOHWE_ENCRYPTION_KEY` (32 bytes, base64) is missing or malformed. `SOHWE_CORS_ORIGIN` is optional — leave it unset in production (the dashboard is same-origin through nginx). The getting-started doc shows the expected variable names and example connection strings.
 
 ### Repository layout
 
@@ -129,6 +131,7 @@ Use strong, unique values for secrets in any shared or deployed environment. The
 | `docker/*.Dockerfile` | Multi-stage production images (api / worker / dashboard) |
 | `scripts/install.sh` | One-command installer for Ubuntu 22.04/24.04 |
 | `scripts/sohwe` | Host-side CLI installed to `/usr/local/bin/sohwe` |
+| `.github/workflows/ci.yml` | Typecheck/lint/build, migration replay, and script checks on every push + PR |
 | `.github/workflows/release.yml` | Multi-arch GHCR publish on `v*` tags |
 
 ### Scripts
@@ -140,7 +143,10 @@ Use strong, unique values for secrets in any shared or deployed environment. The
 | `pnpm lint` | Lint |
 | `pnpm typecheck` | Typecheck |
 | `pnpm db:generate` | `prisma generate` |
-| `pnpm db:push` | Push schema to the database (dev) |
+| `pnpm db:migrate` | Create + apply a migration for a schema change (dev) |
+| `pnpm db:migrate:deploy` | Apply pending migrations without generating one |
+| `pnpm db:migrate:status` | Show applied vs pending migrations |
+| `pnpm db:push` | Push schema without a migration — scratch/throwaway DBs only |
 | `pnpm db:studio` | Open Prisma Studio |
 
 ## Documentation

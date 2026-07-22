@@ -63,7 +63,7 @@ Database: `pnpm db:generate`, `pnpm db:push`, `pnpm db:studio`
 
 ESLint uses flat config. The root `eslint.config.mjs` covers `apps/api`, `apps/worker`, and all of `packages/` (Node globals, no React); ESLint finds it by walking up from each package, so a new package needs only `"lint": "eslint ."` and no config of its own. `apps/dashboard` keeps its own `eslint.config.js` (browser globals + React plugins), which wins for that directory.
 
-There are no test scripts in any workspace package, and **no CI workflow runs typecheck/lint/build** — `.github/workflows/release.yml` only builds images on `v*` tags, and it builds inside Docker. Nothing catches a broken workspace before a tag. If you add tests or CI, document the commands here and in `README.md`.
+**CI:** `.github/workflows/ci.yml` runs on every push to `main` and every pull request. Three jobs: `verify` (typecheck + lint + build across all workspaces), `migrations` (replays the committed Prisma migrations against a real Postgres 16 on both the fresh-install and the pre-v0.3.8 upgrade path, asserting no drift and no data loss), and `scripts` (shellcheck + bash syntax + an LF-ending guard for the installer and host CLI). `.github/workflows/release.yml` is separate and only builds/publishes images on `v*` tags. There are still **no unit tests** in any workspace package — `packages/crypto` and `packages/bundler` are the highest-value gap. If you add tests, wire them into the `verify` job and document the command here and in `README.md`.
 
 ## Environment
 
@@ -103,6 +103,9 @@ Never commit real secrets or generated env files.
 - Serialize BigInt values (e.g. volume `sizeBytes`) before JSON responses.
 - SSE build logs use Redis pub/sub plus stored `Deployment.buildLogs`; preserve replay-on-reconnect. Runtime log SSE (`GET /api/applications/:id/logs`) replays recent Docker logs then follows the Redis channel.
 - `GET /api/config` is public and allowed through the setup gate (`apps/api/src/setup-gate.ts`); it exists so the dashboard learns `SOHWE_BASE_DOMAIN` at runtime instead of baking it into the image.
+- Environment is validated at boot in `apps/api/src/env.ts` (`loadApiConfig`) and the API exits fast on a bad config. Read config from the returned `ApiConfig` (e.g. `config.corsOrigin`, `config.port`, `config.sessionSecret`) rather than re-reading `process.env` in `index.ts`. The worker has a matching boot check in `apps/worker/src/index.ts`.
+- The two unauthenticated credential endpoints (`/api/auth/login`, `/api/setup/unlock`) carry an opt-in per-route rate limit via `config: AUTH_RATE_LIMIT` (`@fastify/rate-limit` is registered with `global: false`). Keep new pre-auth endpoints rate-limited, and do not enable a global limit — it would throttle metrics polling and log SSE. The app runs with `trustProxy` so limits key off the forwarded client IP.
+- The setup-gate cookie is HMAC-signed with an issue timestamp and expires server-side after 7 days (`apps/api/src/setup-gate.ts`); keep the `t` check when touching that file.
 
 ### Worker and Docker
 
@@ -130,8 +133,12 @@ Never commit real secrets or generated env files.
 
 ### Database
 
-- Schema is `packages/db/prisma/schema.prisma`.
-- Use `pnpm db:push` in development. **There is no migrations directory.** `sohwe migrate` (and therefore `sohwe update`) runs `prisma db push --accept-data-loss` inside the api container. Treat every schema change as something that will be force-pushed onto production data, dropping any column it narrows or removes. Adopting a real `prisma migrate` pipeline is known outstanding work.
+- Schema is `packages/db/prisma/schema.prisma`. Migrations are versioned SQL in `packages/db/prisma/migrations`.
+- **Every schema change must ship as a migration.** Run `pnpm db:migrate --name <short_description>` (`prisma migrate dev`), then commit the generated `migration.sql`. `sohwe migrate` (and therefore `sohwe update`) runs `prisma migrate deploy`, which replays exactly that file on production.
+- Do not use `pnpm db:push` for anything that will be committed — it mutates the DB without recording a migration and drifts the dev database from what production replays. Scratch databases only.
+- Read the generated SQL before committing. Prisma emits `DROP COLUMN` and type narrowing without warning, there are no down-migrations, and `sohwe rollback` restores images but not schema. Flag any destructive migration in `CHANGELOG.md`.
+- Never renumber or edit `20260722000000_init`. It reproduces the schema every release through v0.3.8 shipped, and `cmd_migrate` in `scripts/sohwe` baselines pre-migration databases against that exact directory name when `prisma migrate deploy` reports `P3005`.
+- Never edit a migration that has already been released — add a new one.
 - After schema changes run `pnpm db:generate` and at least `pnpm typecheck`.
 - Be careful with destructive schema/data changes - this is a deployment platform and user app configuration is stateful.
 

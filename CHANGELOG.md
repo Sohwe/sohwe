@@ -10,6 +10,27 @@ write-ups.
 
 ## [Unreleased]
 
+### Security
+
+- **Rate limiting on the unauthenticated credential endpoints.** `POST /api/auth/login` and `POST /api/setup/unlock` are now limited to 10 requests per minute per client IP (`@fastify/rate-limit`), returning `429` with `Retry-After` past the threshold. The API runs with `trustProxy` so the limit keys off the real client IP forwarded by Traefik/nginx rather than the proxy's address. Other routes — including the dashboard's frequent metrics polling and long-lived log SSE — are unaffected.
+- **Fail-fast environment validation at boot.** The API and worker now validate their environment before opening any socket or connection and exit with a clear, aggregated message if it is wrong. This closes a silent-failure mode where an unset `SESSION_SECRET` left the setup-gate cookie unsigned (so unlock returned `{ok:true}` but never actually unlocked), and surfaces a missing or wrong-length `SOHWE_ENCRYPTION_KEY` at startup instead of mid-deploy when the worker first decrypts env vars.
+- **Setup-gate cookie now expires server-side.** The gate cookie signs an issue timestamp; verification now enforces it against a 7-day lifetime (matching the cookie's `Max-Age`), rejecting stale, future-dated, or timestamp-less cookies. Previously the timestamp was signed but never checked, so a leaked gate cookie was valid indefinitely.
+- **Configurable CORS; no dev origin shipped to production.** The API's allowed CORS origin is read from the optional `SOHWE_CORS_ORIGIN` (comma-separated list, or `*`). When unset it defaults to disabled under `NODE_ENV=production` (the dashboard is same-origin through nginx) and to `http://localhost:3000` otherwise. Previously `http://localhost:3000` was hardcoded into the production image.
+- **Expired sessions are swept.** The API deletes expired session rows on boot and hourly thereafter, so the table no longer accumulates 30-day-lived rows indefinitely. Expiry was already enforced at read time; this reclaims the storage.
+
+### Changed
+
+- **Versioned database migrations replace `db push --accept-data-loss`.** `sohwe migrate` — which `sohwe update` and the installer both call — now runs `prisma migrate deploy`, replaying reviewed SQL from the new `packages/db/prisma/migrations` directory instead of force-pushing the schema. Previously any upgrade that narrowed or removed a column would drop that column's data without prompting.
+
+  Two migrations are committed: `20260722000000_init` reproduces the schema shipped by every published tag through v0.3.8, and `20260722000100_observability_and_backups` adds the Phase 4 + 4.5 tables (`alert_destinations`, `backup_destinations`, `bundles`, `backup_schedules`). The second is **purely additive** — four `CREATE TABLE`s plus indexes and foreign keys, with no `ALTER` against existing tables — so upgrading an existing install does not touch existing rows.
+
+  **Upgrading from v0.3.8 or earlier requires no manual step.** Those databases were created by `db push` and have no `_prisma_migrations` table, so `prisma migrate deploy` refuses with `P3005`. `sohwe migrate` detects that specific error and baselines the database by marking `init` as already-applied — a history row only, no DDL — then applies the remaining migrations. Because every tag through v0.3.8 shipped a byte-identical schema, this state is unambiguous. Any other migration failure is surfaced and does not trigger a baseline.
+
+  Migrations are forward-only. `sohwe rollback` restores the previous images but does not revert schema changes; additive migrations leave the older version working, and any future destructive migration will be called out here.
+
+- New `sohwe migrate-status` subcommand shows applied vs pending migrations.
+- New root scripts: `pnpm db:migrate`, `pnpm db:migrate:deploy`, `pnpm db:migrate:status`. `pnpm db:push` remains for throwaway scratch databases but must not be used for committed schema changes.
+
 ### Added
 
 - **Phase 4.5 portable config bundles.** A new org-level **Backups** area exports every app's configuration as a single signed, passphrase-protected `.sohwe.json` document and restores it on the same or a different Sohwe instance. Bundles are config-only — app settings, volume *definitions* (mount paths, not data), alert destinations, and optionally re-encrypted env vars; no git mirrors and no volume data. `@sohwe/bundler` derives a 32-byte key from the passphrase via scrypt (salt stored in the bundle), AES-256-GCM-encrypts each app's env vars, and HMAC-SHA256-signs the manifest so a wrong passphrase or any tampering is rejected at restore. Org-scoped routes live under `/api/backups`: destination CRUD (`/destinations`), bundle history (`GET /api/backups`), `POST /api/backups/export`, `POST /api/backups/restore/{preflight,apply}`, and schedule CRUD (`/schedules`). Restore is non-destructive by default: apps land in `idle` (nothing deploys, no Traefik routers, no ACME cert requests until the user deploys), and slug collisions are resolved by an explicit `rename` / `overwrite` / `skip` policy chosen after a preflight summary (which reports env var *key counts*, never values). New Prisma models: `BackupDestination`, `Bundle`, `BackupSchedule`.

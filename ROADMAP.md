@@ -368,13 +368,52 @@ Open design questions:
 Cut a release. A large amount of shipped work (Phases 4 and 4.5) sits untagged on
 `main` behind `v0.3.8`, so the published install is far behind the code.
 
-- [ ] Run `pnpm typecheck`, `pnpm lint`, `pnpm build`.
+- [x] Adopt a versioned Prisma migration pipeline (was the blocking risk below).
+- [x] Run `pnpm typecheck`, `pnpm lint`, `pnpm build`.
 - [ ] Work through `docs/vps-smoke-test.md` to close the three open Phase 3.5 items.
 - [ ] Decide the version number (the release sequence above implies the base-domain
       change is v0.3.9, but observability + bundles have since landed on top of it).
 - [ ] Tag, and confirm `.github/workflows/release.yml` publishes all three images.
 
-Known outstanding risk, tracked separately: there is no Prisma migrations
-directory, so `sohwe update` applies schema changes with
-`prisma db push --accept-data-loss`. Worth resolving before a release that
-carries the Phase 4/4.5 schema additions onto existing installs.
+### Migration pipeline — done
+
+`sohwe migrate` now runs `prisma migrate deploy` against versioned SQL in
+`packages/db/prisma/migrations`, replacing `prisma db push --accept-data-loss`.
+Databases from v0.3.8 and earlier are baselined automatically on first run
+(history row only, no DDL). The Phase 4/4.5 migration is purely additive, so it
+carries onto existing installs without touching existing rows.
+
+Verified against a disposable Postgres 16: fresh-install deploy applies both
+migrations with zero drift; a seeded v0.3.8-shaped database baselines, applies
+only the additive migration, keeps its rows, and reports zero drift.
+
+Evidence: `packages/db/prisma/migrations/`, `scripts/sohwe` (`cmd_migrate`),
+`package.json`, `CHANGELOG.md`.
+
+### Remaining pre-release risks
+
+- [x] CI runs `typecheck` / `lint` / `build` on every push and PR, plus a
+      migrations job (fresh-install + pre-v0.3.8 upgrade, drift + data-loss
+      guards) and a shellcheck/LF job for the scripts (`.github/workflows/ci.yml`).
+- [x] Rate limiting on `POST /api/auth/login` and `POST /api/setup/unlock`
+      (10/min/IP via `@fastify/rate-limit`, `trustProxy` for real client IPs).
+- [x] Boot-time env validation in the API and worker (fail fast on missing
+      `SESSION_SECRET`, short secret, or bad `SOHWE_ENCRYPTION_KEY`).
+- [x] Setup-gate cookie enforces its signed `t` timestamp against a 7-day
+      lifetime; stale/future/timestamp-less cookies are rejected.
+- [x] CORS origin is configurable (`SOHWE_CORS_ORIGIN`) and defaults to disabled
+      in production instead of a hardcoded dev origin.
+- [x] Expired sessions are swept on boot and hourly.
+
+Security batch verified by running: env validation (fail + boot), 429 after the
+10th auth request, forged/stale gate cookies rejected while valid ones pass,
+CORS off in prod and scoped in dev, and the boot sweep deleting only the expired
+session. Evidence: `apps/api/src/env.ts`, `apps/api/src/session.ts`,
+`apps/api/src/setup-gate.ts`, `apps/api/src/index.ts`, `apps/worker/src/index.ts`.
+
+Still open before a tag:
+
+- [ ] No unit tests anywhere. `packages/crypto` and `packages/bundler` are the
+      sharpest gap: the bundle format is a cross-instance compatibility contract
+      with nothing pinning it. (CI now replays migrations, but does not exercise
+      the crypto/bundle code.)

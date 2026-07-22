@@ -357,14 +357,16 @@ Naming helpers for volumes (`sohwe_app_<appId>_<volumeId>`) and networks live in
 pnpm dev                      # api + worker + dashboard in parallel
 pnpm --filter @sohwe/api dev  # just the API
 pnpm db:studio                # Prisma Studio at http://localhost:5555
-pnpm db:push                  # Push schema changes to the dev DB
+pnpm db:migrate               # Create + apply a migration for a schema change
 pnpm typecheck
 docker compose -f docker-compose.dev.yml logs -f
 ```
 
 Add a dependency to one workspace with `pnpm --filter @sohwe/api add some-package`.
 
-**On migrations:** there is no migrations directory. Dev uses `prisma db push`, and so does production — `sohwe migrate` runs `prisma db push --accept-data-loss` inside the api container. Adopting a real `prisma migrate` pipeline is outstanding work; until then, treat every schema change as something that will be force-pushed onto production data.
+**On migrations:** schema changes are versioned SQL in `packages/db/prisma/migrations`. Dev uses `prisma migrate dev` (`pnpm db:migrate`) to author one; production replays the identical file via `sohwe migrate` → `prisma migrate deploy`. Migrations are forward-only — there are no down-migrations, and `sohwe rollback` restores images but not schema.
+
+Databases created by v0.3.8 or earlier predate the migrations directory. Because every published tag through v0.3.8 shipped a byte-identical schema, that state is unambiguous, and `sohwe migrate` baselines it automatically on first run: it marks `20260722000000_init` as already-applied (a row in `_prisma_migrations`, no DDL) and then applies only the later migrations.
 
 ---
 
@@ -372,7 +374,7 @@ Add a dependency to one workspace with `pnpm --filter @sohwe/api add some-packag
 
 **`pnpm dev` says a workspace package isn't found** — run `pnpm install` from the repo root after creating new packages.
 
-**Prisma Client errors after a schema change** — `pnpm db:generate && pnpm db:push`.
+**Prisma Client errors after a schema change** — `pnpm db:migrate && pnpm db:generate`.
 
 **Traefik returns 404 for a deployed app** — is the container on `sohwe_proxy`? Does the router rule match the host you're visiting? Is `SOHWE_BASE_DOMAIN` what you expect (check `GET /api/config`)?
 

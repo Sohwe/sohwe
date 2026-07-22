@@ -23,7 +23,7 @@ Then replace `SOHWE_ENCRYPTION_KEY` in `apps/api/.env` with a real 32-byte base6
 pnpm.cmd install
 docker compose -f docker-compose.dev.yml up -d
 pnpm.cmd db:generate
-pnpm.cmd db:push
+pnpm.cmd db:migrate:deploy
 pnpm.cmd dev
 ```
 
@@ -43,7 +43,21 @@ The builder checks that location when `nixpacks` is not available on `PATH`.
 
 ## Schema Changes
 
-There is no Prisma migrations directory. `pnpm db:push` is the dev workflow, and production upgrades run `prisma db push --accept-data-loss` too (via `sohwe migrate`). After changing `packages/db/prisma/schema.prisma`, run `pnpm db:generate` and `pnpm typecheck`.
+Schema changes ship as versioned migrations in `packages/db/prisma/migrations`. After editing `packages/db/prisma/schema.prisma`:
+
+```powershell
+pnpm.cmd db:migrate --name short_description_of_change
+pnpm.cmd db:generate
+pnpm.cmd typecheck
+```
+
+`db:migrate` (`prisma migrate dev`) writes a new timestamped `migration.sql`, applies it to the dev database, and regenerates the client. **Commit the generated `migration.sql`** — it is the same SQL that will run on every production install via `sohwe migrate` (`prisma migrate deploy`).
+
+Read the generated SQL before committing. Prisma emits `DROP COLUMN` / type narrowing without comment, and there are no down-migrations: `sohwe rollback` restores the previous images but does not revert schema. If a change is destructive, say so in `CHANGELOG.md`.
+
+Avoid `pnpm db:push` now that migrations exist — it mutates the database without recording a migration, so the dev DB silently drifts from what production will replay. It remains useful only for a throwaway scratch database.
+
+The two committed migrations are `20260722000000_init` (the schema every release up to v0.3.8 shipped) and `20260722000100_observability_and_backups` (Phase 4 + 4.5 tables). Do not renumber `init`: `sohwe migrate` baselines pre-v0.3.8 databases against that exact name.
 
 ## Roadmap Pointer
 
