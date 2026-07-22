@@ -1,0 +1,232 @@
+name: ci
+
+## Runs on every push to main and every pull request.
+##
+## Before this existed, nothing validated the repo until `release.yml` fired on a
+## `v*` tag -- and that only builds Docker images, so a workspace could be broken
+## on main for a long time without anyone noticing. Three jobs run in parallel:
+##
+##   verify      -- typecheck, lint, build across every workspace package
+##   migrations  -- replays the committed Prisma migrations against a real
+##                  Postgres, on both the fresh-install and the upgrade path
+##   scripts     -- shellcheck + bash syntax for the installer and host CLI
+##
+## Keep this in sync with the "Verification Checklist" in CLAUDE.md.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same branch supersedes an in-flight run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: typecheck / lint / build
+    runs-on: ubuntu-24.04
+    env:
+      # `prisma generate` and `prisma validate` resolve env("DATABASE_URL") from
+      # the schema's datasource block, but neither opens a connection. Nothing in
+      # this job talks to a database, so a placeholder is enough -- and it keeps
+      # the job free of a Postgres service it would otherwise only start to be
+      # ignored. The `migrations` job below is where a real database is used.
+      DATABASE_URL: postgresql://placeholder:placeholder@127.0.0.1:5432/placeholder
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # pnpm must be installed before setup-node, because `cache: pnpm` needs to
+      # resolve the pnpm store path. Version comes from the `packageManager`
+      # field in package.json.
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # turbo's `typecheck` task dependsOn `^build`, and @sohwe/db's build is
+      # `prisma generate`, so the client is generated as part of this step.
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Build
+        run: pnpm build
+
+  migrations:
+    name: migrations
+    runs-on: ubuntu-24.04
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: sohwe
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: sohwe_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sohwe -d sohwe_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: sohwe
+      PGPASSWORD: password
+      BASE_URL: postgresql://sohwe:password@localhost:5432
+      DATABASE_URL: postgresql://sohwe:password@localhost:5432/sohwe_ci
+      # Must match BASELINE_MIGRATION in scripts/sohwe.
+      BASELINE: "20260722000000_init"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm db:generate
+
+      # The baseline name is load-bearing: scripts/sohwe passes it to
+      # `prisma migrate resolve --applied` when it sees P3005. If the directory
+      # is ever renamed, every pre-v0.3.8 install fails to upgrade.
+      - name: Baseline migration exists under its pinned name
+        run: |
+          test -f "packages/db/prisma/migrations/${BASELINE}/migration.sql" \
+            || { echo "::error::Missing migration ${BASELINE}. scripts/sohwe baselines against this exact name; do not rename it."; exit 1; }
+          grep -q "BASELINE_MIGRATION=\"${BASELINE}\"" scripts/sohwe \
+            || { echo "::error::BASELINE_MIGRATION in scripts/sohwe no longer matches ${BASELINE}."; exit 1; }
+
+      # ---- Path 1: fresh install -------------------------------------------
+      # An empty database must accept every migration in order.
+      - name: Fresh install applies all migrations
+        run: pnpm db:migrate:deploy
+
+      # `migrate diff --exit-code` exits 2 when the live database differs from
+      # schema.prisma. This is what catches a schema.prisma edit that was never
+      # accompanied by a migration -- the exact drift the old `db push` workflow
+      # allowed.
+      - name: No drift between migrations and schema.prisma
+        run: |
+          pnpm --filter @sohwe/db exec prisma migrate diff \
+            --from-url "$DATABASE_URL" \
+            --to-schema-datamodel prisma/schema.prisma \
+            --exit-code \
+          || { echo "::error::schema.prisma does not match the committed migrations. Run 'pnpm db:migrate' and commit the generated SQL."; exit 1; }
+
+      # ---- Path 2: upgrade from a pre-migrations (<= v0.3.8) install --------
+      # Those databases were created by `prisma db push` and have no
+      # `_prisma_migrations` table. Applying the init SQL directly reproduces
+      # that state exactly, since init was generated as a diff-from-empty of the
+      # v0.3.8 schema.
+      - name: Simulate a v0.3.8 database and seed it
+        run: |
+          psql "$BASE_URL/postgres" -v ON_ERROR_STOP=1 -c 'CREATE DATABASE sohwe_legacy;'
+          psql "$BASE_URL/sohwe_legacy" -v ON_ERROR_STOP=1 \
+            -f "packages/db/prisma/migrations/${BASELINE}/migration.sql"
+          psql "$BASE_URL/sohwe_legacy" -v ON_ERROR_STOP=1 -c "
+            INSERT INTO organizations (id,name,slug,created_at)
+              VALUES ('o1','Acme','acme',NOW());
+            INSERT INTO applications
+              (id,organization_id,name,slug,git_repository,git_branch,build_mode,port,status,created_at,updated_at)
+              VALUES ('a1','o1','Api','api','https://example.com/x/y','main','auto',3000,'running',NOW(),NOW());"
+
+      # Guards the premise of the auto-baseline in scripts/sohwe. If a future
+      # Prisma release stops reporting P3005 here, the CLI would surface the raw
+      # error instead of baselining, and every upgrade would break.
+      - name: Deploy refuses with P3005 before baselining
+        env:
+          DATABASE_URL: postgresql://sohwe:password@localhost:5432/sohwe_legacy
+        run: |
+          if out="$(pnpm db:migrate:deploy 2>&1)"; then
+            echo "$out"
+            echo "::error::Expected P3005 on a pre-migrations database, but deploy succeeded. The auto-baseline in scripts/sohwe keys off that error."
+            exit 1
+          fi
+          grep -q P3005 <<< "$out" \
+            || { echo "$out"; echo "::error::Deploy failed for a reason other than P3005."; exit 1; }
+          echo "P3005 reported as expected."
+
+      - name: Baseline, then upgrade
+        env:
+          DATABASE_URL: postgresql://sohwe:password@localhost:5432/sohwe_legacy
+        run: |
+          pnpm --filter @sohwe/db exec prisma migrate resolve --applied "$BASELINE"
+          pnpm db:migrate:deploy
+
+      # The upgrade is only safe if it is additive. Seeded rows must survive.
+      - name: Upgraded database kept its data and matches the schema
+        env:
+          DATABASE_URL: postgresql://sohwe:password@localhost:5432/sohwe_legacy
+        run: |
+          orgs=$(psql "$BASE_URL/sohwe_legacy" -tAc 'SELECT count(*) FROM organizations;')
+          apps=$(psql "$BASE_URL/sohwe_legacy" -tAc 'SELECT count(*) FROM applications;')
+          echo "orgs=$orgs apps=$apps"
+          [ "$orgs" = "1" ] && [ "$apps" = "1" ] \
+            || { echo "::error::Upgrade lost data (expected 1 org / 1 app)."; exit 1; }
+          pnpm --filter @sohwe/db exec prisma migrate diff \
+            --from-url "$DATABASE_URL" \
+            --to-schema-datamodel prisma/schema.prisma \
+            --exit-code \
+          || { echo "::error::Upgraded database does not match schema.prisma."; exit 1; }
+
+  scripts:
+    name: shellcheck
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # scripts/install.sh and scripts/sohwe are user-facing product surface,
+      # fetched over curl and run on fresh Ubuntu hosts. They are never exercised
+      # by the TypeScript build, so static analysis is the only automated check
+      # they get.
+      - name: Shellcheck
+        run: shellcheck -S warning scripts/install.sh scripts/sohwe
+
+      - name: Bash syntax
+        run: |
+          bash -n scripts/install.sh
+          bash -n scripts/sohwe
+
+      # A CRLF shebang is a fatal "bad interpreter" on Linux. .gitattributes
+      # pins these to LF; this asserts the pin is actually working, since the
+      # failure only ever shows up on a user's machine.
+      - name: Scripts are LF, not CRLF
+        run: |
+          for f in scripts/install.sh scripts/sohwe; do
+            if grep -qU $'\r' "$f"; then
+              echo "::error file=$f::Contains CRLF line endings; must be LF."
+              exit 1
+            fi
+          done
+          echo "Line endings OK."
