@@ -1,4 +1,4 @@
-import type { FastifyReply, FastifyRequest } from "fastify";
+import type { FastifyBaseLogger, FastifyReply, FastifyRequest } from "fastify";
 import { prisma } from "@sohwe/db";
 
 export type AuthedUser = {
@@ -45,6 +45,35 @@ export async function authPreHandler(
     return reply.unauthorized();
   }
   req.user = u;
+}
+
+const SESSION_CLEANUP_INTERVAL_MS = 60 * 60 * 1000; // hourly
+
+async function deleteExpiredSessions(log: FastifyBaseLogger): Promise<void> {
+  try {
+    const { count } = await prisma.session.deleteMany({
+      where: { expiresAt: { lt: new Date() } }
+    });
+    if (count > 0) log.info({ count }, "Deleted expired sessions");
+  } catch (err) {
+    // Non-fatal: a failed sweep just means the rows are reclaimed next tick.
+    log.warn({ err }, "Expired session cleanup failed");
+  }
+}
+
+/**
+ * Periodically delete expired session rows. Sessions are already rejected at
+ * read time once past `expiresAt`; this only reclaims storage so the table
+ * doesn't accumulate 30-day-lived rows forever. Returns a stop function.
+ */
+export function startSessionCleanup(log: FastifyBaseLogger): () => void {
+  void deleteExpiredSessions(log);
+  const timer = setInterval(() => {
+    void deleteExpiredSessions(log);
+  }, SESSION_CLEANUP_INTERVAL_MS);
+  // Don't keep the process alive just for the sweep.
+  timer.unref();
+  return () => clearInterval(timer);
 }
 
 declare module "fastify" {

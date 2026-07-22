@@ -4,6 +4,11 @@ import { prisma } from "@sohwe/db";
 
 const COOKIE_NAME = "sohwe_setup_gate";
 
+// Server-side lifetime of the setup-gate cookie, matching the client-side
+// maxAge set in setSetupGateCookie. The signed `t` timestamp is checked against
+// this so a leaked cookie can't unlock setup indefinitely.
+const GATE_COOKIE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
 // Whether to set the `Secure` flag on auth cookies. We tie it to whether
 // HTTPS is actually serving traffic (set by the installer when SOHWE_HOST
 // is configured), NOT to NODE_ENV. HTTP-only deploys (no domain, dashboard
@@ -50,8 +55,12 @@ function verifyGateCookie(
   try {
     const data = JSON.parse(
       Buffer.from(payload, "base64url").toString("utf8")
-    ) as { v?: number };
-    return data.v === 1;
+    ) as { v?: number; t?: number };
+    if (data.v !== 1) return false;
+    // Enforce the signed issue time. A missing or expired timestamp is invalid.
+    if (typeof data.t !== "number" || !Number.isFinite(data.t)) return false;
+    const age = Date.now() - data.t;
+    return age >= 0 && age < GATE_COOKIE_MAX_AGE_MS;
   } catch {
     return false;
   }

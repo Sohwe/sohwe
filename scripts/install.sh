@@ -407,6 +407,11 @@ SOHWE_HOST=${SOHWE_HOST_INPUT}
 SOHWE_ACME_EMAIL=${SOHWE_ACME_EMAIL_INPUT}
 SOHWE_HTTPS_ENABLED=${https_enabled}
 SOHWE_BASE_DOMAIN=${SOHWE_BASE_DOMAIN_INPUT}
+# Optional API CORS allow-origin. Leave unset: the dashboard is served
+# same-origin through nginx, so cross-origin access is disabled by default in
+# production. Set a comma-separated origin list only if you front the API
+# separately.
+# SOHWE_CORS_ORIGIN=
 SOHWE_COMPOSE_OVERLAYS=${overlays}
 TRAEFIK_LOG_LEVEL=INFO
 

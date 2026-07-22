@@ -3,6 +3,7 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import cookie from "@fastify/cookie";
 import sensible from "@fastify/sensible";
+import rateLimit from "@fastify/rate-limit";
 import {
   serializerCompiler,
   validatorCompiler,
@@ -29,17 +30,48 @@ import { registerBackupRoutes } from "./routes/backups";
 import { registerApplicationRoutes } from "./routes/applications";
 import { registerEnvVarRoutes } from "./routes/env-vars";
 import { registerVolumeRoutes } from "./routes/volumes";
+import { type ApiConfig, loadApiConfig } from "./env";
+import { startSessionCleanup } from "./session";
 
-const app = Fastify({ logger: true }).withTypeProvider<ZodTypeProvider>();
+// Fail fast on a misconfigured environment, before opening a socket. process.exit
+// returns `never`, so `config` is definitely an ApiConfig past this point.
+function loadConfigOrExit(): ApiConfig {
+  try {
+    return loadApiConfig();
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
+}
+const config = loadConfigOrExit();
+
+const app = Fastify({
+  logger: true,
+  // Behind Traefik + the dashboard nginx proxy, which set X-Forwarded-For.
+  // Required for per-IP rate limiting to see the real client instead of the
+  // proxy's address. The API is never exposed directly, so trusting the proxy
+  // chain is safe here.
+  trustProxy: true
+}).withTypeProvider<ZodTypeProvider>();
 app.setValidatorCompiler(validatorCompiler);
 app.setSerializerCompiler(serializerCompiler);
 
 await app.register(cors, {
-  origin: "http://localhost:3000",
+  origin: config.corsOrigin,
   credentials: true
 });
-await app.register(cookie, { secret: process.env.SESSION_SECRET });
+await app.register(cookie, { secret: config.sessionSecret });
 await app.register(sensible);
+// Registered globally but opt-in: only routes that set `config.rateLimit` are
+// limited (see the auth routes below). A blanket limit would break the
+// dashboard's frequent metrics polling and long-lived SSE streams.
+await app.register(rateLimit, { global: false });
+
+// Throttle the two unauthenticated, internet-facing credential endpoints. Keyed
+// by client IP; a burst past the limit gets 429 until the window rolls over.
+const AUTH_RATE_LIMIT = {
+  rateLimit: { max: 10, timeWindow: "1 minute" }
+} as const;
 
 app.addHook("onRequest", setupGateHook);
 
@@ -60,7 +92,7 @@ app.get("/api/setup/status", async (req) => buildSetupStatus(req));
 
 app.post(
   "/api/setup/unlock",
-  { schema: { body: SetupUnlockSchema } },
+  { schema: { body: SetupUnlockSchema }, config: AUTH_RATE_LIMIT },
   async (req, reply) => {
     const pwd = process.env.SOHWE_SETUP_PASSWORD;
     if (!pwd?.length) {
@@ -115,7 +147,7 @@ app.post(
 
 app.post(
   "/api/auth/login",
-  { schema: { body: LoginSchema } },
+  { schema: { body: LoginSchema }, config: AUTH_RATE_LIMIT },
   async (req, reply) => {
     const { email, password } = req.body;
     const user = await prisma.user.findUnique({ where: { email } });
@@ -181,10 +213,14 @@ await registerAlertDestinationRoutes(app);
 await registerAppFilesystemRoutes(app);
 await registerBackupRoutes(app);
 
-const port = Number(process.env.PORT ?? 3001);
-await app.listen({ port, host: "0.0.0.0" });
+await app.listen({ port: config.port, host: "0.0.0.0" });
+
+// Sweep expired session rows so the table doesn't grow without bound. Sessions
+// are already rejected past expiry at read time; this reclaims the storage.
+const stopSessionCleanup = startSessionCleanup(app.log);
 
 process.on("SIGTERM", async () => {
+  stopSessionCleanup();
   await app.close();
   await prisma.$disconnect();
   process.exit(0);

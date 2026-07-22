@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { buildAppImage, type BuildMode } from "@sohwe/builder";
-import { decryptJson, toDockerEnvList } from "@sohwe/crypto";
+import { decryptJson, getSohweEncryptionKey, toDockerEnvList } from "@sohwe/crypto";
 import { appDockerVolumeName, appInternalNetworkName } from "@sohwe/types";
 import { prisma } from "@sohwe/db";
 import {
@@ -26,6 +26,33 @@ const _here = dirname(fileURLToPath(import.meta.url));
 config({ path: join(_here, "../../../.env") });
 config({ path: join(_here, "../../api/.env") });
 config();
+
+// Fail fast on a misconfigured environment before opening any connection. The
+// encryption key is the important one: without this it only throws when a
+// deploy job first decrypts env vars, failing the deploy in a confusing place
+// instead of refusing to start. It must also match the API's key, or encrypted
+// env vars written by the API cannot be decrypted here.
+function validateWorkerEnv(): void {
+  const errors: string[] = [];
+  for (const name of ["DATABASE_URL", "REDIS_URL"] as const) {
+    const v = process.env[name];
+    if (!v || v.trim().length === 0) errors.push(`${name} is required but is not set`);
+  }
+  try {
+    getSohweEncryptionKey();
+  } catch (e) {
+    errors.push(e instanceof Error ? e.message : String(e));
+  }
+  if (errors.length > 0) {
+    console.error(
+      "Invalid worker environment configuration:\n" +
+        errors.map((e) => `  - ${e}`).join("\n") +
+        "\nSOHWE_ENCRYPTION_KEY must match the value used by the API."
+    );
+    process.exit(1);
+  }
+}
+validateWorkerEnv();
 
 const MAX_COMMIT_MSG = 2000;
 

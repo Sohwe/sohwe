@@ -11,12 +11,13 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@fastify/cookie": "^9.3.0",
+    "@fastify/cors": "^9.0.0",
+    "@fastify/rate-limit": "^9.1.0",
+    "@fastify/sensible": "^5.6.0",
     "@sohwe/backups": "workspace:*",
     "@sohwe/bundler": "workspace:*",
     "@sohwe/crypto": "workspace:*",
-    "@fastify/cookie": "^9.3.0",
-    "@fastify/cors": "^9.0.0",
-    "@fastify/sensible": "^5.6.0",
     "@sohwe/db": "workspace:*",
     "@sohwe/queue": "workspace:*",
     "@sohwe/types": "workspace:*",
