@@ -69,12 +69,13 @@ Commands:
   status              Show service state.
   logs [service]      Follow logs for the stack or a single service.
   pull                Pull the images pinned in sohwe.env.
-  migrate             Apply the DB schema inside the api container. NOTE: this
-                      runs `prisma db push --accept-data-loss`, not a versioned
-                      migration -- back up before upgrading across a schema
-                      change.
-  update [version]    Upgrade to `version` (default: latest). Pulls, applies the
-                      schema, restarts. Previous version stashed for rollback.
+  migrate             Apply pending DB migrations (`prisma migrate deploy`)
+                      inside the api container. A database created by v0.3.8 or
+                      earlier is baselined automatically on first run.
+  migrate-status      Show which migrations are applied and which are pending.
+  update [version]    Upgrade to `version` (default: latest). Pulls, applies
+                      migrations, restarts. Previous version stashed for
+                      rollback.
   rollback            Roll back to the version saved by the last `update`.
                       Does NOT revert schema changes.
   version             Show the currently installed version.
@@ -112,14 +113,55 @@ cmd_pull()    { compose pull "$@"; }
 cmd_version() { current_version; }
 cmd_env()     { echo "${ENV_FILE}"; }
 
+# The `init` migration reproduces the schema that every published tag up to and
+# including v0.3.8 shipped. Those releases created their schema with
+# `prisma db push`, so they have no `_prisma_migrations` table and must be
+# baselined once before versioned migrations can take over. Do not renumber.
+readonly BASELINE_MIGRATION="20260722000000_init"
+
+# The api image has Prisma, the schema, and the migrations baked in at
+# /app/packages/db.
+prisma_in_api() {
+    compose exec -T -w /app/packages/db api pnpm exec prisma "$@"
+}
+
 cmd_migrate() {
-    # The api image has Prisma + schema baked in at /app/packages/db.
-    # There is no migrations directory, so this is a declarative `db push`.
-    # `--accept-data-loss` means a schema change that drops or narrows a column
-    # WILL drop the data in it, without prompting. A proper `prisma migrate`
-    # pipeline is outstanding work; once it lands, switch this to
-    # `prisma migrate deploy` and update the help text above.
-    compose exec -T -w /app/packages/db api pnpm exec prisma db push --accept-data-loss --skip-generate
+    # Versioned migrations, applied with `prisma migrate deploy`. Unlike the old
+    # `db push --accept-data-loss` this never drops a column on its own: it
+    # replays the reviewed SQL in packages/db/prisma/migrations.
+    #
+    # Three possible database states:
+    #
+    #   1. Fresh install     -- empty database; deploy applies every migration.
+    #   2. Already migrated  -- `_prisma_migrations` exists; deploy applies only
+    #                           what is new.
+    #   3. Pre-migration install (<= v0.3.8, schema created by `db push`) --
+    #                           deploy refuses with P3005 "schema is not empty".
+    #
+    # Case 3 is unambiguous: every tag up to v0.3.8 shipped a byte-identical
+    # schema, so such a database is exactly the `init` migration. We mark init
+    # as already-applied and re-run deploy, which then applies only the later
+    # migrations. Baselining records a row in `_prisma_migrations`; it runs no
+    # DDL and cannot lose data.
+    local out
+    if out="$(prisma_in_api migrate deploy 2>&1)"; then
+        echo "${out}"
+        return 0
+    fi
+
+    if ! grep -q 'P3005' <<< "${out}"; then
+        echo "${out}" >&2
+        return 1
+    fi
+
+    echo "Existing pre-migration database detected."
+    echo "Baselining at ${BASELINE_MIGRATION} (records history only, no schema change)…"
+    prisma_in_api migrate resolve --applied "${BASELINE_MIGRATION}"
+    prisma_in_api migrate deploy
+}
+
+cmd_migrate_status() {
+    prisma_in_api migrate status
 }
 
 refresh_compose_files() {
@@ -166,11 +208,13 @@ cmd_rollback() {
     compose pull
     compose up -d
     compose restart traefik >/dev/null 2>&1 || true
-    # Intentionally NOT running `migrate` on rollback. `db push` is forward-only
-    # in practice: if the new version changed the schema we cannot mechanically
-    # undo it here, and re-pushing the OLD schema over the new data would drop
-    # whatever the upgrade added. Operator should restore a DB backup if the
-    # schema is incompatible.
+    # Intentionally NOT running `migrate` on rollback. Prisma migrations are
+    # forward-only: there are no down-migrations to replay, and re-applying the
+    # OLD schema over the new data would drop whatever the upgrade added. In
+    # practice additive migrations (new tables/columns) leave the previous
+    # version working fine, because older code simply ignores them. If a release
+    # ever lands a destructive migration, its CHANGELOG entry must say so and the
+    # operator should restore a DB backup instead of rolling back.
     echo "Rolled back to ${prev}. Note: DB schema is NOT reverted."
     rm -f "${PREV_VERSION_FILE}"
 }
@@ -185,6 +229,7 @@ main() {
         logs)     cmd_logs     "$@" ;;
         pull)     cmd_pull     "$@" ;;
         migrate)  cmd_migrate  "$@" ;;
+        migrate-status) cmd_migrate_status "$@" ;;
         update)   cmd_update   "$@" ;;
         rollback) cmd_rollback "$@" ;;
         version|--version|-v) cmd_version ;;

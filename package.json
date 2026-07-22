@@ -9,6 +9,9 @@
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "db:push": "pnpm --filter @sohwe/db exec prisma db push",
+    "db:migrate": "pnpm --filter @sohwe/db exec prisma migrate dev",
+    "db:migrate:deploy": "pnpm --filter @sohwe/db exec prisma migrate deploy",
+    "db:migrate:status": "pnpm --filter @sohwe/db exec prisma migrate status",
     "db:studio": "pnpm --filter @sohwe/db exec prisma studio",
     "db:generate": "pnpm --filter @sohwe/db exec prisma generate"
   },
