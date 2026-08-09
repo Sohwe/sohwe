@@ -99,7 +99,7 @@ jobs:
       PGPASSWORD: password
       BASE_URL: postgresql://sohwe:password@localhost:5432
       DATABASE_URL: postgresql://sohwe:password@localhost:5432/sohwe_ci
-      # Must match BASELINE_MIGRATION in scripts/sohwe.
+      # Must match BASELINE_MIGRATION in packages/db/bin/migrate-deploy.mjs.
       BASELINE: "20260722000000_init"
 
     steps:
@@ -121,20 +121,22 @@ jobs:
       - name: Generate Prisma client
         run: pnpm db:generate
 
-      # The baseline name is load-bearing: scripts/sohwe passes it to
+      # The baseline name is load-bearing: the migrate script passes it to
       # `prisma migrate resolve --applied` when it sees P3005. If the directory
       # is ever renamed, every pre-v0.3.8 install fails to upgrade.
       - name: Baseline migration exists under its pinned name
         run: |
           test -f "packages/db/prisma/migrations/${BASELINE}/migration.sql" \
-            || { echo "::error::Missing migration ${BASELINE}. scripts/sohwe baselines against this exact name; do not rename it."; exit 1; }
-          grep -q "BASELINE_MIGRATION=\"${BASELINE}\"" scripts/sohwe \
-            || { echo "::error::BASELINE_MIGRATION in scripts/sohwe no longer matches ${BASELINE}."; exit 1; }
+            || { echo "::error::Missing migration ${BASELINE}. The migrate script baselines against this exact name; do not rename it."; exit 1; }
+          grep -q "BASELINE_MIGRATION = \"${BASELINE}\"" packages/db/bin/migrate-deploy.mjs \
+            || { echo "::error::BASELINE_MIGRATION in packages/db/bin/migrate-deploy.mjs no longer matches ${BASELINE}."; exit 1; }
 
       # ---- Path 1: fresh install -------------------------------------------
-      # An empty database must accept every migration in order.
+      # Runs the production artifact itself -- the same script the `migrate`
+      # service executes in docker-compose.prod.yml -- rather than a CI-local
+      # re-implementation of what it does.
       - name: Fresh install applies all migrations
-        run: pnpm db:migrate:deploy
+        run: node packages/db/bin/migrate-deploy.mjs
 
       # `migrate diff --exit-code` exits 2 when the live database differs from
       # schema.prisma. This is what catches a schema.prisma edit that was never
@@ -165,8 +167,8 @@ jobs:
               (id,organization_id,name,slug,git_repository,git_branch,build_mode,port,status,created_at,updated_at)
               VALUES ('a1','o1','Api','api','https://example.com/x/y','main','auto',3000,'running',NOW(),NOW());"
 
-      # Guards the premise of the auto-baseline in scripts/sohwe. If a future
-      # Prisma release stops reporting P3005 here, the CLI would surface the raw
+      # Guards the premise of the auto-baseline. If a future Prisma release
+      # stops reporting P3005 here, the migrate script would surface the raw
       # error instead of baselining, and every upgrade would break.
       - name: Deploy refuses with P3005 before baselining
         env:
@@ -174,19 +176,19 @@ jobs:
         run: |
           if out="$(pnpm db:migrate:deploy 2>&1)"; then
             echo "$out"
-            echo "::error::Expected P3005 on a pre-migrations database, but deploy succeeded. The auto-baseline in scripts/sohwe keys off that error."
+            echo "::error::Expected P3005 on a pre-migrations database, but deploy succeeded. The auto-baseline keys off that error."
             exit 1
           fi
           grep -q P3005 <<< "$out" \
             || { echo "$out"; echo "::error::Deploy failed for a reason other than P3005."; exit 1; }
           echo "P3005 reported as expected."
 
+      # The auto-baseline path through the real script: it must detect P3005,
+      # resolve the baseline, then apply only the later migrations.
       - name: Baseline, then upgrade
         env:
           DATABASE_URL: postgresql://sohwe:password@localhost:5432/sohwe_legacy
-        run: |
-          pnpm --filter @sohwe/db exec prisma migrate resolve --applied "$BASELINE"
-          pnpm db:migrate:deploy
+        run: node packages/db/bin/migrate-deploy.mjs
 
       # The upgrade is only safe if it is additive. Seeded rows must survive.
       - name: Upgraded database kept its data and matches the schema

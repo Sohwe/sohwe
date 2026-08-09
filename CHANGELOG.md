@@ -32,6 +32,8 @@ write-ups.
 
   Migrations are forward-only. `sohwe rollback` restores the previous images but does not revert schema changes; additive migrations leave the older version working, and any future destructive migration will be called out here.
 
+- **Migrations now run automatically as a one-shot `migrate` service.** `docker-compose.prod.yml` gained a `migrate` service that runs `prisma migrate deploy` — auto-baselining a pre-v0.3.8 database when it sees `P3005` — and then exits. `api` and `worker` depend on it with `condition: service_completed_successfully`, so every `docker compose up -d` brings the schema forward before any application code connects, and a failed migration blocks startup instead of leaving the API running against a stale schema. The logic lives in `packages/db/bin/migrate-deploy.mjs` (also runnable with `--status`), which ships inside the API image; the CI `migrations` job now exercises that exact script on both the fresh-install and the pre-v0.3.8 upgrade path rather than re-implementing its steps. `sohwe migrate` is unchanged and still works.
+
 - New `sohwe migrate-status` subcommand shows applied vs pending migrations.
 - New root scripts: `pnpm db:migrate`, `pnpm db:migrate:deploy`, `pnpm db:migrate:status`. `pnpm db:push` remains for throwaway scratch databases but must not be used for committed schema changes.
 

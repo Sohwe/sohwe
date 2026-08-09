@@ -107,6 +107,24 @@ services:
     networks:
       - sohwe_proxy
 
+  # One-shot schema migration. Runs `prisma migrate deploy` -- baselining a
+  # pre-v0.3.8 database first when one is detected -- then exits. The api and
+  # worker are gated behind it completing successfully, so every
+  # `docker compose up -d` brings the schema forward before any application
+  # code connects. Uses the api image, which carries Prisma, the schema, and
+  # the migrations at /app/packages/db.
+  migrate:
+    image: ${SOHWE_IMAGE_API:-ghcr.io/sohwe/sohwe-api:latest}
+    restart: "no"
+    command: ["node", "/app/packages/db/bin/migrate-deploy.mjs"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - sohwe_internal
+
   api:
     image: ${SOHWE_IMAGE_API:-ghcr.io/sohwe/sohwe-api:latest}
     restart: unless-stopped
@@ -115,6 +133,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     environment:
       <<: *sohwe-env
       PORT: "3001"
@@ -137,6 +157,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     environment:
       <<: *sohwe-env
     # The worker needs the host Docker daemon to build user images and manage
