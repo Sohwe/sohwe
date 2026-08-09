@@ -58,12 +58,14 @@ pnpm db:push
 pnpm dev
 ```
 
-Validation: `pnpm build`, `pnpm typecheck`, `pnpm lint` — all three cover every workspace package.
+Validation: `pnpm build`, `pnpm typecheck`, `pnpm lint`, `pnpm test` — all cover every workspace package (`test` runs only where a `test` script exists).
 Database: `pnpm db:generate`, `pnpm db:push`, `pnpm db:studio`
 
 ESLint uses flat config. The root `eslint.config.mjs` covers `apps/api`, `apps/worker`, and all of `packages/` (Node globals, no React); ESLint finds it by walking up from each package, so a new package needs only `"lint": "eslint ."` and no config of its own. `apps/dashboard` keeps its own `eslint.config.js` (browser globals + React plugins), which wins for that directory.
 
-**CI:** `.github/workflows/ci.yml` runs on every push to `main` and every pull request. Three jobs: `verify` (typecheck + lint + build across all workspaces), `migrations` (replays the committed Prisma migrations against a real Postgres 16 on both the fresh-install and the pre-v0.3.8 upgrade path, asserting no drift and no data loss), and `scripts` (shellcheck + bash syntax + an LF-ending guard for the installer and host CLI). `.github/workflows/release.yml` is separate and only builds/publishes images on `v*` tags. There are still **no unit tests** in any workspace package — `packages/crypto` and `packages/bundler` are the highest-value gap. If you add tests, wire them into the `verify` job and document the command here and in `README.md`.
+**CI:** `.github/workflows/ci.yml` runs on every push to `main` and every pull request. Three jobs: `verify` (typecheck + lint + build + test across all workspaces), `migrations` (replays the committed Prisma migrations against a real Postgres 16 on both the fresh-install and the pre-v0.3.8 upgrade path, asserting no drift and no data loss), and `scripts` (shellcheck + bash syntax + an LF-ending guard for the installer and host CLI). `.github/workflows/release.yml` is separate and only builds/publishes images on `v*` tags.
+
+**Tests:** unit tests use Node's built-in runner (`node:test`) executed through `tsx`; a package opts in with a `test` script (`node --import tsx --test src/index.test.ts`) and `turbo run test` picks it up. Currently `@sohwe/crypto` and `@sohwe/bundler` have tests (`src/index.test.ts`). Test files live under `src/`, so they are also typechecked by `build`/`typecheck` — keep them strict-clean (`noUncheckedIndexedAccess`). `apps/*` and the remaining packages have no tests yet. Add tests as `src/**/*.test.ts` in the relevant package; no new config is needed.
 
 ## Environment
 
@@ -125,7 +127,7 @@ Never commit real secrets or generated env files.
 ### Backups and Bundles
 
 - Bundles are **config-only**: app settings, volume *definitions* (mount paths, not data), alert destinations, and optionally re-encrypted env vars. No git mirrors, no volume data. Do not quietly widen this scope.
-- `packages/bundler` derives a key from the user passphrase via scrypt, AES-256-GCM-encrypts env vars, and HMAC-SHA256-signs the manifest. Any change to bundle layout is a compatibility break - version it and note it in `CHANGELOG.md`.
+- `packages/bundler` derives a key from the user passphrase via scrypt, AES-256-GCM-encrypts env vars, and HMAC-SHA256-signs the manifest. Any change to bundle layout is a compatibility break - version it and note it in `CHANGELOG.md`. A frozen **golden bundle** in `packages/bundler/src/index.test.ts` must keep parsing; if that test fails you have changed the on-disk format (KDF params, `canonicalize`, ciphertext layout, or schema) — bump `BUNDLE_VERSION` and add a migration path rather than editing the golden.
 - Restore is non-destructive by default: restored apps land in `idle` so nothing deploys and no ACME certs are requested until the user acts. Slug collisions are resolved by an explicit `rename` / `overwrite` / `skip` policy chosen after preflight.
 - Preflight summaries report env var *key counts*, never values.
 - Scheduled exports run on a BullMQ tick job owned by the worker (`apps/worker/src/backups.ts`); use the `BACKUP_*` constants from `@sohwe/queue`.

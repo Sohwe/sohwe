@@ -18,6 +18,10 @@ write-ups.
 - **Configurable CORS; no dev origin shipped to production.** The API's allowed CORS origin is read from the optional `SOHWE_CORS_ORIGIN` (comma-separated list, or `*`). When unset it defaults to disabled under `NODE_ENV=production` (the dashboard is same-origin through nginx) and to `http://localhost:3000` otherwise. Previously `http://localhost:3000` was hardcoded into the production image.
 - **Expired sessions are swept.** The API deletes expired session rows on boot and hourly thereafter, so the table no longer accumulates 30-day-lived rows indefinitely. Expiry was already enforced at read time; this reclaims the storage.
 
+### Tests
+
+- **First unit tests, on the crypto and bundle-format code.** `@sohwe/crypto` (32 tests: encrypt/decrypt round-trips, GCM tamper/wrong-key rejection, `decryptJson` validation, scrypt key derivation, HMAC verification) and `@sohwe/bundler` (17 tests: canonicalization, build/parse round-trips, wrong-passphrase and tamper rejection) now have tests using Node's built-in runner via `tsx`, run by `pnpm test` and wired into the CI `verify` job. The bundler suite includes a **frozen golden bundle** produced by a real export, which must keep parsing forever — it fails loudly if the on-disk bundle format changes incompatibly, protecting cross-instance restore.
+
 ### Changed
 
 - **Versioned database migrations replace `db push --accept-data-loss`.** `sohwe migrate` — which `sohwe update` and the installer both call — now runs `prisma migrate deploy`, replaying reviewed SQL from the new `packages/db/prisma/migrations` directory instead of force-pushing the schema. Previously any upgrade that narrowed or removed a column would drop that column's data without prompting.

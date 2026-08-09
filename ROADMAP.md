@@ -411,9 +411,16 @@ CORS off in prod and scoped in dev, and the boot sweep deleting only the expired
 session. Evidence: `apps/api/src/env.ts`, `apps/api/src/session.ts`,
 `apps/api/src/setup-gate.ts`, `apps/api/src/index.ts`, `apps/worker/src/index.ts`.
 
+- [x] Unit tests for `packages/crypto` (32) and `packages/bundler` (17),
+      including a frozen golden bundle that pins the cross-instance format.
+      Run by `pnpm test` (Node's runner via `tsx`) and enforced in the CI
+      `verify` job. Evidence: `packages/crypto/src/index.test.ts`,
+      `packages/bundler/src/index.test.ts`, `.github/workflows/ci.yml`.
+
 Still open before a tag:
 
-- [ ] No unit tests anywhere. `packages/crypto` and `packages/bundler` are the
-      sharpest gap: the bundle format is a cross-instance compatibility contract
-      with nothing pinning it. (CI now replays migrations, but does not exercise
-      the crypto/bundle code.)
+- [ ] Broader test coverage. The API/worker route and deploy logic, and the
+      remaining `packages/*`, still have no tests; the crypto/bundle contract is
+      covered but the HTTP and Docker-orchestration paths are not.
+- [ ] Manual VPS smoke test (`docs/vps-smoke-test.md`): prove `sohwe update` and
+      the pre-v0.3.8 auto-baseline on a real Ubuntu host. Requires a VPS.

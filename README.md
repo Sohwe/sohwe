@@ -142,6 +142,7 @@ Use strong, unique values for secrets in any shared or deployed environment. The
 | `pnpm build` | Production build |
 | `pnpm lint` | Lint |
 | `pnpm typecheck` | Typecheck |
+| `pnpm test` | Run unit tests (Node's test runner via tsx; `@sohwe/crypto`, `@sohwe/bundler`) |
 | `pnpm db:generate` | `prisma generate` |
 | `pnpm db:migrate` | Create + apply a migration for a schema change (dev) |
 | `pnpm db:migrate:deploy` | Apply pending migrations without generating one |
