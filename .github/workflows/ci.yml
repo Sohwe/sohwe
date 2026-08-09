@@ -68,6 +68,11 @@ jobs:
       - name: Build
         run: pnpm build
 
+      # Unit tests (currently @sohwe/crypto and @sohwe/bundler). turbo runs the
+      # task only for packages that define it, so this covers whatever has tests.
+      - name: Test
+        run: pnpm test
+
   migrations:
     name: migrations
     runs-on: ubuntu-24.04
