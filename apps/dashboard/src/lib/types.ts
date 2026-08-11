@@ -27,6 +27,10 @@ export type AppRow = {
   slug: string;
   gitRepo: string;
   gitBranch: string;
+  /** `owner/repo` when the remote is GitHub; null otherwise. */
+  repoFullName: string | null;
+  /** Deploy on every push to `gitBranch`. */
+  autoDeploy: boolean;
   port: number;
   status: string;
   buildMode: string;
@@ -43,6 +47,8 @@ export type AppRow = {
     imageTag: string | null;
     commitSha: string | null;
     commitMessage: string | null;
+    /** manual | push | rollback */
+    trigger: string;
     errorMessage: string | null;
     createdAt: string;
     startedAt: string | null;
@@ -166,6 +172,39 @@ export type RestoreResult = {
   overwritten: number;
   skipped: number;
   renamed: number;
+};
+
+/** Connection state of this instance's GitHub App. Never carries secrets. */
+export type GitHubAppStatus = {
+  connected: boolean;
+  /** Origin used to build the app manifest's webhook and redirect URLs. */
+  publicUrl: string;
+  /** False when `publicUrl` was guessed from the request rather than configured. */
+  publicUrlConfigured: boolean;
+  webhookUrl: string;
+  app: {
+    appId: number;
+    slug: string;
+    name: string;
+    htmlUrl: string;
+    ownerLogin: string | null;
+    installed: boolean;
+    installationId: number | null;
+    installedAt: string | null;
+    createdAt: string;
+    installUrl: string;
+  } | null;
+};
+
+export type GitHubRepo = {
+  id: number;
+  fullName: string;
+  name: string;
+  owner: string;
+  private: boolean;
+  defaultBranch: string;
+  htmlUrl: string;
+  cloneUrl: string;
 };
 
 export type FsListEntry = { name: string; kind: "file" | "dir" | "symlink" };

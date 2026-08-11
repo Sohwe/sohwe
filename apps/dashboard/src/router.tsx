@@ -16,6 +16,7 @@ import { AppMetricsPage } from "@/routes/app.$appId.metrics";
 import { AppFilesPage } from "@/routes/app.$appId.files";
 import { AppSettingsPage } from "@/routes/app.$appId.settings";
 import { BackupsPage } from "@/routes/backups";
+import { GitPage } from "@/routes/git";
 import { DeploymentsPage } from "@/components/apps/DeploymentsPage";
 
 const rootRoute = createRootRouteWithContext<{ queryClient: QueryClient }>()({
@@ -109,6 +110,12 @@ const backupsRoute = createRoute({
   component: BackupsPage
 });
 
+const gitRoute = createRoute({
+  getParentRoute: () => authedLayoutRoute,
+  path: "git",
+  component: GitPage
+});
+
 const appIdIndexRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: "/",
@@ -196,7 +203,8 @@ const routeTree = rootRoute.addChildren([
         deploymentsLayoutRoute.addChildren([deploymentsIndexRoute, deploymentsWithIdRoute])
       ])
     ]),
-    backupsRoute
+    backupsRoute,
+    gitRoute
   ])
 ]);
 
