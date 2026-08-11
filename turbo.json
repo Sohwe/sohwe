@@ -9,6 +9,15 @@
       },
       "lint": {},
       "typecheck": { "dependsOn": ["^build"], "passThroughEnv": ["DATABASE_URL"] },
-      "test": {}
+      "test": {
+        "dependsOn": ["^build"],
+        "passThroughEnv": [
+          "DATABASE_URL",
+          "REDIS_URL",
+          "SESSION_SECRET",
+          "SOHWE_ENCRYPTION_KEY",
+          "TEST_DATABASE_URL"
+        ]
+      }
     }
   }

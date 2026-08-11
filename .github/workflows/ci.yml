@@ -6,7 +6,8 @@ name: ci
 ## `v*` tag -- and that only builds Docker images, so a workspace could be broken
 ## on main for a long time without anyone noticing. Three jobs run in parallel:
 ##
-##   verify      -- typecheck, lint, build across every workspace package
+##   verify      -- typecheck, lint, build, and test across every workspace
+##                  package (with a Postgres service for the API route tests)
 ##   migrations  -- replays the committed Prisma migrations against a real
 ##                  Postgres, on both the fresh-install and the upgrade path
 ##   scripts     -- shellcheck + bash syntax for the installer and host CLI
@@ -29,15 +30,50 @@ permissions:
 
 jobs:
   verify:
-    name: typecheck / lint / build
+    name: typecheck / lint / build / test
     runs-on: ubuntu-24.04
+
+    # The API's route tests drive real HTTP requests through `app.inject()`
+    # against a real schema, so this job needs a throwaway database. They skip
+    # themselves when TEST_DATABASE_URL is unset, which is what lets a
+    # contributor run `pnpm test` locally without Docker.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: sohwe
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: sohwe_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sohwe -d sohwe_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      # The API's route modules open a BullMQ queue and a stats client at
+      # import. Nothing in the tests enqueues a job, but without a reachable
+      # Redis the run fills with ioredis connection errors.
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     env:
       # `prisma generate` and `prisma validate` resolve env("DATABASE_URL") from
-      # the schema's datasource block, but neither opens a connection. Nothing in
-      # this job talks to a database, so a placeholder is enough -- and it keeps
-      # the job free of a Postgres service it would otherwise only start to be
-      # ignored. The `migrations` job below is where a real database is used.
-      DATABASE_URL: postgresql://placeholder:placeholder@127.0.0.1:5432/placeholder
+      # the schema's datasource block. Typecheck/lint/build never connect; the
+      # test step below points this at the service container.
+      DATABASE_URL: postgresql://sohwe:password@localhost:5432/sohwe_test
+      TEST_DATABASE_URL: postgresql://sohwe:password@localhost:5432/sohwe_test
+      # The route tests build a real server, which validates its environment.
+      SESSION_SECRET: ci-session-secret-not-a-real-secret
+      SOHWE_ENCRYPTION_KEY: TAgYPU5f0vJHXLwEsWZQjJKQ5S1kkm3ykhFnrEcm5xE=
+      REDIS_URL: redis://127.0.0.1:6379
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -68,8 +104,13 @@ jobs:
       - name: Build
         run: pnpm build
 
-      # Unit tests (currently @sohwe/crypto and @sohwe/bundler). turbo runs the
-      # task only for packages that define it, so this covers whatever has tests.
+      # The API route tests run against a real schema, so apply the migrations
+      # to the service container first.
+      - name: Prepare test database
+        run: pnpm db:migrate:deploy
+
+      # turbo runs the task only for packages that define it, so this covers
+      # whatever has tests.
       - name: Test
         run: pnpm test
 

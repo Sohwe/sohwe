@@ -11,10 +11,12 @@
   "scripts": {
     "lint": "eslint .",
     "build": "tsc --noEmit",
+    "test": "node --import tsx --test src/index.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "tsx": "^4.15.0",
     "typescript": "^5.5.0"
   }
 }
