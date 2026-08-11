@@ -18,6 +18,7 @@ model Organization {
   bundles            Bundle[]
   backupSchedules    BackupSchedule[]
   githubApp          GitHubApp?
+  webhookDeliveries  WebhookDelivery[]
 
   @@map("organizations")
 }
@@ -158,6 +159,42 @@ model GitHubApp {
 
   @@index([appId])
   @@map("github_apps")
+}
+
+// Inbound GitHub webhook deliveries, kept so a push that did not deploy can be
+// diagnosed without reading server logs. Deliveries are recorded on every path
+// including rejection, because a mismatched webhook secret is the most common
+// reason a push silently does nothing.
+//
+// Nothing from an unverified payload is stored. Rejected rows carry only the
+// headers GitHub sends in the clear (event name, delivery id) and the outcome;
+// repo, branch, and commit are populated only after the HMAC verifies.
+model WebhookDelivery {
+  id             String        @id @default(uuid())
+  /// Null when the signature did not verify: an unverifiable delivery cannot be
+  /// attributed to an organization, since the payload naming it is untrusted.
+  organizationId String?       @map("organization_id")
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  /// X-GitHub-Delivery, for cross-referencing GitHub's own delivery list.
+  deliveryId     String?       @map("delivery_id")
+  /// X-GitHub-Event ("push", "ping", "installation", ...). "" when absent.
+  event          String
+  /// Whether X-Hub-Signature-256 matched a connected App's secret.
+  verified       Boolean
+  /// rejected | ignored | accepted | error
+  outcome        String
+  /// Short, non-sensitive explanation of the outcome, shown in the UI.
+  detail         String?       @db.Text
+  repoFullName   String?       @map("repo_full_name")
+  branch         String?
+  commitSha      String?       @map("commit_sha")
+  /// Deploys enqueued by this delivery.
+  deployCount    Int           @default(0) @map("deploy_count")
+  createdAt      DateTime      @default(now()) @map("created_at")
+
+  @@index([organizationId, createdAt])
+  @@index([createdAt])
+  @@map("webhook_deliveries")
 }
 
 // --- Phase 4.5: Portable config bundles ------------------------------------

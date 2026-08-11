@@ -134,6 +134,10 @@ const ManifestCallbackQuery = z.object({
   state: z.string().min(1).optional()
 });
 
+const DeliveriesQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(200).default(50)
+});
+
 const SetupCallbackQuery = z.object({
   installation_id: z.coerce.number().int().positive().optional(),
   setup_action: z.string().max(50).optional()
@@ -403,6 +407,49 @@ export async function registerGitHubRoutes(
         resolved.token.token
       );
       return { repositories };
+    }
+  );
+
+  /**
+   * Recent inbound webhook deliveries, for diagnosing a push that did not
+   * deploy.
+   *
+   * Rejected deliveries have no organization — the payload naming one is
+   * unverified — so they are returned alongside this org's rows. That is safe
+   * because a rejected row stores nothing but GitHub's clear-text headers and
+   * an outcome, and it is the whole point of the view: a wrong webhook secret
+   * would otherwise show up as complete silence.
+   */
+  app.get(
+    "/api/github/deliveries",
+    {
+      preHandler: [authPreHandler],
+      schema: { querystring: DeliveriesQuery }
+    },
+    async (req) => {
+      const u = req.user!;
+      const { limit } = DeliveriesQuery.parse(req.query);
+      const deliveries = await prisma.webhookDelivery.findMany({
+        where: {
+          OR: [{ organizationId: u.organizationId }, { organizationId: null }]
+        },
+        orderBy: { createdAt: "desc" },
+        take: limit,
+        select: {
+          id: true,
+          deliveryId: true,
+          event: true,
+          verified: true,
+          outcome: true,
+          detail: true,
+          repoFullName: true,
+          branch: true,
+          commitSha: true,
+          deployCount: true,
+          createdAt: true
+        }
+      });
+      return { deliveries };
     }
   );
 

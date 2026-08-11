@@ -145,6 +145,14 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
   const sel20 = defaultApplicationSelect(20);
   const sel30 = defaultApplicationSelect(30);
 
+  // The deploy queue and the stats client are opened at module load and would
+  // otherwise keep the process alive after `app.close()` — which SIGTERM calls,
+  // and which a test run needs in order to exit at all.
+  app.addHook("onClose", async () => {
+    await deployQueue.close().catch(() => {});
+    statsRedis.disconnect();
+  });
+
   app.post(
     "/api/applications",
     {
