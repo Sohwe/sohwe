@@ -25,8 +25,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { Field } from "@/components/common/Field";
 import { api, apiGet } from "@/lib/api";
-import { formatRelativeTime } from "@/lib/format";
-import type { GitHubAppStatus, GitHubRepo } from "@/lib/types";
+import { formatRelativeTime, shortCommitSha } from "@/lib/format";
+import type { GitHubAppStatus, GitHubRepo, WebhookDelivery } from "@/lib/types";
 
 /**
  * The manifest flow needs a real browser form POST to github.com, so "Connect"
@@ -182,6 +182,99 @@ function RepositoryList() {
   );
 }
 
+const OUTCOME_STYLE: Record<
+  WebhookDelivery["outcome"],
+  { label: string; className: string }
+> = {
+  accepted: { label: "Deployed", className: "text-emerald-500" },
+  ignored: { label: "No action", className: "text-muted-foreground" },
+  rejected: { label: "Rejected", className: "text-destructive" },
+  error: { label: "Error", className: "text-destructive" }
+};
+
+/**
+ * Recent webhook deliveries.
+ *
+ * Without this, a push that does not deploy gives the operator nothing to go
+ * on: GitHub reports a 2xx, Sohwe does nothing, and the reason (wrong secret,
+ * untracked branch, auto-deploy off) lives only in the API's stdout.
+ */
+function DeliveryLog() {
+  const q = useQuery({
+    queryKey: ["github", "deliveries"],
+    queryFn: () => apiGet<{ deliveries: WebhookDelivery[] }>("/api/github/deliveries"),
+    refetchInterval: 15_000
+  });
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-start justify-between gap-2 space-y-0">
+        <div>
+          <CardTitle className="text-base">Recent deliveries</CardTitle>
+          <CardDescription>
+            What GitHub sent this instance and what Sohwe did with it. An empty
+            list after a push means the delivery never arrived — check the
+            webhook URL and that this host is reachable from the internet.
+          </CardDescription>
+        </div>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 shrink-0"
+          title="Refresh"
+          onClick={() => void q.refetch()}
+        >
+          <RefreshCw className={`h-4 w-4 ${q.isFetching ? "animate-spin" : ""}`} />
+        </Button>
+      </CardHeader>
+      <CardContent>
+        {q.isLoading ? <p className="text-sm text-muted-foreground">Loading…</p> : null}
+        {q.isError ? (
+          <p className="text-sm text-destructive">Could not load deliveries.</p>
+        ) : null}
+        {q.data ? (
+          q.data.deliveries.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No deliveries recorded yet. GitHub sends a ping as soon as the app
+              is installed.
+            </p>
+          ) : (
+            <ul className="divide-y divide-border text-sm">
+              {q.data.deliveries.map((d) => {
+                const style = OUTCOME_STYLE[d.outcome];
+                return (
+                  <li key={d.id} className="py-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className={`text-xs font-medium ${style.className}`}>
+                        {style.label}
+                      </span>
+                      <code className="text-xs">{d.event || "—"}</code>
+                      {d.repoFullName ? (
+                        <span className="min-w-0 truncate text-xs text-muted-foreground">
+                          {d.repoFullName}
+                          {d.branch ? `@${d.branch}` : ""}
+                          {d.commitSha ? ` ${shortCommitSha(d.commitSha)}` : ""}
+                        </span>
+                      ) : null}
+                      <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                        {formatRelativeTime(d.createdAt)}
+                      </span>
+                    </div>
+                    {d.detail ? (
+                      <p className="mt-0.5 text-xs text-muted-foreground">{d.detail}</p>
+                    ) : null}
+                  </li>
+                );
+              })}
+            </ul>
+          )
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
 function ConnectedCard({ status }: { status: GitHubAppStatus }) {
   const queryClient = useQueryClient();
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
@@ -282,6 +375,7 @@ function ConnectedCard({ status }: { status: GitHubAppStatus }) {
       </Card>
 
       {app.installed ? <RepositoryList /> : null}
+      <DeliveryLog />
 
       <ConfirmDialog
         open={confirmDisconnect}

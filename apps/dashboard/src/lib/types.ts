@@ -196,6 +196,25 @@ export type GitHubAppStatus = {
   } | null;
 };
 
+/**
+ * One recorded inbound webhook delivery. Rejected deliveries carry only the
+ * headers GitHub sends in the clear — nothing from an unverified payload.
+ */
+export type WebhookDelivery = {
+  id: string;
+  /** X-GitHub-Delivery, matches the id in GitHub's own delivery list. */
+  deliveryId: string | null;
+  event: string;
+  verified: boolean;
+  outcome: "rejected" | "ignored" | "accepted" | "error";
+  detail: string | null;
+  repoFullName: string | null;
+  branch: string | null;
+  commitSha: string | null;
+  deployCount: number;
+  createdAt: string;
+};
+
 export type GitHubRepo = {
   id: number;
   fullName: string;

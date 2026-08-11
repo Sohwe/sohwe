@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { MoreHorizontal } from "lucide-react";
+import { Loader2, MoreHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -9,7 +9,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger
 } from "@/components/ui/dropdown-menu";
-import { deploymentResultLabel, formatDuration, formatRelativeTime, shortCommitSha, shortDepId, truncMsg } from "@/lib/format";
+import { deploymentResultLabel, formatDuration, formatRelativeTime, shortCommitSha, shortDepId, triggerLabel, truncMsg } from "@/lib/format";
 import type { AppRow } from "@/lib/types";
 import { getCurrentDeploymentId } from "@/lib/types";
 
@@ -60,11 +60,17 @@ export function DeploymentsTable({
                     <div className="flex flex-wrap items-center gap-1.5">
                       <span className="font-mono text-sm font-medium">{shortDepId(d.id)}</span>
                       {isCurrent ? <Badge>Current</Badge> : null}
+                      {d.trigger !== "manual" ? (
+                        <Badge variant="secondary">{triggerLabel(d.trigger)}</Badge>
+                      ) : null}
                     </div>
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-1.5">
-                      <span className="text-sm">{res.text}</span>
+                      <span className={`text-sm font-medium ${res.className}`}>{res.text}</span>
+                      {d.status === "pending" || d.status === "building" ? (
+                        <Loader2 className="h-3 w-3 animate-spin text-amber-500" aria-hidden />
+                      ) : null}
                     </div>
                     <p className="mt-0.5 font-mono text-xs text-muted-foreground">
                       {formatDuration(d.startedAt, d.finishedAt)}
@@ -124,7 +130,12 @@ export function DeploymentsTable({
                   <p className="font-mono text-xs">
                     {shortDepId(d.id)} {isCurrent ? <Badge className="ml-1">Current</Badge> : null}
                   </p>
-                  <p className={`mt-1 text-xs font-medium ${res.className}`}>{res.text}</p>
+                  <p className={`mt-1 flex items-center gap-1.5 text-xs font-medium ${res.className}`}>
+                    {res.text}
+                    {d.status === "pending" || d.status === "building" ? (
+                      <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+                    ) : null}
+                  </p>
                 </div>
                 <Button size="sm" variant="secondary" disabled={actionsDisabled} onClick={() => onViewLog(d.id)}>
                   Log

@@ -4,6 +4,7 @@ import { useParams } from "@tanstack/react-router";
 import { PageHeader } from "@/components/common/PageHeader";
 import { RuntimeLogViewer } from "@/components/apps/RuntimeLogViewer";
 import { BuildLogViewer } from "@/components/apps/BuildLogViewer";
+import { BuildFailureSummary } from "@/components/apps/BuildFailureSummary";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
@@ -25,10 +26,10 @@ export function AppLogsPage() {
   const app = appsQuery.data?.find((a) => a.id === appId);
   const isRunning = app?.status === "running";
 
-  const lastDeploymentId = app?.deployments?.length
+  const lastDeployment = app?.deployments?.length
     ? [...app.deployments].sort(
         (a, b) => +new Date(b.createdAt) - +new Date(a.createdAt)
-      )[0]?.id
+      )[0]
     : undefined;
 
   return (
@@ -68,9 +69,16 @@ export function AppLogsPage() {
         </Button>
       </div>
       {view === "runtime" ? (
-        <RuntimeLogViewer appId={appId} />
-      ) : lastDeploymentId ? (
-        <BuildLogViewer deploymentId={lastDeploymentId} />
+        <RuntimeLogViewer appId={appId} appSlug={app?.slug} />
+      ) : lastDeployment ? (
+        <div className="space-y-3">
+          <BuildFailureSummary deployment={lastDeployment} />
+          <BuildLogViewer
+            deploymentId={lastDeployment.id}
+            status={lastDeployment.status}
+            className="h-[min(70vh,560px)]"
+          />
+        </div>
       ) : (
         <p className="text-sm text-muted-foreground">
           No deployments yet. Deploy the app to see build logs.

@@ -52,6 +52,35 @@ export function formatBytes(bytes: number): string {
   return `${v >= 100 || i === 0 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
 }
 
+/** What started a deployment: `manual`, `push`, or `rollback`. */
+export function triggerLabel(trigger: string): string {
+  if (trigger === "push") return "Triggered by push";
+  if (trigger === "rollback") return "Roll back";
+  if (trigger === "manual") return "Manual deploy";
+  return trigger;
+}
+
+/**
+ * When a deployment ran, phrased for whichever stage it is in. A queued
+ * deployment has no start time and a running one has no end, so the generic
+ * "started → finished" duration reads as "—" for exactly the states a user is
+ * most likely to be staring at.
+ */
+export function formatDeploymentTiming(d: {
+  status: string;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+}): string {
+  if (d.status === "pending") return `Queued ${formatRelativeTime(d.createdAt)}`;
+  if (d.status === "building") {
+    return d.startedAt ? `Started ${formatRelativeTime(d.startedAt)}` : "Starting…";
+  }
+  const dur = formatDuration(d.startedAt, d.finishedAt);
+  const when = formatRelativeTime(d.finishedAt ?? d.createdAt);
+  return dur === "—" ? when : `${when} · took ${dur}`;
+}
+
 export function deploymentResultLabel(status: string): {
   text: string;
   className: string;

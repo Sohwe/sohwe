@@ -2,8 +2,10 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams, useRouter } from "@tanstack/react-router";
 import { toast } from "sonner";
+import { BuildFailureSummary } from "./BuildFailureSummary";
 import { BuildLogViewer, DeploymentStatusLine } from "./BuildLogViewer";
 import { DeploymentsTable } from "./DeploymentsTable";
+import { formatDeploymentTiming, triggerLabel } from "@/lib/format";
 import { PageHeader } from "@/components/common/PageHeader";
 import { api } from "@/lib/api";
 import type { AppRow } from "@/lib/types";
@@ -83,15 +85,21 @@ export function DeploymentsPage() {
             {watchDep ? (
               <div className="space-y-1 text-left text-xs text-muted-foreground">
                 <DeploymentStatusLine status={watchDep.status} />
-                {watchDep.status === "failed" && watchDep.errorMessage ? (
-                  <p className="text-destructive">{watchDep.errorMessage}</p>
-                ) : null}
+                <p>
+                  {formatDeploymentTiming(watchDep)}
+                  {watchDep.trigger ? ` · ${triggerLabel(watchDep.trigger)}` : ""}
+                </p>
               </div>
             ) : null}
           </SheetHeader>
           {deploymentId ? (
-            <div className="min-h-0 flex-1 overflow-hidden p-4">
-              <BuildLogViewer deploymentId={deploymentId} className="h-[min(70vh,480px)] border-0" />
+            <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
+              <BuildFailureSummary deployment={watchDep} />
+              <BuildLogViewer
+                deploymentId={deploymentId}
+                status={watchDep?.status}
+                className="h-[min(70vh,480px)] shrink-0"
+              />
             </div>
           ) : null}
         </SheetContent>
