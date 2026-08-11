@@ -121,6 +121,15 @@ State lives entirely under `/etc/sohwe/`. Postgres data and Let's Encrypt certs 
 
 Use strong, unique values for secrets in any shared or deployed environment. The API validates its environment at boot and refuses to start if `SESSION_SECRET` (min 16 chars) or `SOHWE_ENCRYPTION_KEY` (32 bytes, base64) is missing or malformed. `SOHWE_CORS_ORIGIN` is optional — leave it unset in production (the dashboard is same-origin through nginx). `SOHWE_PUBLIC_URL` is optional too, but GitHub push deploys need it: it becomes the GitHub App's webhook URL, so local development requires a tunnel (cloudflared, ngrok, tailscale funnel) pointed at the dashboard. The getting-started doc shows the expected variable names and example connection strings.
 
+HTTPS for deployed apps is driven by two variables, both set in `/etc/sohwe/sohwe.env` on a production install:
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `SOHWE_HTTPS_ENABLED` | `false` (`true` when the installer was given a dashboard domain) | Opts deployed apps into TLS Traefik labels, and sets the `Secure` flag on auth cookies. Leave it `false` for HTTP-only installs, or browsers refuse to store the login cookie. |
+| `SOHWE_CERT_RESOLVER` | `letsencrypt` | Name of the Traefik ACME resolver put on those TLS labels. The default matches the resolver `docker-compose.prod.yml` declares; change it only alongside a compose override that declares a resolver by the new name. |
+
+Certificates are only requested for apps on a real public domain — Let's Encrypt will not issue for `.localhost` or `.local`, so those are skipped even when HTTPS is on.
+
 ### Repository layout
 
 | Path | Role |

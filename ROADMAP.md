@@ -2,7 +2,7 @@
 
 Current snapshot: latest tag is **v0.3.8**; Phases 4, 4.5, and 5 are implemented on `main` but untagged.
 
-Phases 0 through 5 are implemented in the repo. **Phase 4 - Observability** covers runtime logs, live metrics, and crash alerts. **Phase 4.5 - Portable Bundles** is feature-complete: signed config + re-encrypted env var bundles, local + S3-compatible + download destinations, restore preflight/apply, scheduled exports with cron + retention (worker-driven), and the org-level Backups UI. **Phase 5 - Git-Push Deploys** is implemented: per-instance GitHub App via the manifest flow, installation-token clones for private repos, a signature-verified push webhook, the auto-deploy toggle, and commit-status reporting. Three Phase 3.5 items remain as manual VPS verification (see `docs/vps-smoke-test.md`), and Phase 5 has its own manual end-to-end check. Next unbuilt milestone is **Phase 6 - Multi-User**.
+Phases 0 through 5 are implemented in the repo. **Phase 4 - Observability** covers runtime logs, live metrics, and crash alerts. **Phase 4.5 - Portable Bundles** is feature-complete: signed config + re-encrypted env var bundles, local + S3-compatible + download destinations, restore preflight/apply, scheduled exports with cron + retention (worker-driven), and the org-level Backups UI. **Phase 5 - Git-Push Deploys** is implemented: per-instance GitHub App via the manifest flow, installation-token clones for private repos, a signature-verified push webhook, the auto-deploy toggle, and commit-status reporting. The v0.4.3 build-log UX slice is also done: bounded build-log storage, derived failure summaries, copy/download, and clearer deployment states. Three Phase 3.5 items remain as manual VPS verification (see `docs/vps-smoke-test.md`), and Phase 5 has its own manual end-to-end check. Next unbuilt milestone is **Phase 6 - Multi-User**.
 
 This file is a working checklist. It is based on `README.md`, `CHANGELOG.md`, `sohwe-getting-started.md`, `sohwe-prd.md`, and a code scan across the API, worker, dashboard, Docker, installer, and release workflow.
 
@@ -128,11 +128,14 @@ Suggested release: **v0.3.9**
 - [x] API exposes `GET /api/config`.
 - [x] Dashboard uses runtime config for generated app URLs.
 - [x] Worker uses `SOHWE_BASE_DOMAIN` for Traefik default hosts.
-- [ ] Run `pnpm typecheck`.
-- [ ] Run `pnpm lint`.
-- [ ] Run `pnpm build`.
+- [x] Run `pnpm typecheck`.
+- [x] Run `pnpm lint`.
+- [x] Run `pnpm build`.
 - [ ] Smoke-test dashboard URL display against a real/custom base domain.
-- [ ] Update docs if the installer prompt text or env behavior changed.
+- [x] Update docs if the installer prompt text or env behavior changed.
+      (`SOHWE_CERT_RESOLVER` threaded through `scripts/install.sh` and
+      `docker-compose.prod.yml`; it and `SOHWE_HTTPS_ENABLED` documented in
+      `README.md`)
 - [ ] Tag/release `v0.3.9`.
 
 Evidence: `CHANGELOG.md`, `apps/api/src/index.ts`, `apps/dashboard/src/lib/config.ts`, `apps/worker/src/index.ts`, `docker-compose.prod.yml`, `scripts/install.sh`.
@@ -219,7 +222,9 @@ Remaining manual verification:
 
 Known follow-ups (not blockers):
 
-- [ ] No webhook delivery log; debugging a missed push relies on API logs.
+- [x] Webhook delivery log. (`WebhookDelivery` model, recorded on every path by
+      `apps/api/src/webhook-deliveries.ts`, exposed at `GET /api/github/deliveries`,
+      shown in a Recent deliveries panel in `apps/dashboard/src/routes/git.tsx`)
 - [ ] GitHub only. GitLab/Gitea would need a separate credential and webhook path.
 
 ## Not Yet Built
@@ -287,10 +292,10 @@ Open design questions:
 - [ ] Verify installer prompt/non-interactive env for `SOHWE_BASE_DOMAIN`.
 - [ ] Verify production compose passes the value to API and worker.
 - [ ] Verify dashboard app URLs update without rebuilding the dashboard.
-- [ ] Update docs if install behavior changed.
-- [ ] Run `pnpm typecheck`.
-- [ ] Run `pnpm lint`.
-- [ ] Run `pnpm build`.
+- [x] Update docs if install behavior changed.
+- [x] Run `pnpm typecheck`.
+- [x] Run `pnpm lint`.
+- [x] Run `pnpm build`.
 - [ ] Smoke test a fresh install or staging instance.
 - [ ] Tag `v0.3.9`.
 
@@ -324,11 +329,16 @@ Open design questions:
 ### v0.4.3 - Build Log UX Polish
 
 - [x] Last-deploy build logs reachable from the app Logs tab.
-- [ ] Better failed build summaries.
-- [ ] Copy build logs.
-- [ ] Download build logs.
-- [ ] Clearer queued/building/success/failed states.
-- [ ] Log size cap or truncation strategy.
+- [x] Better failed build summaries. (`apps/worker/src/build-failure.ts` derives a
+      cause from the log tail into `Deployment.errorMessage`;
+      `apps/dashboard/src/components/apps/BuildFailureSummary.tsx` renders it)
+- [x] Copy build logs. (`apps/dashboard/src/components/apps/LogPane.tsx`)
+- [x] Download build logs. (same component; runtime logs share it)
+- [x] Clearer queued/building/success/failed states. (coloured status + spinner in
+      `DeploymentsTable.tsx`, trigger badge, `DeploymentStatusLine` in
+      `BuildLogViewer.tsx`, `formatDeploymentTiming` in `lib/format.ts`)
+- [x] Log size cap or truncation strategy. (`apps/worker/src/build-log.ts`: 512 KiB
+      cap, 128 KiB head + 384 KiB tail, in-database append instead of read-modify-write)
 
 ### v0.5.0 - Portable Config Bundles
 
@@ -373,7 +383,7 @@ Cut a release. A large amount of shipped work (Phases 4 and 4.5) sits untagged o
 `main` behind `v0.3.8`, so the published install is far behind the code.
 
 - [x] Adopt a versioned Prisma migration pipeline (was the blocking risk below).
-- [x] Run `pnpm typecheck`, `pnpm lint`, `pnpm build`.
+- [x] Run `pnpm typecheck`, `pnpm lint`, `pnpm build`, `pnpm test` (186 tests).
 - [ ] Work through `docs/vps-smoke-test.md` to close the three open Phase 3.5 items.
 - [ ] Decide the version number (the release sequence above implies the base-domain
       change is v0.3.9, but observability + bundles have since landed on top of it).
@@ -423,8 +433,18 @@ session. Evidence: `apps/api/src/env.ts`, `apps/api/src/session.ts`,
 
 Still open before a tag:
 
-- [ ] Broader test coverage. The API/worker route and deploy logic, and the
-      remaining `packages/*`, still have no tests; the crypto/bundle contract is
-      covered but the HTTP and Docker-orchestration paths are not.
+- [x] Broader test coverage. Every workspace package now has tests — 350 in
+      total. `apps/api` (81) includes HTTP-level route tests through
+      `app.inject()` against a real schema (auth, sessions, the setup gate,
+      organization scoping, secret non-disclosure); `apps/worker` (89) covers the
+      build log sink, the failure summarizer, and the full container spec
+      (Traefik labels, TLS opt-in, mounts, resource limits). Shared packages
+      cover request schemas, Docker naming, queue channel names, backup
+      destination resolution, and build-engine selection. The CI `verify` job
+      runs them against Postgres and Redis service containers.
+- [ ] Remaining untested surface: the worker's imperative Docker calls
+      (container create/start/remove, network attach, log tailing, stat
+      sampling) and the backup export/restore orchestration. Both need a Docker
+      double or a live daemon.
 - [ ] Manual VPS smoke test (`docs/vps-smoke-test.md`): prove `sohwe update` and
       the pre-v0.3.8 auto-baseline on a real Ubuntu host. Requires a VPS.

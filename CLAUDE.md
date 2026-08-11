@@ -65,9 +65,11 @@ Database: `pnpm db:generate`, `pnpm db:push`, `pnpm db:studio`
 
 ESLint uses flat config. The root `eslint.config.mjs` covers `apps/api`, `apps/worker`, and all of `packages/` (Node globals, no React); ESLint finds it by walking up from each package, so a new package needs only `"lint": "eslint ."` and no config of its own. `apps/dashboard` keeps its own `eslint.config.js` (browser globals + React plugins), which wins for that directory.
 
-**CI:** `.github/workflows/ci.yml` runs on every push to `main` and every pull request. Three jobs: `verify` (typecheck + lint + build + test across all workspaces), `migrations` (replays the committed Prisma migrations against a real Postgres 16 on both the fresh-install and the pre-v0.3.8 upgrade path, asserting no drift and no data loss), and `scripts` (shellcheck + bash syntax + an LF-ending guard for the installer and host CLI). `.github/workflows/release.yml` is separate and only builds/publishes images on `v*` tags.
+**CI:** `.github/workflows/ci.yml` runs on every push to `main` and every pull request. Three jobs: `verify` (typecheck + lint + build + test across all workspaces, with Postgres and Redis service containers for the API route tests), `migrations` (replays the committed Prisma migrations against a real Postgres 16 on both the fresh-install and the pre-v0.3.8 upgrade path, asserting no drift and no data loss), and `scripts` (shellcheck + bash syntax + an LF-ending guard for the installer and host CLI). `.github/workflows/release.yml` is separate and only builds/publishes images on `v*` tags.
 
-**Tests:** unit tests use Node's built-in runner (`node:test`) executed through `tsx`; a package opts in with a `test` script (`node --import tsx --test src/index.test.ts`) and `turbo run test` picks it up. Currently `@sohwe/crypto`, `@sohwe/bundler`, and `@sohwe/github` have tests (`src/index.test.ts`). Test files live under `src/`, so they are also typechecked by `build`/`typecheck` — keep them strict-clean (`noUncheckedIndexedAccess`). `apps/*` and the remaining packages have no tests yet. Add tests as `src/**/*.test.ts` in the relevant package; no new config is needed.
+**Tests:** unit tests use Node's built-in runner (`node:test`) executed through `tsx`; a package opts in with a `test` script listing its test files explicitly, and `turbo run test` picks it up. Every workspace package now has tests. Test files live under `src/`, so they are also typechecked by `build`/`typecheck` — keep them strict-clean (`noUncheckedIndexedAccess`). Add tests as `src/**/*.test.ts` in the relevant package and add the file to that package's `test` script; no new config is needed.
+
+`apps/api/src/routes.test.ts` drives real HTTP through `app.inject()` (via `buildServer` in `apps/api/src/server.ts`, which assembles the Fastify instance without binding a port). It needs a **throwaway** Postgres named by `TEST_DATABASE_URL` — it truncates every table between tests and deliberately will not fall back to `DATABASE_URL`. Without that variable the suite skips itself, so `pnpm test` still works with no Docker. CI's `verify` job supplies Postgres and Redis service containers. Any new env var the tests need must be added to `passThroughEnv` for the `test` task in `turbo.json`, or turbo will not forward it.
 
 ## Environment
 
@@ -100,12 +102,12 @@ Never commit real secrets or generated env files.
 
 ### API
 
-- Routes are registered from `apps/api/src/index.ts` via `register*Routes` functions; modules live in `apps/api/src/routes` (`applications`, `env-vars`, `volumes`, `alert-destinations`, `app-filesystem`, `backups`, `github`, `github-webhook`).
+- `apps/api/src/index.ts` is the process entrypoint only (env load, `listen`, boot tasks, SIGTERM). The Fastify instance is assembled by `buildServer` in `apps/api/src/server.ts` — put new routes and plugins there, so the server stays constructible without binding a port. Routes are registered via `register*Routes` functions; modules live in `apps/api/src/routes` (`applications`, `env-vars`, `volumes`, `alert-destinations`, `app-filesystem`, `backups`, `github`, `github-webhook`).
 - Protected routes use `authPreHandler` from `apps/api/src/session.ts` and scope every query by `req.user!.organizationId`. Backups routes are org-scoped, not app-scoped.
 - Never return `Application.envVarsEncrypted` from general endpoints. Use `defaultApplicationSelect` and `serializeAppListRow` from `apps/api/src/app-public.ts` unless a route deliberately deals in secrets.
 - Mutating env routes must not log request bodies. Preserve the existing `logLevel: "silent"` pattern when editing them.
 - Serialize BigInt values (e.g. volume `sizeBytes`) before JSON responses.
-- SSE build logs use Redis pub/sub plus stored `Deployment.buildLogs`; preserve replay-on-reconnect. Runtime log SSE (`GET /api/applications/:id/logs`) replays recent Docker logs then follows the Redis channel.
+- SSE build logs use Redis pub/sub plus stored `Deployment.buildLogs`; preserve replay-on-reconnect. Runtime log SSE (`GET /api/applications/:id/logs`) replays recent Docker logs then follows the Redis channel. The stored copy is capped and may be truncated (see `apps/worker/src/build-log.ts`) — do not assume it holds the whole build.
 - `GET /api/config` is public and allowed through the setup gate (`apps/api/src/setup-gate.ts`); it exists so the dashboard learns `SOHWE_BASE_DOMAIN` at runtime instead of baking it into the image.
 - Environment is validated at boot in `apps/api/src/env.ts` (`loadApiConfig`) and the API exits fast on a bad config. Read config from the returned `ApiConfig` (e.g. `config.corsOrigin`, `config.port`, `config.sessionSecret`) rather than re-reading `process.env` in `index.ts`. The worker has a matching boot check in `apps/worker/src/index.ts`.
 - The two unauthenticated credential endpoints (`/api/auth/login`, `/api/setup/unlock`) carry an opt-in per-route rate limit via `config: AUTH_RATE_LIMIT` (`@fastify/rate-limit` is registered with `global: false`). Keep new pre-auth endpoints rate-limited, and do not enable a global limit — it would throttle metrics polling and log SSE. The app runs with `trustProxy` so limits key off the forwarded client IP.
@@ -119,6 +121,7 @@ Never commit real secrets or generated env files.
   - volumes: `sohwe_app_<appId>_<volumeId>`
   - internal networks: `sohwe_app_<appId>_net`
 - Keep Sohwe labels on managed resources: `sohwe.managed`, `sohwe.app`, `sohwe.volume`, `sohwe.deployment`.
+- Routing decisions and the `docker.createContainer` argument live in `apps/worker/src/container-spec.ts` — Traefik labels, TLS opt-in, mounts, and resource limits. Keep that module pure (no I/O, no `process.env` reads) so it stays testable; the caller resolves the environment via `resolveRoutingConfig`. Traefik router names carry a digest of the full slug because sanitizing is lossy and two apps sharing a router name cross-route traffic.
 - Containers attach to the Traefik network *and* a per-app internal bridge network. Do not drop that isolation.
 - Log/stat channel and key names come from `@sohwe/queue` (`appLogChannelName`, `appStatsKey`); do not hand-build these strings.
 - Stats snapshots in Redis are short-TTL; a missing sample means "not running", not an error.
@@ -142,6 +145,7 @@ Never commit real secrets or generated env files.
 - Nothing in a webhook payload may be trusted before the HMAC verifies. Which app signed a delivery is unknowable beforehand, so each connected app's secret is tried.
 - Installation tokens are secrets. Never log a tokenized clone URL; run anything derived from a failed clone through `redactSecret` / `redactDeployError` first. Git echoes the remote in its error output.
 - Commit-status reporting is best-effort and must swallow its own failures — it can never fail a deploy.
+- Every delivery is recorded through `recordWebhookDelivery` (`apps/api/src/webhook-deliveries.ts`), including rejected ones — a wrong webhook secret is the most common cause of a silent missed push. Recording is best-effort and must never fail a delivery that would otherwise deploy. Rejected rows may only carry GitHub's clear-text headers; repo/branch/commit are populated after the HMAC verifies.
 - `SOHWE_PUBLIC_URL` is fixed into the App's webhook/redirect URLs at creation time. Changing it later requires recreating the App on GitHub.
 
 ### Database
