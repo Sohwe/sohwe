@@ -14,6 +14,8 @@ import {
   RollbackBodySchema,
   UpdateApplicationSchema
 } from "@sohwe/types";
+import { parseGitHubRepoUrl, repoFullName } from "@sohwe/github";
+import { loadGitHubApp } from "@sohwe/github/resolve";
 import Docker from "dockerode";
 import IORedis from "ioredis";
 import { z } from "zod";
@@ -117,6 +119,28 @@ async function removeDockerForApplication(
   }
 }
 
+/**
+ * Why auto-deploy cannot be turned on for this repo, or null when it can.
+ * Enabling it without a GitHub App installed would leave the toggle on and
+ * nothing ever deploying, which is worse than refusing.
+ */
+async function autoDeployBlocker(
+  organizationId: string,
+  repoName: string | null
+): Promise<string | null> {
+  if (!repoName) {
+    return "Auto-deploy needs a GitHub repository. This app's repo URL is not a GitHub remote.";
+  }
+  const githubApp = await loadGitHubApp(organizationId).catch(() => null);
+  if (!githubApp) {
+    return "Connect a GitHub App first (Settings -> Git) to enable auto-deploy.";
+  }
+  if (!githubApp.installationId) {
+    return "Install the GitHub App on your account first to enable auto-deploy.";
+  }
+  return null;
+}
+
 export async function registerApplicationRoutes(app: FastifyInstance) {
   const sel20 = defaultApplicationSelect(20);
   const sel30 = defaultApplicationSelect(30);
@@ -127,15 +151,28 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
       preHandler: [authPreHandler],
       schema: { body: CreateApplicationSchema }
     },
-    async (req, _reply) => {
+    async (req, reply) => {
       const u = req.user!;
       const body = CreateApplicationSchema.parse(req.body);
+
+      // Denormalized so push webhooks resolve with one indexed lookup; null for
+      // non-GitHub remotes, which simply never match a delivery.
+      const ref = parseGitHubRepoUrl(body.gitRepo);
+      const repoName = ref ? repoFullName(ref) : null;
+
+      if (body.autoDeploy) {
+        const blocker = await autoDeployBlocker(u.organizationId, repoName);
+        if (blocker) return reply.badRequest(blocker);
+      }
+
       const created = await prisma.application.create({
         data: {
           name: body.name,
           slug: body.slug,
           gitRepo: body.gitRepo,
           gitBranch: body.gitBranch,
+          repoFullName: repoName,
+          autoDeploy: body.autoDeploy,
           port: body.port,
           buildMode: body.buildMode,
           buildCmd: body.buildCmd ?? null,
@@ -184,6 +221,16 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
       }
       if (body.cpuLimit !== undefined) {
         data.cpuLimit = body.cpuLimit;
+      }
+      if (body.autoDeploy !== undefined) {
+        if (body.autoDeploy) {
+          const blocker = await autoDeployBlocker(
+            u.organizationId,
+            existing.repoFullName
+          );
+          if (blocker) return reply.badRequest(blocker);
+        }
+        data.autoDeploy = body.autoDeploy;
       }
 
       if (Object.keys(data).length === 0) {
@@ -310,7 +357,7 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
         return reply.badRequest("Source deployment is not a successful build");
       }
       const d = await prisma.deployment.create({
-        data: { applicationId: a.id, status: "pending" }
+        data: { applicationId: a.id, status: "pending", trigger: "rollback" }
       });
       await deployQueue.add(
         "promote",

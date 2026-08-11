@@ -49,7 +49,9 @@ export const CreateApplicationSchema = z.object({
   buildMode: z.enum(["auto", "dockerfile", "nixpacks"]).default("auto"),
   buildCmd: z.string().optional(),
   startCmd: z.string().optional(),
-  domain: OptionalDomain
+  domain: OptionalDomain,
+  /** Deploy on every push to `gitBranch` (Phase 5; needs a connected GitHub App). */
+  autoDeploy: z.boolean().default(false)
 });
 export type CreateApplicationInput = z.infer<typeof CreateApplicationSchema>;
 
@@ -74,7 +76,8 @@ export const UpdateApplicationSchema = z
       .optional(),
     cpuLimit: z
       .union([z.null(), z.coerce.number().min(0.1).max(64)])
-      .optional()
+      .optional(),
+    autoDeploy: z.boolean().optional()
   })
   .partial();
 export type UpdateApplicationInput = z.infer<typeof UpdateApplicationSchema>;

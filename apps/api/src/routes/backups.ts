@@ -3,6 +3,7 @@ import parser from "cron-parser";
 import { prisma } from "@sohwe/db";
 import { buildBundle, parseBundle } from "@sohwe/bundler";
 import { encryptJson } from "@sohwe/crypto";
+import { parseGitHubRepoUrl, repoFullName } from "@sohwe/github";
 import {
   describeDestination,
   encryptS3Credentials,
@@ -373,10 +374,15 @@ export async function registerBackupRoutes(app: FastifyInstance) {
             url: d.url,
             enabled: d.enabled
           }));
+          const restoredRef = parseGitHubRepoUrl(a.gitRepo);
           const scalars = {
             name: a.name,
             gitRepo: a.gitRepo,
             gitBranch: a.gitBranch,
+            // Derived, not carried in the bundle. `autoDeploy` deliberately
+            // stays off: a restored app must not start deploying on push
+            // against whatever instance it landed on.
+            repoFullName: restoredRef ? repoFullName(restoredRef) : null,
             buildMode: a.buildMode,
             buildCmd: a.buildCmd,
             startCmd: a.startCmd,
