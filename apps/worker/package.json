@@ -15,6 +15,7 @@
     "@sohwe/builder": "workspace:*",
     "@sohwe/crypto": "workspace:*",
     "@sohwe/db": "workspace:*",
+    "@sohwe/github": "workspace:*",
     "@sohwe/queue": "workspace:*",
     "@sohwe/types": "workspace:*",
     "cron-parser": "^4.9.0",

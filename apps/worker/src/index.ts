@@ -21,6 +21,12 @@ import {
 } from "@sohwe/queue";
 import Docker from "dockerode";
 import { startBackupSubsystem, type BackupSubsystem } from "./backups";
+import {
+  redactDeployError,
+  reportCommitStatus,
+  resolveGitHubContext,
+  type GitHubDeployContext
+} from "./github";
 
 const _here = dirname(fileURLToPath(import.meta.url));
 config({ path: join(_here, "../../../.env") });
@@ -83,12 +89,27 @@ function sh(cmd: string, args: string[], cwd: string): Promise<void> {
   });
 }
 
+/**
+ * Shallow-clone the tracked branch. `url` may carry an installation token as
+ * basic-auth, and git echoes the remote back in its error output, so failures
+ * are redacted before they can reach a build log or the deployment row.
+ */
 async function gitClone(
   url: string,
   branch: string,
-  dest: string
+  dest: string,
+  github: GitHubDeployContext | null
 ): Promise<void> {
-  await sh("git", ["clone", "--depth", "1", "-b", branch, url, dest], process.cwd());
+  try {
+    await sh(
+      "git",
+      ["clone", "--depth", "1", "-b", branch, url, dest],
+      process.cwd()
+    );
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(redactDeployError(msg, github));
+  }
 }
 
 async function getCommitSha(repoDir: string): Promise<string> {
@@ -544,6 +565,12 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
   const { deploymentId, applicationId, promoteImageFromDeploymentId } = job.data;
 
   let workDir: string | null = null;
+  // Set once the repo is cloned through a GitHub App installation; drives
+  // commit-status reporting and token redaction on failure.
+  let github: GitHubDeployContext | null = null;
+  // Declared out here so the failure path can still report a commit status;
+  // the deployment row only records the sha on success.
+  let commitSha: string | null = null;
   const app = await prisma.application.findFirst({
     where: { id: applicationId }
   });
@@ -624,7 +651,6 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
     });
 
     let imageTag: string;
-    let commitSha: string | null = null;
     let commitMessage: string | null = null;
 
     if (promoteImageFromDeploymentId) {
@@ -644,13 +670,42 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
     } else {
       workDir = await mkdtemp(join(tmpdir(), "sohwe-"));
       const repoDir = join(workDir, "repo");
+
+      // An installation token, when one is available, is what makes private
+      // repositories clonable. Public repos work either way.
+      github = await resolveGitHubContext(app).catch((e: unknown) => {
+        onLog(
+          `[sohwe] Could not get a GitHub installation token: ${
+            e instanceof Error ? e.message : String(e)
+          }`
+        );
+        return null;
+      });
+
+      // Log the clean URL, never the tokenized one.
       onLog(
-        `[sohwe] Cloning ${app.gitRepo} (branch: ${app.gitBranch}) into ${repoDir}...`
+        `[sohwe] Cloning ${app.gitRepo} (branch: ${app.gitBranch})${
+          github ? " using the GitHub App installation" : ""
+        } into ${repoDir}...`
       );
-      await gitClone(app.gitRepo, app.gitBranch, repoDir);
+      await gitClone(
+        github?.cloneUrl ?? app.gitRepo,
+        app.gitBranch,
+        repoDir,
+        github
+      );
       commitSha = await getCommitSha(repoDir);
       commitMessage = await getCommitSubject(repoDir);
       onLog(`[sohwe] At commit ${commitSha}`);
+
+      await reportCommitStatus(github, {
+        commitSha,
+        state: "pending",
+        description: `Deploying ${app.name}`,
+        applicationId: app.id,
+        deploymentId
+      });
+
       onLog(`[sohwe] Building image...`);
       imageTag = buildImageTag(app.slug, deploymentId);
       await buildAppImage({
@@ -796,8 +851,19 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
       where: { id: app.id },
       data: { status: "running" }
     });
+
+    await reportCommitStatus(github, {
+      commitSha,
+      state: "success",
+      description: `Deployed ${app.name}`,
+      applicationId: app.id,
+      deploymentId
+    });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
+    const raw = e instanceof Error ? e.message : String(e);
+    // The error can be derived from a tokenized clone URL, so redact before it
+    // reaches the log stream, the deployment row, or the rethrow.
+    const msg = redactDeployError(raw, github);
     emit(`[sohwe] ERROR: ${msg}`);
     sink.line(`[sohwe] ERROR: ${msg}`);
     await sink.end();
@@ -815,7 +881,16 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
         data: { status: "idle" }
       })
       .catch(() => {});
-    throw e;
+
+    await reportCommitStatus(github, {
+      commitSha,
+      state: "failure",
+      description: `Deploy failed for ${app.name}`,
+      applicationId: app.id,
+      deploymentId
+    });
+
+    throw new Error(msg, { cause: e });
   } finally {
     await cleanupWorkdir();
   }

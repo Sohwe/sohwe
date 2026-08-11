@@ -229,6 +229,9 @@ importers:
       '@sohwe/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@sohwe/github':
+        specifier: workspace:*
+        version: link:../../packages/github
       '@sohwe/queue':
         specifier: workspace:*
         version: link:../../packages/queue
