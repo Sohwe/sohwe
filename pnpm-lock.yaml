@@ -53,6 +53,9 @@ importers:
       '@sohwe/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@sohwe/github':
+        specifier: workspace:*
+        version: link:../../packages/github
       '@sohwe/queue':
         specifier: workspace:*
         version: link:../../packages/queue
@@ -334,6 +337,13 @@ importers:
         version: 5.22.0
 
   packages/github:
+    dependencies:
+      '@sohwe/crypto':
+        specifier: workspace:*
+        version: link:../crypto
+      '@sohwe/db':
+        specifier: workspace:*
+        version: link:../db
     devDependencies:
       '@types/node':
         specifier: ^24.0.0

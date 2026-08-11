@@ -28,6 +28,11 @@ import { registerAlertDestinationRoutes } from "./routes/alert-destinations";
 import { registerAppFilesystemRoutes } from "./routes/app-filesystem";
 import { registerBackupRoutes } from "./routes/backups";
 import { registerApplicationRoutes } from "./routes/applications";
+import {
+  backfillRepoFullNames,
+  registerGitHubRoutes
+} from "./routes/github";
+import { registerGitHubWebhookRoutes } from "./routes/github-webhook";
 import { registerEnvVarRoutes } from "./routes/env-vars";
 import { registerVolumeRoutes } from "./routes/volumes";
 import { type ApiConfig, loadApiConfig } from "./env";
@@ -212,8 +217,14 @@ await registerVolumeRoutes(app);
 await registerAlertDestinationRoutes(app);
 await registerAppFilesystemRoutes(app);
 await registerBackupRoutes(app);
+await registerGitHubRoutes(app, config);
+await registerGitHubWebhookRoutes(app);
 
 await app.listen({ port: config.port, host: "0.0.0.0" });
+
+// One-off for installs predating Phase 5: derive `repoFullName` from `gitRepo`
+// so existing apps can match incoming push webhooks.
+void backfillRepoFullNames(app.log);
 
 // Sweep expired session rows so the table doesn't grow without bound. Sessions
 // are already rejected past expiry at read time; this reclaims the storage.

@@ -16,6 +16,14 @@ export type ApiConfig = {
   baseDomain: string;
   setupPassword: string | null;
   /**
+   * Absolute externally-reachable base URL of this instance (no trailing
+   * slash), e.g. `https://deploy.example.com`. Required for the GitHub App
+   * flow, which needs absolute webhook/redirect URLs baked into the app
+   * manifest. Null when unset, in which case the API derives an origin from the
+   * incoming request and the dashboard warns that it is a guess.
+   */
+  publicUrl: string | null;
+  /**
    * Value passed to `@fastify/cors` `origin`. In production the dashboard is
    * served same-origin through nginx, so the default is `false` (no
    * cross-origin access). In development the Vite dev server on :3000 calls the
@@ -54,6 +62,31 @@ function resolveCorsOrigin(): boolean | string | string[] {
   return "http://localhost:3000";
 }
 
+/** Validate and trailing-slash-strip `SOHWE_PUBLIC_URL`; null when unset. */
+function normalizePublicUrl(
+  raw: string | undefined,
+  errors: string[]
+): string | null {
+  if (!raw || raw.trim().length === 0) return null;
+  const value = raw.trim();
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    errors.push(
+      `SOHWE_PUBLIC_URL must be an absolute URL like https://deploy.example.com (got "${value}")`
+    );
+    return null;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    errors.push(
+      `SOHWE_PUBLIC_URL must use http or https (got "${parsed.protocol}")`
+    );
+    return null;
+  }
+  return `${parsed.origin}${parsed.pathname.replace(/\/+$/, "")}`;
+}
+
 export function loadApiConfig(): ApiConfig {
   const errors: string[] = [];
 
@@ -87,6 +120,10 @@ export function loadApiConfig(): ApiConfig {
     errors.push(`PORT must be a valid TCP port (got "${portRaw}")`);
   }
 
+  // Optional, but if present it has to be a usable absolute origin — a typo
+  // here silently produces a GitHub App whose webhook points nowhere.
+  const publicUrl = normalizePublicUrl(process.env.SOHWE_PUBLIC_URL, errors);
+
   if (errors.length > 0) {
     throw new Error(
       "Invalid environment configuration:\n" +
@@ -105,6 +142,7 @@ export function loadApiConfig(): ApiConfig {
     httpsEnabled: process.env.SOHWE_HTTPS_ENABLED === "true",
     baseDomain: process.env.SOHWE_BASE_DOMAIN ?? "sohwe.localhost",
     setupPassword: setupPassword && setupPassword.length > 0 ? setupPassword : null,
+    publicUrl,
     corsOrigin: resolveCorsOrigin()
   };
 }
