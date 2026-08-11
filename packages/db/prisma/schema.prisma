@@ -17,6 +17,7 @@ model Organization {
   backupDestinations BackupDestination[]
   bundles            Bundle[]
   backupSchedules    BackupSchedule[]
+  githubApp          GitHubApp?
 
   @@map("organizations")
 }
@@ -53,6 +54,12 @@ model Application {
   slug              String
   gitRepo           String       @map("git_repository")
   gitBranch         String       @default("main") @map("git_branch")
+  // `owner/repo` when gitRepo points at GitHub. Denormalized from gitRepo so
+  // the push webhook can resolve a delivery to apps with one indexed lookup
+  // instead of parsing every repo URL in the org.
+  repoFullName      String?      @map("repo_full_name")
+  // Deploy automatically when the tracked branch (gitBranch) receives a push.
+  autoDeploy        Boolean      @default(false) @map("auto_deploy")
   buildMode         String       @default("auto") @map("build_mode") // auto | dockerfile | nixpacks
   buildCmd          String?      @map("build_command")
   startCmd          String?      @map("start_command")
@@ -69,6 +76,7 @@ model Application {
   alertDestinations AlertDestination[]
 
   @@unique([organizationId, slug])
+  @@index([repoFullName])
   @@map("applications")
 }
 
@@ -79,6 +87,9 @@ model Deployment {
   commitSha     String?     @map("commit_sha")
   commitMessage String?     @map("commit_message") @db.Text
   imageTag      String?     @map("image_tag")
+  // What caused this deployment: manual | push | rollback. Drives the
+  // deployments table badge and whether a commit status is reported back.
+  trigger       String      @default("manual")
   status        String      @default("pending") // pending | building | running | success | failed | cancelled
   buildLogs     String?     @map("build_logs") @db.Text
   errorMessage  String?     @map("error_message") @db.Text
@@ -115,6 +126,38 @@ model AlertDestination {
 
   @@index([applicationId])
   @@map("alert_destinations")
+}
+
+// --- Phase 5: Git-push deploys ---------------------------------------------
+
+// The GitHub App this Sohwe instance owns, created through GitHub's app
+// manifest flow. One per organization: a self-hosted instance connects a single
+// GitHub account or org, so there is no need for multiple apps.
+//
+// credentialsEncrypted holds { pem, webhookSecret, clientSecret } encrypted with
+// the instance key (SOHWE_ENCRYPTION_KEY). Those values are never returned by
+// the API; the private key signs app JWTs and the webhook secret verifies
+// deliveries, both server-side only.
+model GitHubApp {
+  id                   String       @id @default(uuid())
+  organizationId       String       @unique @map("organization_id")
+  organization         Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  appId                Int          @map("app_id")
+  slug                 String
+  name                 String
+  clientId             String       @map("client_id")
+  htmlUrl              String       @map("html_url")
+  /// GitHub account/org that owns the app, for display only.
+  ownerLogin           String?      @map("owner_login")
+  credentialsEncrypted Bytes        @map("credentials_encrypted")
+  /// Set once the app is installed on an account; null means "created, not yet installed".
+  installationId       Int?         @map("installation_id")
+  installedAt          DateTime?    @map("installed_at")
+  createdAt            DateTime     @default(now()) @map("created_at")
+  updatedAt            DateTime     @updatedAt @map("updated_at")
+
+  @@index([appId])
+  @@map("github_apps")
 }
 
 // --- Phase 4.5: Portable config bundles ------------------------------------
