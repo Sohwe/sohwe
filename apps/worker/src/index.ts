@@ -22,6 +22,19 @@ import {
 import Docker from "dockerode";
 import { startBackupSubsystem, type BackupSubsystem } from "./backups";
 import {
+  BUILD_FAILURE_SCAN_LINES,
+  formatBuildFailureSummary,
+  summarizeBuildFailure
+} from "./build-failure";
+import { LogSink } from "./build-log";
+import {
+  buildContainerSpec,
+  buildHostRule,
+  resolveHosts,
+  resolveRoutingConfig,
+  shouldUseTls
+} from "./container-spec";
+import {
   redactDeployError,
   reportCommitStatus,
   resolveGitHubContext,
@@ -143,41 +156,6 @@ async function getCommitSubject(repoDir: string): Promise<string> {
       } else reject(new Error("git log for subject failed"));
     });
   });
-}
-
-class LogSink {
-  private buffer = "";
-  private timer: ReturnType<typeof setTimeout> | null = null;
-
-  constructor(private readonly flush: (addition: string) => Promise<void>) {}
-
-  line(text: string): void {
-    const line = text.endsWith("\n") ? text : `${text}\n`;
-    this.buffer += line;
-    if (this.timer) return;
-    this.timer = setTimeout(() => {
-      this.timer = null;
-      const b = this.buffer;
-      this.buffer = "";
-      if (b) void this.flush(b);
-    }, 200);
-  }
-
-  async end(): Promise<void> {
-    if (this.timer) {
-      clearTimeout(this.timer);
-      this.timer = null;
-    }
-    if (this.buffer) {
-      const b = this.buffer;
-      this.buffer = "";
-      await this.flush(b);
-    }
-  }
-}
-
-function traefikName(slug: string): string {
-  return `w${slug.replace(/[^a-z0-9]/g, "")}`.slice(0, 50) || "wapp";
 }
 
 function buildImageTag(slug: string, deploymentId: string): string {
@@ -585,43 +563,35 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
     throw new Error(`Deployment ${deploymentId} not found`);
   }
 
-  const baseDomain = process.env.SOHWE_BASE_DOMAIN ?? "sohwe.localhost";
-  const traefikR = traefikName(app.slug);
-  const network = process.env.TRAEFIK_DOCKER_NETWORK ?? "sohwe_proxy";
-
-  /**
-   * HTTPS is opt-in via `SOHWE_HTTPS_ENABLED=true` (the operator also has to
-   * configure an ACME resolver + websecure entrypoint in Traefik). We also
-   * require a real public domain; Let's Encrypt will not issue for `.localhost`.
-   */
-  const httpsEnabled =
-    (process.env.SOHWE_HTTPS_ENABLED ?? "").toLowerCase() === "true";
-  const certResolver = process.env.SOHWE_CERT_RESOLVER ?? "letsencrypt";
-
-  const defaultHost = `${app.slug}.${baseDomain}`;
-  const hosts: string[] = [defaultHost];
-  if (app.domain && app.domain !== defaultHost) hosts.push(app.domain);
-
-  const isPublicDomain = (h: string) =>
-    !h.endsWith(".localhost") && !h.endsWith(".local") && h !== "localhost";
-  const useTls = httpsEnabled && hosts.some(isPublicDomain);
-  const hostRule = hosts.map((h) => `Host(\`${h}\`)`).join(" || ");
+  // HTTPS is opt-in via `SOHWE_HTTPS_ENABLED=true` (the operator also has to
+  // configure an ACME resolver + websecure entrypoint in Traefik), and only
+  // applies to a host Let's Encrypt could issue for — see `container-spec.ts`,
+  // which owns every routing and container-shape decision from here on.
+  const routing = resolveRoutingConfig();
 
   const logChannel = logChannelName(deploymentId);
   const emit = (line: string) => {
     void publishRedis.publish(logChannel, line);
   };
 
-  const sink = new LogSink(async (addition) => {
-    const cur = await prisma.deployment.findUnique({
-      where: { id: deploymentId },
-      select: { buildLogs: true }
-    });
-    const next = (cur?.buildLogs ?? "") + addition;
-    await prisma.deployment.update({
-      where: { id: deploymentId },
-      data: { buildLogs: next }
-    });
+  const sink = new LogSink({
+    // Concatenate in the database. Reading the column back to build the new
+    // value would make a long build cost O(n^2) in traffic and would race with
+    // any other writer of the same row.
+    append: async (addition) => {
+      await prisma.$executeRaw`
+        UPDATE "deployments"
+        SET "build_logs" = COALESCE("build_logs", '') || ${addition}
+        WHERE "id" = ${deploymentId}
+      `;
+    },
+    // Only reached once the log is truncated, where the value is capped.
+    replace: async (text) => {
+      await prisma.deployment.update({
+        where: { id: deploymentId },
+        data: { buildLogs: text }
+      });
+    }
   });
 
   const onLog = (l: string) => {
@@ -643,7 +613,14 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
   try {
     await prisma.deployment.update({
       where: { id: deploymentId },
-      data: { status: "building", startedAt: new Date() }
+      // Clear the log: the sink appends, so a retried job would otherwise
+      // stack this attempt's output onto the previous attempt's.
+      data: {
+        status: "building",
+        startedAt: new Date(),
+        buildLogs: "",
+        errorMessage: null
+      }
     });
     await prisma.application.update({
       where: { id: app.id },
@@ -731,8 +708,9 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
       await d.remove().catch(() => {});
     }
 
+    const hosts = resolveHosts(app, routing.baseDomain);
     onLog(
-      `[sohwe] Starting container (Traefik: ${hostRule}, port ${String(app.port)}, tls=${String(useTls)})...`
+      `[sohwe] Starting container (Traefik: ${buildHostRule(hosts)}, port ${String(app.port)}, tls=${String(shouldUseTls(hosts, routing.httpsEnabled))})...`
     );
 
     const vols = await prisma.volume.findMany({ where: { applicationId: app.id } });
@@ -760,65 +738,16 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
       envList = toDockerEnvList(vars);
     }
 
-    const binds = vols.map(
-      (v) => `${appDockerVolumeName(app.id, v.id)}:${v.mountPath}`
+    const c = await docker.createContainer(
+      buildContainerSpec({
+        app,
+        deploymentId,
+        imageTag,
+        volumes: vols,
+        envList,
+        routing
+      })
     );
-
-    const containerName =
-      `sohwe-${app.slug}`.replace(/[^a-z0-9-]/g, "-").slice(0, 63) || "sohwe-app";
-
-    const port = app.port;
-    const labels: Record<string, string> = {
-      "traefik.enable": "true",
-      "traefik.docker.network": network,
-      [`traefik.http.services.${traefikR}.loadbalancer.server.port`]: String(
-        port
-      ),
-      "sohwe.managed": "true",
-      "sohwe.app": app.id,
-      "sohwe.deployment": deploymentId
-    };
-
-    // Always expose an HTTP router. When TLS is enabled, HTTP redirects to HTTPS.
-    labels[`traefik.http.routers.${traefikR}.rule`] = hostRule;
-    labels[`traefik.http.routers.${traefikR}.entrypoints`] = "web";
-    labels[`traefik.http.routers.${traefikR}.service`] = traefikR;
-
-    if (useTls) {
-      const secureName = `${traefikR}s`;
-      labels[`traefik.http.routers.${secureName}.rule`] = hostRule;
-      labels[`traefik.http.routers.${secureName}.entrypoints`] = "websecure";
-      labels[`traefik.http.routers.${secureName}.service`] = traefikR;
-      labels[`traefik.http.routers.${secureName}.tls`] = "true";
-      labels[`traefik.http.routers.${secureName}.tls.certresolver`] =
-        certResolver;
-
-      // HTTP → HTTPS redirect middleware, applied to the plain router.
-      const mw = `${traefikR}-redirect`;
-      labels[`traefik.http.middlewares.${mw}.redirectscheme.scheme`] = "https";
-      labels[`traefik.http.middlewares.${mw}.redirectscheme.permanent`] =
-        "true";
-      labels[`traefik.http.routers.${traefikR}.middlewares`] = mw;
-    }
-
-    const c = await docker.createContainer({
-      name: containerName,
-      Image: imageTag,
-      Labels: labels,
-      ExposedPorts: { [`${port}/tcp`]: {} },
-      Env: envList.length > 0 ? envList : undefined,
-      HostConfig: {
-        NetworkMode: network,
-        RestartPolicy: { Name: "unless-stopped" },
-        Binds: binds.length > 0 ? binds : undefined,
-        Memory: app.memoryLimitMb
-          ? app.memoryLimitMb * 1024 * 1024
-          : undefined,
-        NanoCpus: app.cpuLimit
-          ? Math.round(Number(app.cpuLimit) * 1e9)
-          : undefined
-      }
-    });
 
     await c.start();
     await startRuntimeLogTail(app.id, c, Math.floor(Date.now() / 1000) - 1);
@@ -864,6 +793,19 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
     // The error can be derived from a tokenized clone URL, so redact before it
     // reaches the log stream, the deployment row, or the rethrow.
     const msg = redactDeployError(raw, github);
+
+    // "docker build failed with exit code 1" is the shape of almost every build
+    // error and explains nothing, so derive a cause from the log tail before
+    // the sink is closed. The log lines are redacted for the same reason `msg`
+    // is: anything derived from a failed clone can carry an installation token.
+    const summary = summarizeBuildFailure({
+      errorMessage: msg,
+      recentLines: sink
+        .recentLines(BUILD_FAILURE_SCAN_LINES)
+        .map((l) => redactDeployError(l, github))
+    });
+    const failureText = formatBuildFailureSummary(summary, msg);
+
     emit(`[sohwe] ERROR: ${msg}`);
     sink.line(`[sohwe] ERROR: ${msg}`);
     await sink.end();
@@ -871,7 +813,7 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
       where: { id: deploymentId },
       data: {
         status: "failed",
-        errorMessage: msg,
+        errorMessage: failureText,
         finishedAt: new Date()
       }
     });
