@@ -27,6 +27,11 @@ x-sohwe-env: &sohwe-env
   # host (curl with Host header or /etc/hosts) — set a real domain with a
   # wildcard A record for browser access.
   SOHWE_BASE_DOMAIN: ${SOHWE_BASE_DOMAIN:-sohwe.localhost}
+  # Traefik ACME resolver named on deployed apps' TLS labels, used only when
+  # SOHWE_HTTPS_ENABLED is true. The default matches the `letsencrypt` resolver
+  # this file defines on the traefik service; change it only alongside a compose
+  # override that declares a resolver by that name (e.g. a DNS-01 resolver).
+  SOHWE_CERT_RESOLVER: ${SOHWE_CERT_RESOLVER:-letsencrypt}
   # Externally reachable base URL of this instance, no trailing slash. The api
   # bakes it into the GitHub App manifest (webhook + redirect URLs) and the
   # worker uses it to link commit statuses back to the deployment page. Empty

@@ -421,6 +421,11 @@ SOHWE_HOST=${SOHWE_HOST_INPUT}
 SOHWE_ACME_EMAIL=${SOHWE_ACME_EMAIL_INPUT}
 SOHWE_HTTPS_ENABLED=${https_enabled}
 SOHWE_BASE_DOMAIN=${SOHWE_BASE_DOMAIN_INPUT}
+# Traefik ACME resolver named on deployed apps' TLS labels. Only consulted when
+# SOHWE_HTTPS_ENABLED=true. The default matches the resolver declared on the
+# traefik service in docker-compose.prod.yml; change it only alongside a compose
+# override that declares a resolver by the new name.
+# SOHWE_CERT_RESOLVER=letsencrypt
 # Externally reachable base URL of this instance, no trailing slash (e.g.
 # https://sohwe.example.com). Required before connecting GitHub: it is baked
 # into the GitHub App's webhook and redirect URLs when GitHub creates the app,
