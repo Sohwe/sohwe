@@ -8,14 +8,15 @@ This repository is a **pnpm + Turborepo** monorepo. The detailed bootstrap and p
 
 **v0.3.8** is the latest tagged release; a substantial amount of work sits unreleased on `main`.
 
-Shipped through **Phase 4.5**:
+Shipped through **Phase 5**:
 
 - **Phases 0–3** — deploys from Git, Dockerfile + Nixpacks builds, custom domains with opt-in HTTPS, encrypted env vars, named persistent volumes, memory/CPU limits, per-app internal Docker networks.
 - **Phase 3.5 (packaging & install)** — production Dockerfiles, `docker-compose.prod.yml` + HTTPS overlay, multi-arch GHCR publishing on tag, and a one-command installer for fresh Ubuntu 22.04/24.04 hosts.
 - **Phase 4 (observability)** — runtime log streaming, live CPU/memory metrics, and crash/OOM webhook alerts.
 - **Phase 4.5 (portable bundles)** — signed, passphrase-encrypted config bundles with local and S3-compatible destinations, restore preflight/apply, and scheduled exports with retention.
+- **Phase 5 (git-push deploys)** — per-instance GitHub App created through GitHub's manifest flow, private-repo cloning with short-lived installation tokens, a signed push webhook that deploys the tracked branch, and commit statuses reported back to GitHub.
 
-Next milestone: **Phase 5 (git-push deploys)**. [`ROADMAP.md`](./ROADMAP.md) is the authoritative per-item checklist; see also [`CHANGELOG.md`](./CHANGELOG.md).
+Next milestone: **Phase 6 (multi-user)**. [`ROADMAP.md`](./ROADMAP.md) is the authoritative per-item checklist; see also [`CHANGELOG.md`](./CHANGELOG.md).
 
 ## Install on a server (production)
 
@@ -39,7 +40,15 @@ The installer will:
 
 Unlock first-run setup with your installer password, then complete setup (owner account + organization) in the dashboard.
 
-Non-interactive installs can pass **`SOHWE_HTTP_PORT`**, **`SOHWE_SETUP_PASSWORD`**, **`SOHWE_BASE_DOMAIN`**, **`SOHWE_HOST`**, **`SOHWE_ACME_EMAIL`**, and **`SOHWE_VERSION`** via the environment, with `SOHWE_NONINTERACTIVE=1` (see the header comments in `scripts/install.sh`).
+Non-interactive installs can pass **`SOHWE_HTTP_PORT`**, **`SOHWE_SETUP_PASSWORD`**, **`SOHWE_BASE_DOMAIN`**, **`SOHWE_HOST`**, **`SOHWE_ACME_EMAIL`**, **`SOHWE_PUBLIC_URL`**, and **`SOHWE_VERSION`** via the environment, with `SOHWE_NONINTERACTIVE=1` (see the header comments in `scripts/install.sh`).
+
+### Deploy on git push
+
+Open **Git** in the dashboard and create a GitHub App. Sohwe never ships a central app: GitHub's manifest flow creates one that belongs to you, and this instance stores its private key and webhook secret encrypted with `SOHWE_ENCRYPTION_KEY`. Install the app, pick which repositories to share, then turn on **Push to deploy** on any app (or tick it when creating one).
+
+The app requests the minimum: read repository contents and metadata, write commit statuses, and the `push` event only. Private repositories clone with a short-lived installation token, and each deploy reports pending/success/failure back to the commit.
+
+**Set `SOHWE_PUBLIC_URL` in `/etc/sohwe/sohwe.env` before connecting.** It becomes the app's webhook and redirect URL at creation time, so a wrong value means deleting the app on GitHub and starting over. The installer derives it from your dashboard domain; HTTP-only installs must set it by hand (`http://<server-ip>:<port>`) and `sohwe restart`.
 
 > **Schema updates are versioned migrations.** `sohwe migrate` — which `sohwe update` runs for you — executes `prisma migrate deploy` inside the api container, replaying the reviewed SQL in `packages/db/prisma/migrations`. A database created by **v0.3.8 or earlier** predates the migrations directory; the first `sohwe migrate` after upgrading detects it and baselines it automatically (a history-only record — no DDL, no data loss). Migrations are forward-only, so `sohwe rollback` does not revert a schema change; back up before a release whose changelog flags a destructive migration.
 
@@ -110,7 +119,7 @@ State lives entirely under `/etc/sohwe/`. Postgres data and Let's Encrypt certs 
 - **`apps/api/.env`** — API runtime (`DATABASE_URL`, `REDIS_URL`, `PORT`, `SESSION_SECRET`, `SOHWE_ENCRYPTION_KEY`, etc.). The **worker** also needs `SOHWE_ENCRYPTION_KEY` (and `DATABASE_URL` / `REDIS_URL`) to decrypt env at deploy; in local dev, `apps/worker` loads `apps/api/.env` via dotenv, so a single file is enough.
 - **`packages/db/.env`** — Prisma CLI (`DATABASE_URL` for `db:migrate` / `db:studio`).
 
-Use strong, unique values for secrets in any shared or deployed environment. The API validates its environment at boot and refuses to start if `SESSION_SECRET` (min 16 chars) or `SOHWE_ENCRYPTION_KEY` (32 bytes, base64) is missing or malformed. `SOHWE_CORS_ORIGIN` is optional — leave it unset in production (the dashboard is same-origin through nginx). The getting-started doc shows the expected variable names and example connection strings.
+Use strong, unique values for secrets in any shared or deployed environment. The API validates its environment at boot and refuses to start if `SESSION_SECRET` (min 16 chars) or `SOHWE_ENCRYPTION_KEY` (32 bytes, base64) is missing or malformed. `SOHWE_CORS_ORIGIN` is optional — leave it unset in production (the dashboard is same-origin through nginx). `SOHWE_PUBLIC_URL` is optional too, but GitHub push deploys need it: it becomes the GitHub App's webhook URL, so local development requires a tunnel (cloudflared, ngrok, tailscale funnel) pointed at the dashboard. The getting-started doc shows the expected variable names and example connection strings.
 
 ### Repository layout
 
@@ -126,6 +135,7 @@ Use strong, unique values for secrets in any shared or deployed environment. The
 | `packages/crypto` | AES-256-GCM env encryption helpers (API + worker) |
 | `packages/bundler` | Signed, passphrase-encrypted config bundles |
 | `packages/backups` | Backup destinations (local + S3) and export orchestration |
+| `packages/github` | GitHub App client: manifest flow, installation tokens, webhook signatures, commit statuses |
 | `docker-compose.dev.yml` | Local Postgres, Redis, Traefik |
 | `docker-compose.prod.yml` + `docker-compose.https.yml` | Production stack (api + worker + dashboard + infra) |
 | `docker/*.Dockerfile` | Multi-stage production images (api / worker / dashboard) |

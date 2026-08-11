@@ -25,13 +25,14 @@ Milestone state (verify against `ROADMAP.md` before relying on this):
 - Phases 0-3.5 complete: deploys, Nixpacks, custom domains/HTTPS, encrypted env vars, volumes, resource limits, per-app networks, production packaging + installer + `sohwe` CLI.
 - Phase 4 (observability) complete: runtime log SSE, live Docker stats, crash/OOM alerts.
 - Phase 4.5 (portable bundles) complete: signed passphrase-protected config bundles, local/S3/download destinations, restore preflight+apply, scheduled exports with retention.
-- Next unstarted milestone is Phase 5: git-push deploys.
+- Phase 5 (git-push deploys) complete: per-instance GitHub App via manifest flow, installation-token clones, signature-verified push webhook, auto-deploy toggle, commit statuses. A manual end-to-end check on a real host is still open.
+- Next unstarted milestone is Phase 6: multi-user.
 
 ## Repository Shape
 
 pnpm 9 + Turborepo monorepo. Node.js 24+ required.
 
-- `apps/api` - Fastify API: auth/session, setup gate, application CRUD, deploy enqueue, SSE build + runtime logs, stats, alert destinations, container file browsing, backups
+- `apps/api` - Fastify API: auth/session, setup gate, application CRUD, deploy enqueue, SSE build + runtime logs, stats, alert destinations, container file browsing, backups, GitHub App connection + push webhook
 - `apps/dashboard` - Vite + React SPA: TanStack Router/Query, Tailwind, Radix/shadcn-style UI, lucide icons, sonner
 - `apps/worker` - BullMQ consumer: clones repos, builds images, runs containers, applies Traefik labels, injects decrypted env, manages volumes/networks, streams logs, samples stats, watches crash events, runs the backup scheduler (`apps/worker/src/backups.ts`)
 - `packages/db` - Prisma schema and client
@@ -41,6 +42,7 @@ pnpm 9 + Turborepo monorepo. Node.js 24+ required.
 - `packages/crypto` - AES-256-GCM helpers for encrypted env vars
 - `packages/bundler` - builds/parses signed, passphrase-encrypted `.sohwe.json` config bundles
 - `packages/backups` - backup export orchestration and storage drivers (local filesystem + S3-compatible)
+- `packages/github` - GitHub App client: manifest flow, installation tokens, webhook signature verification, commit statuses. Core (`src/index.ts`) is dependency-free and unit-tested; db-aware helpers live in the `./resolve` entry point
 - `docker/` - production Dockerfiles and dashboard nginx config
 - `docker-compose.dev.yml` - local Postgres, Redis, Traefik
 - `docker-compose.prod.yml` + `docker-compose.https.yml` - production stack
@@ -65,7 +67,7 @@ ESLint uses flat config. The root `eslint.config.mjs` covers `apps/api`, `apps/w
 
 **CI:** `.github/workflows/ci.yml` runs on every push to `main` and every pull request. Three jobs: `verify` (typecheck + lint + build + test across all workspaces), `migrations` (replays the committed Prisma migrations against a real Postgres 16 on both the fresh-install and the pre-v0.3.8 upgrade path, asserting no drift and no data loss), and `scripts` (shellcheck + bash syntax + an LF-ending guard for the installer and host CLI). `.github/workflows/release.yml` is separate and only builds/publishes images on `v*` tags.
 
-**Tests:** unit tests use Node's built-in runner (`node:test`) executed through `tsx`; a package opts in with a `test` script (`node --import tsx --test src/index.test.ts`) and `turbo run test` picks it up. Currently `@sohwe/crypto` and `@sohwe/bundler` have tests (`src/index.test.ts`). Test files live under `src/`, so they are also typechecked by `build`/`typecheck` — keep them strict-clean (`noUncheckedIndexedAccess`). `apps/*` and the remaining packages have no tests yet. Add tests as `src/**/*.test.ts` in the relevant package; no new config is needed.
+**Tests:** unit tests use Node's built-in runner (`node:test`) executed through `tsx`; a package opts in with a `test` script (`node --import tsx --test src/index.test.ts`) and `turbo run test` picks it up. Currently `@sohwe/crypto`, `@sohwe/bundler`, and `@sohwe/github` have tests (`src/index.test.ts`). Test files live under `src/`, so they are also typechecked by `build`/`typecheck` — keep them strict-clean (`noUncheckedIndexedAccess`). `apps/*` and the remaining packages have no tests yet. Add tests as `src/**/*.test.ts` in the relevant package; no new config is needed.
 
 ## Environment
 
@@ -98,7 +100,7 @@ Never commit real secrets or generated env files.
 
 ### API
 
-- Routes are registered from `apps/api/src/index.ts` via `register*Routes` functions; modules live in `apps/api/src/routes` (`applications`, `env-vars`, `volumes`, `alert-destinations`, `app-filesystem`, `backups`).
+- Routes are registered from `apps/api/src/index.ts` via `register*Routes` functions; modules live in `apps/api/src/routes` (`applications`, `env-vars`, `volumes`, `alert-destinations`, `app-filesystem`, `backups`, `github`, `github-webhook`).
 - Protected routes use `authPreHandler` from `apps/api/src/session.ts` and scope every query by `req.user!.organizationId`. Backups routes are org-scoped, not app-scoped.
 - Never return `Application.envVarsEncrypted` from general endpoints. Use `defaultApplicationSelect` and `serializeAppListRow` from `apps/api/src/app-public.ts` unless a route deliberately deals in secrets.
 - Mutating env routes must not log request bodies. Preserve the existing `logLevel: "silent"` pattern when editing them.
@@ -132,6 +134,15 @@ Never commit real secrets or generated env files.
 - Preflight summaries report env var *key counts*, never values.
 - Scheduled exports run on a BullMQ tick job owned by the worker (`apps/worker/src/backups.ts`); use the `BACKUP_*` constants from `@sohwe/queue`.
 - Storage drivers live in `packages/backups/src/storage.ts` (local path and S3-compatible). S3 credentials are stored encrypted - resolve destinations through the existing helper rather than reading config rows directly.
+
+### GitHub and Push Deploys
+
+- Sohwe never ships a central GitHub App. Each instance creates its own via GitHub's manifest flow; credentials (`pem`, `webhookSecret`, `clientSecret`) are encrypted with `SOHWE_ENCRYPTION_KEY` in `GitHubApp.credentialsEncrypted` and must never be returned by any endpoint.
+- The webhook route needs the **raw** request body for `X-Hub-Signature-256`. It lives in an encapsulated Fastify scope with its own buffer content-type parser — do not move it to the root instance or re-serialize the payload.
+- Nothing in a webhook payload may be trusted before the HMAC verifies. Which app signed a delivery is unknowable beforehand, so each connected app's secret is tried.
+- Installation tokens are secrets. Never log a tokenized clone URL; run anything derived from a failed clone through `redactSecret` / `redactDeployError` first. Git echoes the remote in its error output.
+- Commit-status reporting is best-effort and must swallow its own failures — it can never fail a deploy.
+- `SOHWE_PUBLIC_URL` is fixed into the App's webhook/redirect URLs at creation time. Changing it later requires recreating the App on GitHub.
 
 ### Database
 

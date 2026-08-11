@@ -27,6 +27,12 @@ x-sohwe-env: &sohwe-env
   # host (curl with Host header or /etc/hosts) — set a real domain with a
   # wildcard A record for browser access.
   SOHWE_BASE_DOMAIN: ${SOHWE_BASE_DOMAIN:-sohwe.localhost}
+  # Externally reachable base URL of this instance, no trailing slash. The api
+  # bakes it into the GitHub App manifest (webhook + redirect URLs) and the
+  # worker uses it to link commit statuses back to the deployment page. Empty
+  # (the default) makes the api fall back to the forwarded request origin,
+  # which is a guess — set it before connecting GitHub.
+  SOHWE_PUBLIC_URL: ${SOHWE_PUBLIC_URL:-}
   # Optional CORS allow-origin for the API. Empty (the default) means same-origin
   # only, which is correct because the dashboard nginx proxies /api on the same
   # origin. Set a comma-separated origin list only if the API is fronted

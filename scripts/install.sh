@@ -20,6 +20,12 @@
 #                        SOHWE_HOST, falling back to sohwe.localhost. Needs a
 #                        wildcard DNS record (*.apps.example.com A <ip>) to
 #                        resolve. Read by both the api and the worker.
+#   SOHWE_PUBLIC_URL     externally reachable base URL of this instance, e.g.
+#                        https://sohwe.example.com (no trailing slash). Needed
+#                        for GitHub push deploys - it becomes the GitHub App's
+#                        webhook and redirect URL. Defaults to
+#                        https://$SOHWE_HOST when a domain is configured, and
+#                        is left blank for HTTP-only installs.
 #
 # The script is idempotent. Re-running it upgrades compose files and the
 # `sohwe` wrapper without touching secrets in /etc/sohwe/sohwe.env.
@@ -381,6 +387,14 @@ write_env_file() {
         https_enabled="true"
     fi
 
+    # Externally reachable base URL. Only derivable when a dashboard domain was
+    # configured; HTTP-only installs are reached by IP, which this script has no
+    # reliable way to know, so it is left blank for the operator to fill in.
+    local public_url="${SOHWE_PUBLIC_URL:-}"
+    if [[ -z "${public_url}" && -n "${SOHWE_HOST_INPUT}" ]]; then
+        public_url="https://${SOHWE_HOST_INPUT}"
+    fi
+
     if [[ -f "${ENV_FILE}" ]]; then
         ok "Existing ${ENV_FILE} kept as-is (secrets and settings preserved)."
         warn "To change domain, email, port (SOHWE_HTTP_PORT), installer password (SOHWE_SETUP_PASSWORD), or version: edit ${ENV_FILE} then run \`sohwe restart\`."
@@ -407,6 +421,13 @@ SOHWE_HOST=${SOHWE_HOST_INPUT}
 SOHWE_ACME_EMAIL=${SOHWE_ACME_EMAIL_INPUT}
 SOHWE_HTTPS_ENABLED=${https_enabled}
 SOHWE_BASE_DOMAIN=${SOHWE_BASE_DOMAIN_INPUT}
+# Externally reachable base URL of this instance, no trailing slash (e.g.
+# https://sohwe.example.com). Required before connecting GitHub: it is baked
+# into the GitHub App's webhook and redirect URLs when GitHub creates the app,
+# and a wrong value means recreating the app. Derived from SOHWE_HOST when a
+# domain was configured; for HTTP-only installs set it by hand to
+# http://<server-ip>:${SOHWE_HTTP_PORT} and run \`sohwe restart\`.
+SOHWE_PUBLIC_URL=${public_url}
 # Optional API CORS allow-origin. Leave unset: the dashboard is served
 # same-origin through nginx, so cross-origin access is disabled by default in
 # production. Set a comma-separated origin list only if you front the API

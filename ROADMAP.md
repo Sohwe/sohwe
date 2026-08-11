@@ -1,8 +1,8 @@
 # Sohwe Roadmap
 
-Current snapshot: latest tag is **v0.3.8**; Phases 4 and 4.5 are implemented on `main` but untagged.
+Current snapshot: latest tag is **v0.3.8**; Phases 4, 4.5, and 5 are implemented on `main` but untagged.
 
-Phases 0 through 4.5 are implemented in the repo. **Phase 4 - Observability** covers runtime logs, live metrics, and crash alerts. **Phase 4.5 - Portable Bundles** is feature-complete: signed config + re-encrypted env var bundles, local + S3-compatible + download destinations, restore preflight/apply, scheduled exports with cron + retention (worker-driven), and the org-level Backups UI. Three Phase 3.5 items remain as manual VPS verification (see `docs/vps-smoke-test.md`). Next unbuilt milestone is **Phase 5 - Git-Push Deploys**.
+Phases 0 through 5 are implemented in the repo. **Phase 4 - Observability** covers runtime logs, live metrics, and crash alerts. **Phase 4.5 - Portable Bundles** is feature-complete: signed config + re-encrypted env var bundles, local + S3-compatible + download destinations, restore preflight/apply, scheduled exports with cron + retention (worker-driven), and the org-level Backups UI. **Phase 5 - Git-Push Deploys** is implemented: per-instance GitHub App via the manifest flow, installation-token clones for private repos, a signature-verified push webhook, the auto-deploy toggle, and commit-status reporting. Three Phase 3.5 items remain as manual VPS verification (see `docs/vps-smoke-test.md`), and Phase 5 has its own manual end-to-end check. Next unbuilt milestone is **Phase 6 - Multi-User**.
 
 This file is a working checklist. It is based on `README.md`, `CHANGELOG.md`, `sohwe-getting-started.md`, `sohwe-prd.md`, and a code scan across the API, worker, dashboard, Docker, installer, and release workflow.
 
@@ -16,7 +16,7 @@ This file is a working checklist. It is based on `README.md`, `CHANGELOG.md`, `s
 - [x] **Unreleased - Configurable apps base domain**
 - [x] **Phase 4 - Observability**
 - [x] **Phase 4.5 - Portable Bundles**
-- [ ] **Phase 5 - Git-Push Deploys**
+- [x] **Phase 5 - Git-Push Deploys**
 - [ ] **Phase 6 - Multi-User**
 - [ ] **Phase 7 - Managed Datastores** (post-v1/v2)
 
@@ -200,26 +200,29 @@ Implementation notes:
 - [x] Bundle worker jobs added (`backup` queue, cron tick, retention). Manual export/restore still run synchronously in the API.
 - [x] Backup dashboard routes added (`/backups`).
 
-## Not Yet Built
-
 ### Phase 5 - Git-Push Deploys
 
-- [ ] Add GitHub App configuration.
-- [ ] Add GitHub App installation flow.
-- [ ] List installation repositories.
-- [ ] Clone private repos using installation tokens.
-- [ ] Add tracked branch auto-deploy toggle.
-- [ ] Add GitHub webhook route.
-- [ ] Verify push webhook signatures.
-- [ ] Enqueue deploys on tracked branch pushes.
-- [ ] Report deploy status back to GitHub.
+- [x] Add GitHub App configuration. (`packages/github/src/index.ts` manifest builder, `apps/api/src/routes/github.ts`, `GitHubApp` model in `packages/db/prisma/schema.prisma`)
+- [x] Add GitHub App installation flow. (`GET /api/github/manifest/new` -> `/manifest/callback` -> `/setup/callback` in `apps/api/src/routes/github.ts`; `apps/dashboard/src/routes/git.tsx`)
+- [x] List installation repositories. (`listInstallationRepositories` in `packages/github/src/index.ts`, `GET /api/github/repositories`)
+- [x] Clone private repos using installation tokens. (`apps/worker/src/github.ts`, `gitClone` in `apps/worker/src/index.ts`)
+- [x] Add tracked branch auto-deploy toggle. (`Application.autoDeploy`, `apps/dashboard/src/components/apps/AutoDeployCard.tsx`, picker in `CreateAppDialog.tsx`)
+- [x] Add GitHub webhook route. (`apps/api/src/routes/github-webhook.ts`)
+- [x] Verify push webhook signatures. (`verifyWebhookSignature` in `packages/github/src/index.ts`, raw-buffer body parser in the webhook scope)
+- [x] Enqueue deploys on tracked branch pushes. (`enqueuePushDeploys` in `apps/api/src/routes/github-webhook.ts`)
+- [x] Report deploy status back to GitHub. (`reportCommitStatus` in `apps/worker/src/github.ts`)
 
-Current code gaps:
+Remaining manual verification:
 
-- [ ] No GitHub App models/config.
-- [ ] No webhook route.
-- [ ] No private repo credential flow.
-- [ ] No auto-deploy toggle in schema/dashboard.
+- [ ] End-to-end on a real host: create the app via the manifest flow, install it, push to a tracked branch, and confirm the deploy runs and the commit status appears.
+- [ ] Confirm a private repository clones with an installation token.
+
+Known follow-ups (not blockers):
+
+- [ ] No webhook delivery log; debugging a missed push relies on API logs.
+- [ ] GitHub only. GitLab/Gitea would need a separate credential and webhook path.
+
+## Not Yet Built
 
 ### Phase 6 - Multi-User
 
@@ -338,12 +341,13 @@ Open design questions:
 
 ### v0.6.0 - GitHub App And Push Deploys
 
-- [ ] Add GitHub App setup/config.
-- [ ] List installation repos.
-- [ ] Clone private repos with installation tokens.
-- [ ] Verify push webhooks.
-- [ ] Add auto-deploy toggle.
-- [ ] Report deploy status back to GitHub.
+- [x] Add GitHub App setup/config.
+- [x] List installation repos.
+- [x] Clone private repos with installation tokens.
+- [x] Verify push webhooks.
+- [x] Add auto-deploy toggle.
+- [x] Report deploy status back to GitHub.
+- [ ] Verify end-to-end on a real host (push deploy + private clone + commit status).
 
 ### v0.7.0 - Multi-User And Audit
 

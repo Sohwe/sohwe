@@ -10,6 +10,23 @@ write-ups.
 
 ## [Unreleased]
 
+### Added
+
+- **Phase 5 git-push deploys.** Push to the tracked branch and the app deploys. Sohwe does not ship a central GitHub App — each instance creates its own through GitHub's **app manifest flow**, so the operator owns the app, its private key, and its webhook secret. A new org-level **Git** area walks through it: create the app, install it, review the repositories the installation can read, and disconnect. Credentials (`pem`, `webhookSecret`, `clientSecret`) are stored encrypted with `SOHWE_ENCRYPTION_KEY` and never returned by any endpoint.
+
+  The app requests the minimum surface: `contents: read`, `metadata: read`, `statuses: write`, and the `push` event only.
+
+  - **Private repositories build.** The worker mints a short-lived installation token (cached per installation, refreshed a minute before expiry) and clones through it. The tokenized URL never reaches a build log, and because git echoes the remote in its error output, every failure derived from a clone is redacted before it can reach the log stream, the deployment row, or an alert.
+  - **Signed webhook** at `POST /api/webhooks/github`, registered with a raw-buffer body parser so `X-Hub-Signature-256` is verified against the exact bytes GitHub signed. Nothing in the payload is trusted before the HMAC matches. Tag pushes and branch deletions are ignored; removing the installation clears the stored installation id.
+  - **Commit statuses** are reported back for every deploy with a known commit (pending → success/failure), linking to the deployment page when `SOHWE_PUBLIC_URL` is set. Best-effort: a status failure never fails a deploy.
+  - **Auto-deploy toggle** per app, plus a repository picker in the new-application dialog that fills in the clone URL and default branch. Enabling auto-deploy is refused with a specific reason when it could not work (non-GitHub remote, no app connected, app not installed) rather than silently doing nothing.
+
+  New `@sohwe/github` package (no Octokit or jsonwebtoken dependency — JWTs are signed with `node:crypto` and calls use global `fetch`), with 54 unit tests over URL parsing, ref parsing, signature verification, JWT claims, push-payload narrowing, and manifest permissions.
+
+  New Prisma model `GitHubApp` (one per organization); `Application` gains `repoFullName` and `autoDeploy`, and `Deployment` gains `trigger` (`manual` | `push` | `rollback`). The migration is purely additive.
+
+  **New env var `SOHWE_PUBLIC_URL`** — the externally reachable base URL of the instance, threaded through `scripts/install.sh` and `docker-compose.prod.yml`. It is baked into the GitHub App's webhook and redirect URLs when GitHub creates the app, so a wrong value means recreating the app; the installer derives it from `SOHWE_HOST` and the dashboard warns when it is unset. The API validates it at boot and falls back to the forwarded request origin.
+
 ### Security
 
 - **Rate limiting on the unauthenticated credential endpoints.** `POST /api/auth/login` and `POST /api/setup/unlock` are now limited to 10 requests per minute per client IP (`@fastify/rate-limit`), returning `429` with `Retry-After` past the threshold. The API runs with `trustProxy` so the limit keys off the real client IP forwarded by Traefik/nginx rather than the proxy's address. Other routes — including the dashboard's frequent metrics polling and long-lived log SSE — are unaffected.

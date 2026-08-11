@@ -6,7 +6,7 @@ Licensed **AGPL-3.0** (see [`LICENSE`](./LICENSE)).
 
 This document describes how Sohwe is built and why. For what to run, see [`README.md`](./README.md); for what has shipped, see [`ROADMAP.md`](./ROADMAP.md) and [`CHANGELOG.md`](./CHANGELOG.md).
 
-> Phases 0 through 4.5 are implemented. This guide used to carry a full build-from-scratch tutorial for those phases; that walkthrough was removed once the code became the better reference — recover it from git history if you need it. Design sketches below are kept only for phases that have **not** been built yet (5, 6, 7).
+> Phases 0 through 5 are implemented. This guide used to carry a full build-from-scratch tutorial for those phases; that walkthrough was removed once the code became the better reference — recover it from git history if you need it. Design sketches below are kept only for phases that have **not** been built yet (6, 7).
 
 ## Table of Contents
 
@@ -17,7 +17,7 @@ This document describes how Sohwe is built and why. For what to run, see [`READM
 5. [Prerequisites](#prerequisites)
 6. [As Built: Observability](#as-built-observability)
 7. [As Built: Portable Bundles](#as-built-portable-bundles)
-8. [Phase 5 — Git-Push Deploys](#phase-5--git-push-deploys)
+8. [As Built: Git-Push Deploys](#as-built-git-push-deploys)
 9. [Phase 6 — Multi-User](#phase-6--multi-user)
 10. [Phase 7 — Managed Datastores](#phase-7--managed-datastores)
 11. [Cross-Cutting Concerns](#cross-cutting-concerns)
@@ -67,7 +67,7 @@ Sohwe lets you connect a Git repo and get a running, HTTPS-terminated container 
 | **3.5. Packaging & Install** | Production images, compose stack, `curl \| bash` installer, `sohwe` CLI | Shipped (3 manual VPS checks open) |
 | **4. Observability** | Live logs, build logs, CPU/mem, crash alerts | Shipped |
 | **4.5. Portable Bundles** | Config export/restore, local + S3 destinations, scheduled exports | Shipped |
-| **5. Git-Push Deploys** | GitHub App, webhooks, auto-deploy | Not started |
+| **5. Git-Push Deploys** | GitHub App, webhooks, auto-deploy | Shipped (manual e2e check open) |
 | **6. Multi-User** | Invites, roles, audit log, optional instance-host file browser | Not started |
 | **7. Managed Datastores** | One-click Postgres/Redis, private bindings | Post-v1 / v2 |
 
@@ -108,6 +108,7 @@ Sohwe lets you connect a Git repo and get a running, HTTPS-terminated container 
                       │  - Stream logs/stats  │
                       │  - Crash watcher      │
                       │  - Backup scheduler   │
+                      │  - Commit statuses    │
                       └──────────┬────────────┘
                                  │ dockerode
                                  ▼
@@ -140,7 +141,8 @@ sohwe/
 │   ├── builder/            # Dockerfile / Nixpacks image build wrapper
 │   ├── crypto/             # AES-256-GCM (env at rest, shared API + worker)
 │   ├── bundler/            # Signed, passphrase-encrypted config bundles
-│   └── backups/            # Destination storage (local + S3) + export orchestration
+│   ├── backups/            # Destination storage (local + S3) + export orchestration
+│   └── github/             # GitHub App client: manifest flow, tokens, webhooks, statuses
 ├── docker/                 # Production Dockerfiles + dashboard nginx config
 ├── scripts/                # install.sh + host `sohwe` CLI
 ├── docker-compose.dev.yml
@@ -265,18 +267,33 @@ DELETE /api/backups/schedules/:scheduleId
 
 ---
 
-## Phase 5 — Git-Push Deploys
+## As Built: Git-Push Deploys
 
-*Not built. Design sketch.*
+Goal, met: push to the tracked branch → it deploys.
 
-Goal: push to the tracked branch → it deploys.
+**No central app.** Sohwe is self-hosted, so there is no Sohwe-operated GitHub App to install. Each instance creates its own through GitHub's **app-manifest flow**, which means the operator owns the app, its private key, and its webhook secret, and Sohwe never holds credentials for anyone else's instance. The trade is that connecting is a three-hop browser flow instead of a single "Install" button:
 
-- Create a **GitHub App** (not an OAuth app) for a proper install flow, webhook signing, and per-repo permissions.
-- Store `installationId` per organization; generate installation tokens on demand to clone private repos.
-- Webhook handler at `POST /api/webhooks/github`: verify `X-Hub-Signature-256`, and on `push` to a tracked branch enqueue a deploy.
-- Dashboard: repo picker listing installation repos, plus an "auto-deploy on push" toggle.
+1. `GET /api/github/manifest/new` returns a self-submitting form that POSTs the manifest to `github.com/settings/apps/new` (or the org equivalent), carrying a signed, 15-minute `state`.
+2. GitHub creates the app and redirects to `GET /api/github/manifest/callback` with a single-use code. Exchanging it yields the app id, PEM, webhook secret, and client credentials, which are AES-256-GCM encrypted with `SOHWE_ENCRYPTION_KEY` into `GitHubApp.credentialsEncrypted`.
+3. The operator installs the app and picks repositories; GitHub returns them to `GET /api/github/setup/callback`, which verifies the supplied `installation_id` really belongs to this app (via `GET /app/installations/:id` with an app JWT) before storing it.
 
-Checklist: GitHub App installed and repos listed · `git push` triggers a deploy · private repos build successfully.
+Steps 2 and 3 are top-level GET navigations from GitHub, so the `SameSite=Lax` session cookie rides along and both routes stay authenticated.
+
+**Permissions** are the minimum the feature needs: `contents: read` (clone), `metadata: read` (mandatory alongside contents), `statuses: write` (report results), subscribed to `push` only.
+
+**Webhook.** `POST /api/webhooks/github` is registered inside an encapsulated Fastify scope with a raw-buffer content-type parser, because `X-Hub-Signature-256` must be verified against the exact bytes GitHub signed — a re-serialized object will not match. Which app signed a delivery cannot be known before verification (the payload is untrusted), so the handler tries each connected app's secret; a self-hosted instance has one, making this a single HMAC. Only after the HMAC matches is the payload parsed. Pushes to a tracked branch enqueue a deploy for every matching `autoDeploy` app; tag pushes and branch deletions are ignored, and `installation` deletion clears the stored installation id.
+
+Matching is an indexed lookup on `Application.repoFullName` (`owner/repo`, denormalized from `gitRepo` on create, backfilled at boot for pre-Phase-5 rows) rather than parsing every repo URL per delivery.
+
+**Private clones.** The worker mints an installation token (cached per installation, refreshed a minute before its hour expires) and clones `https://x-access-token:<token>@github.com/...`. Token hygiene is the sharp edge: the clean `gitRepo` is what gets logged, and because git echoes the remote in its error output, every failure derived from a clone passes through a redactor before reaching the build log, the deployment row, or the rethrown error.
+
+**Commit statuses** are posted for any deploy with a known sha — pending on clone, success once the container runs, failure on error — linking to the deployment page when `SOHWE_PUBLIC_URL` is set. Reporting is best-effort and swallows its own errors; a revoked installation must not fail a working deploy.
+
+**`SOHWE_PUBLIC_URL`** is the one new env var. The manifest needs absolute webhook and redirect URLs, and they are fixed at app-creation time, so a wrong value means deleting the app on GitHub and starting over. The API validates it at boot, falls back to the forwarded request origin, and the dashboard warns when the value was guessed.
+
+`@sohwe/github` holds the whole client with no Octokit or jsonwebtoken dependency — app JWTs are signed with `node:crypto` and calls use global `fetch`. Its db-aware helpers live in a separate `./resolve` entry point so the core stays pure and unit-testable.
+
+**Not covered:** no webhook delivery log (debugging a missed push means reading API logs), and GitHub only — GitLab/Gitea would need their own credential and webhook paths.
 
 ---
 
