@@ -1,8 +1,8 @@
 # Sohwe Roadmap
 
-Current snapshot: latest tag is **v0.3.8**; Phases 4, 4.5, and 5 are implemented on `main` but untagged.
+Current snapshot: latest tag is **v0.3.8**. Phases 4, 4.5, and 5 are implemented on `main` and staged for release as **v0.6.0** — `CHANGELOG.md` and the root `package.json` are prepared; the tag itself is held until the manual host verification below passes.
 
-Phases 0 through 5 are implemented in the repo. **Phase 4 - Observability** covers runtime logs, live metrics, and crash alerts. **Phase 4.5 - Portable Bundles** is feature-complete: signed config + re-encrypted env var bundles, local + S3-compatible + download destinations, restore preflight/apply, scheduled exports with cron + retention (worker-driven), and the org-level Backups UI. **Phase 5 - Git-Push Deploys** is implemented: per-instance GitHub App via the manifest flow, installation-token clones for private repos, a signature-verified push webhook, the auto-deploy toggle, and commit-status reporting. The v0.4.3 build-log UX slice is also done: bounded build-log storage, derived failure summaries, copy/download, and clearer deployment states. Three Phase 3.5 items remain as manual VPS verification (see `docs/vps-smoke-test.md`), and Phase 5 has its own manual end-to-end check. Next unbuilt milestone is **Phase 6 - Multi-User**.
+Phases 0 through 5 are implemented in the repo. **Phase 4 - Observability** covers runtime logs, live metrics, and crash alerts. **Phase 4.5 - Portable Bundles** is feature-complete: signed config + re-encrypted env var bundles, local + S3-compatible + download destinations, restore preflight/apply, scheduled exports with cron + retention (worker-driven), and the org-level Backups UI. **Phase 5 - Git-Push Deploys** is implemented: per-instance GitHub App via the manifest flow, installation-token clones for private repos, a signature-verified push webhook, the auto-deploy toggle, and commit-status reporting. The build-log UX slice is also done: bounded build-log storage, derived failure summaries, copy/download, and clearer deployment states. All of this ships as **v0.6.0**. Three Phase 3.5 items remain as manual VPS verification (see `docs/vps-smoke-test.md`), and Phase 5 has its own manual end-to-end check; those are the only things holding the tag. Next unbuilt milestone is **Phase 6 - Multi-User**.
 
 This file is a working checklist. It is based on `README.md`, `CHANGELOG.md`, `sohwe-getting-started.md`, `sohwe-prd.md`, and a code scan across the API, worker, dashboard, Docker, installer, and release workflow.
 
@@ -13,7 +13,7 @@ This file is a working checklist. It is based on `README.md`, `CHANGELOG.md`, `s
 - [x] **Phase 2 - Broad Runtime Support**
 - [x] **Phase 3 - Stateful Apps**
 - [x] **Phase 3.5 - Packaging & Install**
-- [x] **Unreleased - Configurable apps base domain**
+- [x] **Configurable apps base domain**
 - [x] **Phase 4 - Observability**
 - [x] **Phase 4.5 - Portable Bundles**
 - [x] **Phase 5 - Git-Push Deploys**
@@ -116,11 +116,15 @@ Evidence: `packages/crypto/src/index.ts`, `packages/types/src/index.ts`, `apps/a
 
 Evidence: `docker/api.Dockerfile`, `docker/worker.Dockerfile`, `docker/dashboard.Dockerfile`, `docker/dashboard.nginx.conf`, `docker-compose.prod.yml`, `docker-compose.https.yml`, `scripts/install.sh`, `scripts/sohwe`, `.github/workflows/release.yml`, `CHANGELOG.md`.
 
-## In Progress / Unreleased
+## Staged For v0.6.0
+
+Implemented on `main`, not yet tagged. See *Cutting v0.6.0* at the end of this
+file for the release gate.
 
 ### Configurable Apps Base Domain
 
-Suggested release: **v0.3.9**
+Ships in **v0.6.0**. (Originally sequenced as v0.3.9, which was never tagged —
+observability, bundles, and push deploys all landed on top of it.)
 
 - [x] Installer accepts/writes `SOHWE_BASE_DOMAIN`.
 - [x] Production compose passes `SOHWE_BASE_DOMAIN` to API.
@@ -131,12 +135,11 @@ Suggested release: **v0.3.9**
 - [x] Run `pnpm typecheck`.
 - [x] Run `pnpm lint`.
 - [x] Run `pnpm build`.
-- [ ] Smoke-test dashboard URL display against a real/custom base domain.
+- [ ] Smoke-test dashboard URL display against a real/custom base domain. (manual — needs a host)
 - [x] Update docs if the installer prompt text or env behavior changed.
       (`SOHWE_CERT_RESOLVER` threaded through `scripts/install.sh` and
       `docker-compose.prod.yml`; it and `SOHWE_HTTPS_ENABLED` documented in
       `README.md`)
-- [ ] Tag/release `v0.3.9`.
 
 Evidence: `CHANGELOG.md`, `apps/api/src/index.ts`, `apps/dashboard/src/lib/config.ts`, `apps/worker/src/index.ts`, `docker-compose.prod.yml`, `scripts/install.sh`.
 
@@ -285,21 +288,27 @@ Open design questions:
 - [ ] Should Redis default to persistence enabled (`appendonly yes`) or ephemeral cache mode with an explicit persistence toggle?
 - [ ] How much database administration belongs in Sohwe v2: create DB/user only, or browser, SQL console, dumps, restores, and metrics?
 
-## Recommended Release Sequence
+## Release Sequence
 
-### v0.3.9 - Base-Domain Release Polish
+The v0.3.9 / v0.4.x / v0.5.0 / v0.6.0 slices below were planned as separate tags
+but none were cut — every one of them landed on `main` behind v0.3.8. **They all
+ship together as v0.6.0.** The per-slice checklists are kept as a record of what
+that tag contains; the release gate itself is under *Cutting v0.6.0* at the end.
 
-- [ ] Verify installer prompt/non-interactive env for `SOHWE_BASE_DOMAIN`.
-- [ ] Verify production compose passes the value to API and worker.
-- [ ] Verify dashboard app URLs update without rebuilding the dashboard.
+### Shipped in v0.6.0
+
+#### Base-Domain Release Polish (was v0.3.9)
+
+- [x] Installer prompt/non-interactive env for `SOHWE_BASE_DOMAIN`.
+- [x] Production compose passes the value to API and worker.
+- [x] Dashboard app URLs update without rebuilding the dashboard.
 - [x] Update docs if install behavior changed.
 - [x] Run `pnpm typecheck`.
 - [x] Run `pnpm lint`.
 - [x] Run `pnpm build`.
-- [ ] Smoke test a fresh install or staging instance.
-- [ ] Tag `v0.3.9`.
+- [ ] Verify on a real install or staging instance. (manual — needs a host)
 
-### v0.4.0 - Runtime Logs
+#### Runtime Logs (was v0.4.0)
 
 - [x] Add runtime log Redis channel helper.
 - [x] Add worker runtime log tailer.
@@ -309,7 +318,7 @@ Open design questions:
 - [x] Add reconnect behavior.
 - [x] Add bounded replay or rolling storage.
 
-### v0.4.1 - Metrics
+#### Metrics (was v0.4.1)
 
 - [x] Collect Docker stats for managed containers.
 - [x] Publish CPU/memory stats to Redis (short TTL).
@@ -317,7 +326,7 @@ Open design questions:
 - [x] Show live CPU and memory in dashboard.
 - [x] Handle stopped/no-container states.
 
-### v0.4.2 - Crash Detection And Alerts
+#### Crash Detection And Alerts (was v0.4.2)
 
 - [x] Watch Docker events for managed container `die`/OOM signals.
 - [x] Add alert destination model.
@@ -326,7 +335,7 @@ Open design questions:
 - [x] Add dashboard alert configuration.
 - [x] Scrub secrets from all alert payloads.
 
-### v0.4.3 - Build Log UX Polish
+#### Build Log UX Polish (was v0.4.3)
 
 - [x] Last-deploy build logs reachable from the app Logs tab.
 - [x] Better failed build summaries. (`apps/worker/src/build-failure.ts` derives a
@@ -340,7 +349,7 @@ Open design questions:
 - [x] Log size cap or truncation strategy. (`apps/worker/src/build-log.ts`: 512 KiB
       cap, 128 KiB head + 384 KiB tail, in-database append instead of read-modify-write)
 
-### v0.5.0 - Portable Config Bundles
+#### Portable Config Bundles (was v0.5.0)
 
 - [x] Add bundle/destination/schedule schema.
 - [x] Create `@sohwe/bundler`.
@@ -349,7 +358,7 @@ Open design questions:
 - [x] Add passphrase re-encryption for env vars.
 - [x] Add restore preflight before mutating restore.
 
-### v0.6.0 - GitHub App And Push Deploys
+#### GitHub App And Push Deploys (was the original v0.6.0 slice)
 
 - [x] Add GitHub App setup/config.
 - [x] List installation repos.
@@ -357,9 +366,9 @@ Open design questions:
 - [x] Verify push webhooks.
 - [x] Add auto-deploy toggle.
 - [x] Report deploy status back to GitHub.
-- [ ] Verify end-to-end on a real host (push deploy + private clone + commit status).
+- [ ] Verify end-to-end on a real host (push deploy + private clone + commit status). (manual)
 
-### v0.7.0 - Multi-User And Audit
+### Next: v0.7.0 - Multi-User And Audit
 
 - [ ] Add invitations.
 - [ ] Add role guards.
@@ -368,7 +377,7 @@ Open design questions:
 - [ ] Record mutating actions.
 - [ ] Keep secret values out of audit entries.
 
-### v0.8.0 / v2 Candidate - Managed Postgres And Redis
+### Later: v0.8.0 / v2 Candidate - Managed Postgres And Redis
 
 - [ ] One-click Postgres create/delete.
 - [ ] One-click Redis create/delete.
@@ -377,17 +386,35 @@ Open design questions:
 - [ ] App binding that injects connection strings into encrypted env vars.
 - [ ] Basic datastore health and status display.
 
-## Highest-Value Immediate Task
+## Cutting v0.6.0
 
-Cut a release. A large amount of shipped work (Phases 4 and 4.5) sits untagged on
-`main` behind `v0.3.8`, so the published install is far behind the code.
+Phases 4, 4.5, and 5 sit untagged on `main` behind `v0.3.8`, so the published
+install is far behind the code. Everything that can be done off-host is done;
+what remains needs a real Ubuntu host.
+
+Version number: **v0.6.0**, settled. The release sequence above originally spread
+this work over v0.3.9, v0.4.0-v0.4.3, v0.5.0, and v0.6.0; none of those tags were
+cut, so v0.6.0 absorbs them all. Minor-version bump, not patch: three phases of
+features plus a new required env var (`SOHWE_PUBLIC_URL`).
+
+Ready:
 
 - [x] Adopt a versioned Prisma migration pipeline (was the blocking risk below).
-- [x] Run `pnpm typecheck`, `pnpm lint`, `pnpm build`, `pnpm test` (186 tests).
+- [x] Run `pnpm typecheck`, `pnpm lint`, `pnpm build`, `pnpm test`.
+- [x] Decide the version number.
+- [x] Root `package.json` bumped to `0.6.0`.
+- [x] `CHANGELOG.md` `Unreleased` closed into a `[0.6.0]` section.
+- [x] Confirm `.github/workflows/release.yml` publishes all three images
+      (`api`, `worker`, `dashboard`) multi-arch on a `v*` tag, and moves `latest`
+      for stable semver. No hardcoded version pins in `scripts/` or compose —
+      `SOHWE_VERSION` defaults to `latest`.
+
+Blocked on a host:
+
 - [ ] Work through `docs/vps-smoke-test.md` to close the three open Phase 3.5 items.
-- [ ] Decide the version number (the release sequence above implies the base-domain
-      change is v0.3.9, but observability + bundles have since landed on top of it).
-- [ ] Tag, and confirm `.github/workflows/release.yml` publishes all three images.
+- [ ] Verify Phase 5 end-to-end (push deploy + private clone + commit status).
+- [ ] Confirm the `[0.6.0]` date in `CHANGELOG.md` still matches the day of the tag.
+- [ ] `git tag v0.6.0 && git push --tags`, then confirm the three images publish.
 
 ### Migration pipeline — done
 
@@ -431,7 +458,7 @@ session. Evidence: `apps/api/src/env.ts`, `apps/api/src/session.ts`,
       `verify` job. Evidence: `packages/crypto/src/index.test.ts`,
       `packages/bundler/src/index.test.ts`, `.github/workflows/ci.yml`.
 
-Still open before a tag:
+Test coverage:
 
 - [x] Broader test coverage. Every workspace package now has tests — 350 in
       total. `apps/api` (81) includes HTTP-level route tests through
@@ -445,6 +472,7 @@ Still open before a tag:
 - [ ] Remaining untested surface: the worker's imperative Docker calls
       (container create/start/remove, network attach, log tailing, stat
       sampling) and the backup export/restore orchestration. Both need a Docker
-      double or a live daemon.
+      double or a live daemon. Accepted gap — not a tag blocker.
 - [ ] Manual VPS smoke test (`docs/vps-smoke-test.md`): prove `sohwe update` and
-      the pre-v0.3.8 auto-baseline on a real Ubuntu host. Requires a VPS.
+      the pre-v0.3.8 auto-baseline on a real Ubuntu host. Requires a VPS. **This
+      is the tag blocker.**

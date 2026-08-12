@@ -6,7 +6,7 @@ This repository is a **pnpm + Turborepo** monorepo. The detailed bootstrap and p
 
 ## Current status
 
-**v0.3.8** is the latest tagged release; a substantial amount of work sits unreleased on `main`.
+**v0.3.8** is the latest tagged release. Everything below Phase 4 is in it; Phases 4, 4.5, and 5 are complete on `main` and staged as **v0.6.0**, pending a manual verification pass on a real host.
 
 Shipped through **Phase 5**:
 
