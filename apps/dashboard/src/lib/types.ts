@@ -247,3 +247,71 @@ export function parentFsPath(p: string): string {
   parts.pop();
   return parts.length ? `/${parts.join("/")}` : "/";
 }
+
+// --- Phase 6: Multi-user ----------------------------------------------------
+
+export type Member = {
+  id: string;
+  email: string;
+  name: string | null;
+  role: string;
+  createdAt: string;
+  /** True for the row belonging to the signed-in user. */
+  isSelf: boolean;
+};
+
+export type InvitationStatus = "pending" | "accepted" | "revoked" | "expired";
+
+export type Invitation = {
+  id: string;
+  email: string;
+  role: string;
+  status: InvitationStatus;
+  expiresAt: string;
+  acceptedAt: string | null;
+  revokedAt: string | null;
+  createdAt: string;
+  invitedBy: { id: string; email: string; name: string | null } | null;
+};
+
+/**
+ * Response to creating an invitation. `token`/`acceptUrl` are returned exactly
+ * once — the server stores only a hash — so the UI must not discard them before
+ * the admin has copied the link.
+ */
+export type InvitationCreated = {
+  invitation: Invitation;
+  token: string;
+  acceptUrl: string;
+};
+
+/** Pre-auth view of an invitation, for the join page. */
+export type InvitationLookup = {
+  email: string;
+  role: string;
+  organizationName: string;
+  expiresAt: string;
+};
+
+export type AuditLogEntry = {
+  id: string;
+  action: string;
+  targetType: string;
+  targetId: string | null;
+  targetLabel: string | null;
+  metadata: Record<string, unknown> | null;
+  ip: string | null;
+  createdAt: string;
+  actor: {
+    id: string | null;
+    email: string;
+    name: string | null;
+    /** The actor's account has since been removed; only the email survives. */
+    deleted: boolean;
+  };
+};
+
+export type AuditLogPage = {
+  items: AuditLogEntry[];
+  nextCursor: string | null;
+};

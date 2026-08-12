@@ -6,9 +6,10 @@ import { toast } from "sonner";
 import { AppStatusBadge, BuildModeBadge } from "@/components/apps/BuildModeBadge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { api } from "@/lib/api";
+import { api, fetchMe } from "@/lib/api";
 import { useBaseDomain } from "@/lib/config";
-import type { AppRow } from "@/lib/types";
+import { isAdmin } from "@/lib/roles";
+import type { AppRow, Me } from "@/lib/types";
 import { CopyButton } from "@/components/common/CopyButton";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -37,6 +38,9 @@ const tabs: TabDef[] = [
   { path: "settings", label: "Settings", route: "/apps/$appId/settings" }
 ];
 
+/** Tabs backed by admin-only endpoints; a member would only get a 403 there. */
+const ADMIN_TABS = new Set<TabDef["path"]>(["variables", "files", "settings"]);
+
 export function AppLayout() {
   const { appId } = useParams({ strict: false });
   if (!appId) throw new Error("appId");
@@ -44,6 +48,8 @@ export function AppLayout() {
   const queryClient = useQueryClient();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const baseDomain = useBaseDomain();
+  const { data: me } = useQuery({ queryKey: ["me"], queryFn: () => fetchMe<Me | null>() });
+  const visibleTabs = isAdmin(me) ? tabs : tabs.filter((t) => !ADMIN_TABS.has(t.path));
 
   const appsQuery = useQuery({
     queryKey: ["applications"],
@@ -143,7 +149,7 @@ export function AppLayout() {
       </div>
 
       <div className="mb-6 flex flex-wrap gap-0.5 rounded-lg border border-border/80 bg-muted/30 p-0.5">
-        {tabs.map((t) => {
+        {visibleTabs.map((t) => {
           const isActive = t.path === "deployments" ? currentSection === "deployments" : currentSection === t.path;
           if (t.path === "files" && app.status !== "running") {
             return (

@@ -244,7 +244,7 @@ Grouped by release phase (see [Release Plan](#12-release-plan) for timing).
 
 ### 9.6 Phase 6 — Multi-User
 
-- As the **owner**, I want to invite teammates by email, so my cofounder can deploy without sharing my password.
+- As the **owner**, I want to invite teammates without sharing my password, so my cofounder can deploy under their own account.
 - As an **admin**, I want to see every action someone took (who deployed what, when), so I have an audit trail.
 - As a **member**, I want to log in and see the apps I'm authorized for, so I can do my work without owner-level powers.
 - As an **owner** or **admin** on a **self-hosted** instance, I want optional, **allowlisted** read-only access to **host filesystem paths** (e.g. Sohwe data, backup locations) for troubleshooting, separate from the **in-container** file browser, so I can debug the server without SSH—while **members** have no such access and every access is **audited**.
@@ -343,7 +343,7 @@ Each requirement is tagged with `[P<n>]` for the phase in which it must ship.
 - `[P1]` Single owner user created at first-run.
 - `[P1]` Session-based authentication (HttpOnly cookies, Argon2id password hashing).
 - `[P1]` Rate-limited login endpoint.
-- `[P6]` Invite members by email with role (`admin` / `member`).
+- `[P6]` Invite members with role (`admin` / `member`). **As built: copy-link, not email** — the API mints a single-use token, returns the join link once, and stores only its SHA-256. Delivering it is the inviter's job. Sending email would make every self-hosted instance depend on an SMTP relay or a third-party API key to add a second user; see the change log entry for 2026-08-12.
 - `[P6]` Revoke or change member roles.
 - `[P6]` Audit log of mutating actions.
 - `[P6]` (Self-hosted) **Instance host** read-only file browser: **owner** and **admin** only; **allowlisted** root paths; path normalization (no `..` escapes); no access for **member**; list/read operations recorded in the audit log. Distinct from `[P3]` in-container file browser.
@@ -411,7 +411,7 @@ written; this records where the implementation diverged. See
 - **Git mirror mode** (`--mirror` clone into the bundle) — not implemented. Restore therefore depends on the upstream repo still being reachable, which is exactly the failure this requirement existed to cover.
 - **CLI** — no `sohwe bundle create` / `sohwe bundle restore`. Export and restore are dashboard/API only.
 - **Cross-version restore** — bundles carry `version: 1`, but no older-version bundle exists to test against, so the "restore across at least one major version" guarantee is unverified.
-- **Audit trail** — deferred with the rest of `P6`.
+- **Audit trail** — built in `P6`. Export and restore record actor, destination kind, app counts, and collision policy; never the passphrase or S3 credentials.
 
 ### 10.10 Managed Datastores (Post-v1 / v2)
 
@@ -644,3 +644,4 @@ Items to resolve before or during v1.
 | 2026-04-22 | §10.3 Deployments: documented per-app deployment list UI (Current marker, log/rollback actions; single live target, no multi-environment column in v1). | — |
 | 2026-04-22 | §9.6 and §10.7: optional self-hosted **instance host** file browser (owner/admin, allowlisted paths, audited) scoped to **Phase 6**; distinct from in-container file browser. | — |
 | 2026-06-11 | Added post-v1/v2 managed datastore scope for one-click Postgres/Redis, including user stories, functional requirements, and release-plan placement. | — |
+| 2026-08-12 | Phase 6 built. §10.7: invitations are **copy-link, not email** — a self-hosted instance should not need an SMTP relay or a third-party email key to add its second user, so the API mints a single-use token, shows the join link once, and stores only its hash; a lost link is revoked and reissued. §10.9: the bundle audit trail is no longer deferred. The optional **instance host** file browser (§9.6, §10.7) remains unbuilt, with its allowlist/`..`-rejection/per-read-audit model intact. | — |

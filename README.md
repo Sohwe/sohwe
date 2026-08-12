@@ -15,8 +15,9 @@ Shipped through **Phase 5**:
 - **Phase 4 (observability)** — runtime log streaming, live CPU/memory metrics, and crash/OOM webhook alerts.
 - **Phase 4.5 (portable bundles)** — signed, passphrase-encrypted config bundles with local and S3-compatible destinations, restore preflight/apply, and scheduled exports with retention.
 - **Phase 5 (git-push deploys)** — per-instance GitHub App created through GitHub's manifest flow, private-repo cloning with short-lived installation tokens, a signed push webhook that deploys the tracked branch, and commit statuses reported back to GitHub.
+- **Phase 6 (multi-user)** — owner/admin/member roles enforced on every route, copy-link invitations, member management, and an org-scoped audit log. On `main` for **v0.7.0**.
 
-Next milestone: **Phase 6 (multi-user)**. [`ROADMAP.md`](./ROADMAP.md) is the authoritative per-item checklist; see also [`CHANGELOG.md`](./CHANGELOG.md).
+Next milestone: **Phase 7 (managed datastores)**, a post-v1 candidate. [`ROADMAP.md`](./ROADMAP.md) is the authoritative per-item checklist; see also [`CHANGELOG.md`](./CHANGELOG.md).
 
 ## Install on a server (production)
 
@@ -51,6 +52,31 @@ The app requests the minimum: read repository contents and metadata, write commi
 **Set `SOHWE_PUBLIC_URL` in `/etc/sohwe/sohwe.env` before connecting.** It becomes the app's webhook and redirect URL at creation time, so a wrong value means deleting the app on GitHub and starting over. The installer derives it from your dashboard domain; HTTP-only installs must set it by hand (`http://<server-ip>:<port>`) and `sohwe restart`.
 
 > **Schema updates are versioned migrations.** `sohwe migrate` — which `sohwe update` runs for you — executes `prisma migrate deploy` inside the api container, replaying the reviewed SQL in `packages/db/prisma/migrations`. A database created by **v0.3.8 or earlier** predates the migrations directory; the first `sohwe migrate` after upgrading detects it and baselines it automatically (a history-only record — no DDL, no data loss). Migrations are forward-only, so `sohwe rollback` does not revert a schema change; back up before a release whose changelog flags a destructive migration.
+
+### Invite your team
+
+Open **Members** in the dashboard and create an invitation. Sohwe does not send
+email — it mints a single-use join link that you pass on however you like, which
+keeps a self-hosted instance free of an SMTP relay or a third-party email key.
+The link is shown **once**: only its SHA-256 is stored, so a lost link is
+revoked and reissued rather than recovered. Links expire after 7 days.
+
+Three roles, enforced by the API on every request:
+
+| Role | Can do |
+| --- | --- |
+| `owner` | Everything, including changing roles and managing other owners. |
+| `admin` | Everything operational: apps, env vars, volumes, backups, Git, invitations, removing members. |
+| `member` | Read-only, plus deploying and rolling back existing apps. |
+
+Anything that can expose an app's secrets is admin-and-above **including read
+access**: environment variables (even the masked list), the container file
+browser, alert destination webhook URLs, backups, and the GitHub connection.
+
+The organization can never be left without an owner, nobody can change their own
+role or delete their own account, and removing someone signs out every session
+they hold. Every mutating action lands in the **Audit log** — with env var *key
+names* and counts, never values.
 
 ### Managing the instance
 

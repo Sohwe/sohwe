@@ -98,3 +98,14 @@ export function deploymentResultLabel(status: string): {
     return { text: "Cancelled", className: "text-muted-foreground" };
   return { text: status, className: "text-muted-foreground" };
 }
+
+/**
+ * Absolute local date and time. Use for values that `formatRelativeTime` would
+ * garble — notably future timestamps like an invitation's expiry, which it
+ * would render as "just now".
+ */
+export function formatDateTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}

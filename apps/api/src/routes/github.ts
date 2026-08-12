@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { FastifyInstance } from "fastify";
 import { encryptJson } from "@sohwe/crypto";
 import { prisma } from "@sohwe/db";
 import {
@@ -19,7 +19,12 @@ import {
 } from "@sohwe/github/resolve";
 import { z } from "zod";
 import type { ApiConfig } from "../env";
-import { authPreHandler } from "../session";
+import { recordAudit } from "../audit";
+import { publicBaseUrl } from "../public-url";
+import { requireRole } from "../rbac";
+
+// Admin-and-above. Connecting or forgetting the App changes how every repo in
+// the org deploys, and the connection detail is operator configuration.
 
 // GitHub App connection flow (Phase 5).
 //
@@ -90,19 +95,6 @@ function verifyState(secret: string, raw: string | undefined): string | null {
 }
 
 // --- Helpers ----------------------------------------------------------------
-
-/**
- * Externally reachable origin for this instance. `SOHWE_PUBLIC_URL` wins; the
- * request's forwarded host is a best-effort fallback so a plain install works
- * without another env var.
- */
-function publicBaseUrl(req: FastifyRequest, config: ApiConfig): string {
-  if (config.publicUrl) return config.publicUrl;
-  const host = req.headers["x-forwarded-host"] ?? req.headers.host;
-  const hostname = Array.isArray(host) ? host[0] : host;
-  const proto = config.httpsEnabled ? "https" : req.protocol;
-  return `${proto}://${hostname ?? "localhost"}`;
-}
 
 function escapeHtml(value: string): string {
   return value
@@ -182,7 +174,7 @@ export async function registerGitHubRoutes(
   /** Connection status for the dashboard. Never returns any secret material. */
   app.get(
     "/api/github/app",
-    { preHandler: [authPreHandler] },
+    { preHandler: [requireRole("admin")] },
     async (req) => {
       const u = req.user!;
       const row = await prisma.gitHubApp.findUnique({
@@ -231,7 +223,7 @@ export async function registerGitHubRoutes(
    */
   app.get(
     "/api/github/manifest/new",
-    { preHandler: [authPreHandler], schema: { querystring: ManifestNewQuery } },
+    { preHandler: [requireRole("admin")], schema: { querystring: ManifestNewQuery } },
     async (req, reply) => {
       const u = req.user!;
       const { org, name } = ManifestNewQuery.parse(req.query);
@@ -286,7 +278,7 @@ export async function registerGitHubRoutes(
   app.get(
     "/api/github/manifest/callback",
     {
-      preHandler: [authPreHandler],
+      preHandler: [requireRole("admin")],
       schema: { querystring: ManifestCallbackQuery }
     },
     async (req, reply) => {
@@ -327,6 +319,14 @@ export async function registerGitHubRoutes(
         }
       });
 
+      await recordAudit(req, {
+        action: "github.connect",
+        targetType: "github",
+        targetLabel: conversion.slug,
+        // Public App identity only — never the PEM, webhook secret, or client secret.
+        metadata: { appId: conversion.appId, ownerLogin: conversion.owner }
+      });
+
       // Straight on to installation; an App with no installation can't do
       // anything yet, so there is no useful intermediate state to show.
       return reply.redirect(appInstallUrl(conversion.slug));
@@ -341,7 +341,7 @@ export async function registerGitHubRoutes(
   app.get(
     "/api/github/setup/callback",
     {
-      preHandler: [authPreHandler],
+      preHandler: [requireRole("admin")],
       schema: { querystring: SetupCallbackQuery }
     },
     async (req, reply) => {
@@ -394,7 +394,7 @@ export async function registerGitHubRoutes(
   /** Repositories the installation can see, for the app-create repo picker. */
   app.get(
     "/api/github/repositories",
-    { preHandler: [authPreHandler] },
+    { preHandler: [requireRole("admin")] },
     async (req, reply) => {
       const u = req.user!;
       const resolved = await getOrgInstallationToken(u.organizationId);
@@ -423,7 +423,7 @@ export async function registerGitHubRoutes(
   app.get(
     "/api/github/deliveries",
     {
-      preHandler: [authPreHandler],
+      preHandler: [requireRole("admin")],
       schema: { querystring: DeliveriesQuery }
     },
     async (req) => {
@@ -459,7 +459,7 @@ export async function registerGitHubRoutes(
    */
   app.delete(
     "/api/github/app",
-    { preHandler: [authPreHandler] },
+    { preHandler: [requireRole("admin")] },
     async (req, reply) => {
       const u = req.user!;
       const row = await prisma.gitHubApp.findUnique({
@@ -478,6 +478,11 @@ export async function registerGitHubRoutes(
       ]);
       clearInstallationTokenCache(row.appId);
 
+      await recordAudit(req, {
+        action: "github.disconnect",
+        targetType: "github",
+        metadata: { appId: row.appId }
+      });
       return { ok: true, deleteAppUrl: `${row.htmlUrl}/advanced` };
     }
   );

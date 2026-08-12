@@ -17,6 +17,9 @@ import { AppFilesPage } from "@/routes/app.$appId.files";
 import { AppSettingsPage } from "@/routes/app.$appId.settings";
 import { BackupsPage } from "@/routes/backups";
 import { GitPage } from "@/routes/git";
+import { JoinPage } from "@/routes/join";
+import { MembersPage } from "@/routes/members";
+import { AuditPage } from "@/routes/audit";
 import { DeploymentsPage } from "@/components/apps/DeploymentsPage";
 
 const rootRoute = createRootRouteWithContext<{ queryClient: QueryClient }>()({
@@ -116,6 +119,29 @@ const gitRoute = createRoute({
   component: GitPage
 });
 
+const membersRoute = createRoute({
+  getParentRoute: () => authedLayoutRoute,
+  path: "members",
+  component: MembersPage
+});
+
+const auditRoute = createRoute({
+  getParentRoute: () => authedLayoutRoute,
+  path: "audit",
+  component: AuditPage
+});
+
+/**
+ * Redeeming an invitation. Sits outside the authed layout: the invitee has no
+ * account yet, and unlike /login it must stay reachable while signed out
+ * without bouncing to the sign-in form.
+ */
+const joinRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "join",
+  component: JoinPage
+});
+
 const appIdIndexRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: "/",
@@ -188,6 +214,7 @@ const routeTree = rootRoute.addChildren([
   indexRoute,
   setupRoute,
   loginRoute,
+  joinRoute,
   authedLayoutRoute.addChildren([
     appsLayoutRoute.addChildren([
       appsIndexRoute,
@@ -204,7 +231,9 @@ const routeTree = rootRoute.addChildren([
       ])
     ]),
     backupsRoute,
-    gitRoute
+    gitRoute,
+    membersRoute,
+    auditRoute
   ])
 ]);
 

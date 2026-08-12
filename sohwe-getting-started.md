@@ -6,7 +6,7 @@ Licensed **AGPL-3.0** (see [`LICENSE`](./LICENSE)).
 
 This document describes how Sohwe is built and why. For what to run, see [`README.md`](./README.md); for what has shipped, see [`ROADMAP.md`](./ROADMAP.md) and [`CHANGELOG.md`](./CHANGELOG.md).
 
-> Phases 0 through 5 are implemented. This guide used to carry a full build-from-scratch tutorial for those phases; that walkthrough was removed once the code became the better reference — recover it from git history if you need it. Design sketches below are kept only for phases that have **not** been built yet (6, 7).
+> Phases 0 through 6 are implemented. This guide used to carry a full build-from-scratch tutorial for those phases; that walkthrough was removed once the code became the better reference — recover it from git history if you need it. The only design sketch left below is for Phase 7, which has **not** been built.
 
 ## Table of Contents
 
@@ -18,7 +18,7 @@ This document describes how Sohwe is built and why. For what to run, see [`READM
 6. [As Built: Observability](#as-built-observability)
 7. [As Built: Portable Bundles](#as-built-portable-bundles)
 8. [As Built: Git-Push Deploys](#as-built-git-push-deploys)
-9. [Phase 6 — Multi-User](#phase-6--multi-user)
+9. [As Built: Multi-User](#phase-6--multi-user)
 10. [Phase 7 — Managed Datastores](#phase-7--managed-datastores)
 11. [Cross-Cutting Concerns](#cross-cutting-concerns)
 12. [Development Workflow](#development-workflow)
@@ -42,7 +42,7 @@ Sohwe lets you connect a Git repo and get a running, HTTPS-terminated container 
 - Encrypted environment variables
 - Live log tail + build logs + basic CPU/memory
 - **Dashboard file browser** for the **running** app container (list directories, preview files) so users can inspect the filesystem without SSH
-- Single owner user at setup, invitable members afterwards
+- Single owner user at setup, invitable members afterwards (copy-link invitations; owner/admin/member roles)
 
 ### Explicitly deferred to v2+
 
@@ -68,7 +68,7 @@ Sohwe lets you connect a Git repo and get a running, HTTPS-terminated container 
 | **4. Observability** | Live logs, build logs, CPU/mem, crash alerts | Shipped |
 | **4.5. Portable Bundles** | Config export/restore, local + S3 destinations, scheduled exports | Shipped |
 | **5. Git-Push Deploys** | GitHub App, webhooks, auto-deploy | Shipped (manual e2e check open) |
-| **6. Multi-User** | Invites, roles, audit log, optional instance-host file browser | Not started |
+| **6. Multi-User** | Invites, roles, audit log | Shipped (instance-host file browser deferred) |
 | **7. Managed Datastores** | One-click Postgres/Redis, private bindings | Post-v1 / v2 |
 
 `ROADMAP.md` is the authoritative per-item checklist with file-level evidence.
@@ -299,13 +299,19 @@ Matching is an indexed lookup on `Application.repoFullName` (`owner/repo`, denor
 
 ## Phase 6 — Multi-User
 
-*Not built. The schema already has user roles and organization scoping, but the product is effectively single-owner.*
+*As built.*
 
-- **Invitations**: `Invitation` table (email, role, token, expiresAt), delivered via Resend / Postmark / SMTP.
-- **Roles**: `owner` / `admin` / `member`, enforced with a `requireRole(...)` plugin.
-- **Org switcher**: ship the UI affordance early even while users belong to one org.
-- **Audit log**: who created/deployed/deleted what, and env var *key* changes without values.
-- **Instance host file access** (owner/admin only): browse paths on the Sohwe server, distinct from the existing **container** file browser. Requires a strict root-path allowlist, `..` rejection, and an audit entry for every list/read. Optional — skip it if invites need to ship first, but keep this security model when you add it.
+**Roles.** Three, strictly ordered, so every check is "at least this role" rather than a per-permission matrix: `owner` > `admin` > `member`. `apps/api/src/rbac.ts` exports `requireRole(min)`, a Fastify preHandler that authenticates first when it runs alone — a route can never end up role-checked but unauthenticated. Unknown role strings rank 0, below `member`, so a downgrade or a hand-edited row fails closed rather than open. `apps/dashboard/src/lib/roles.ts` mirrors the ordering to hide controls the caller cannot use; it is cosmetic, and the API re-checks everything.
+
+The dividing line is not read-vs-write, it is **can this surface expose a secret**. Env vars are admin-and-above even for the masked listing, because `maskedPreview` still shows part of every value. So are the container file browser (it reaches config files, mounted volume data, and `/proc/self/environ`), alert destinations (a Discord/Slack webhook URL is a bearer credential for someone's channel), backups (bundles carry re-encrypted env vars), and the GitHub connection. `member` gets the app list, deployments, logs, metrics, volume definitions, the member roster — and deploy/rollback, because operating existing apps is the point of the role.
+
+**Invitations.** No email. A self-hosted instance would need an SMTP relay or a third-party API key just to add a second user, so instead an admin mints a link and delivers it themselves. `Invitation` stores only the SHA-256 of a 32-byte token; the raw link exists exactly once, in the create response. That makes a lost link unrecoverable by design — revoke and reissue. Acceptance claims the row with a conditional `updateMany` inside the same transaction that creates the user, so two people opening one link cannot both get an account, and the new member is signed in immediately. Invitations grant `admin` or `member`; `owner` is only ever conferred by an existing owner.
+
+**Invariants.** The organization can never be left without an owner (checked on both demotion and removal), nobody may change their own role or delete their own account, and an admin cannot remove an owner. Removing a user cascades their sessions, so access ends everywhere at once. Role changes need no re-login: the role is read from the database on every request through the session lookup.
+
+**Audit log.** `AuditLog` is append-only and org-scoped, written best-effort at the call sites — a failed audit write must never turn a completed action into a failed request. Two rules govern what goes in it: nothing secret, and enough to be useful without it. Env events carry key *names*, counts, and which keys were added, removed, or changed; backup events carry app counts and destination kinds, never passphrases or S3 credentials; GitHub events carry the public App identity, never the PEM or webhook secret; invitation events never carry the token. The actor's email is denormalized onto the row so removing a user leaves the trail readable instead of erasing it — `actorId` goes null, `actorEmail` survives, and the UI marks the actor as removed.
+
+**Not covered:** an **instance host** file browser — browsing paths on the Sohwe server itself, distinct from the existing *container* file browser. It stays deferred, and when it lands it needs the security model sketched for it: a strict root-path allowlist, `..` rejection, and an audit entry for every list and read. There is also no org switcher, because a user still belongs to exactly one organization.
 
 ---
 

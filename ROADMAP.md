@@ -2,7 +2,7 @@
 
 Current snapshot: latest tag is **v0.3.8**. Phases 4, 4.5, and 5 are implemented on `main` and staged for release as **v0.6.0** — `CHANGELOG.md` and the root `package.json` are prepared; the tag itself is held until the manual host verification below passes.
 
-Phases 0 through 5 are implemented in the repo. **Phase 4 - Observability** covers runtime logs, live metrics, and crash alerts. **Phase 4.5 - Portable Bundles** is feature-complete: signed config + re-encrypted env var bundles, local + S3-compatible + download destinations, restore preflight/apply, scheduled exports with cron + retention (worker-driven), and the org-level Backups UI. **Phase 5 - Git-Push Deploys** is implemented: per-instance GitHub App via the manifest flow, installation-token clones for private repos, a signature-verified push webhook, the auto-deploy toggle, and commit-status reporting. The build-log UX slice is also done: bounded build-log storage, derived failure summaries, copy/download, and clearer deployment states. All of this ships as **v0.6.0**. Three Phase 3.5 items remain as manual VPS verification (see `docs/vps-smoke-test.md`), and Phase 5 has its own manual end-to-end check; those are the only things holding the tag. Next unbuilt milestone is **Phase 6 - Multi-User**.
+Phases 0 through 5 are implemented in the repo. **Phase 4 - Observability** covers runtime logs, live metrics, and crash alerts. **Phase 4.5 - Portable Bundles** is feature-complete: signed config + re-encrypted env var bundles, local + S3-compatible + download destinations, restore preflight/apply, scheduled exports with cron + retention (worker-driven), and the org-level Backups UI. **Phase 5 - Git-Push Deploys** is implemented: per-instance GitHub App via the manifest flow, installation-token clones for private repos, a signature-verified push webhook, the auto-deploy toggle, and commit-status reporting. The build-log UX slice is also done: bounded build-log storage, derived failure summaries, copy/download, and clearer deployment states. All of this ships as **v0.6.0**. Three Phase 3.5 items remain as manual VPS verification (see `docs/vps-smoke-test.md`), and Phase 5 has its own manual end-to-end check; those are the only things holding the tag. **Phase 6 - Multi-User** has since landed on `main` for **v0.7.0**: owner/admin/member role guards on every route, copy-link invitations with hashed single-use tokens, member management, and an org-scoped audit log that records key names and counts but never secret values. Its one optional item — an instance *host* filesystem browser, distinct from the existing container browser — is deferred. Next unbuilt milestone is **Phase 7 - Managed Datastores**.
 
 This file is a working checklist. It is based on `README.md`, `CHANGELOG.md`, `sohwe-getting-started.md`, `sohwe-prd.md`, and a code scan across the API, worker, dashboard, Docker, installer, and release workflow.
 
@@ -17,7 +17,7 @@ This file is a working checklist. It is based on `README.md`, `CHANGELOG.md`, `s
 - [x] **Phase 4 - Observability**
 - [x] **Phase 4.5 - Portable Bundles**
 - [x] **Phase 5 - Git-Push Deploys**
-- [ ] **Phase 6 - Multi-User**
+- [x] **Phase 6 - Multi-User** (optional host file browser deferred)
 - [ ] **Phase 7 - Managed Datastores** (post-v1/v2)
 
 ## Completed
@@ -230,34 +230,46 @@ Known follow-ups (not blockers):
       shown in a Recent deliveries panel in `apps/dashboard/src/routes/git.tsx`)
 - [ ] GitHub only. GitLab/Gitea would need a separate credential and webhook path.
 
-## Not Yet Built
+## Staged For v0.7.0
 
 ### Phase 6 - Multi-User
 
-The schema already has user roles and organization scoping, but the product is still effectively single-owner.
-
-- [ ] Add invitation table.
-- [ ] Add invitation routes.
-- [ ] Add invitation UI.
-- [ ] Add role guards beyond simple authentication.
-- [ ] Add owner/admin/member permission checks.
-- [ ] Add user management UI.
-- [ ] Add audit log table.
-- [ ] Record app create/update/delete events.
-- [ ] Record deploy/rollback events.
-- [ ] Record env var key changes without values.
-- [ ] Record volume changes.
-- [ ] Record bundle events once Phase 4.5 exists.
+- [x] Add invitation table.
+- [x] Add invitation routes.
+- [x] Add invitation UI.
+- [x] Add role guards beyond simple authentication.
+- [x] Add owner/admin/member permission checks.
+- [x] Add user management UI.
+- [x] Add audit log table.
+- [x] Record app create/update/delete events.
+- [x] Record deploy/rollback events.
+- [x] Record env var key changes without values.
+- [x] Record volume changes.
+- [x] Record bundle events (export, restore, destinations, schedules).
 - [ ] Optional: owner/admin host filesystem browser.
 - [ ] Optional: strict host path allowlist.
 - [ ] Optional: audit every host file list/read action.
 
-Current code gaps:
+Invitations are copy-link, not email: the API mints a single-use token, returns
+the join link once, and stores only its SHA-256. A self-hosted instance
+therefore needs no SMTP relay or third-party email key, and a lost link is
+revoked and reissued rather than recovered.
 
-- [ ] No invitation table/routes/UI.
-- [ ] No audit log table/routes.
-- [ ] No role guard beyond authenticated organization scoping.
-- [ ] No host filesystem browser.
+Evidence: `packages/db/prisma/schema.prisma` (`Invitation`, `AuditLog`),
+`packages/db/prisma/migrations/20260812172122_multi_user_invitations_and_audit_log/`,
+`apps/api/src/rbac.ts`, `apps/api/src/audit.ts`, `apps/api/src/routes/members.ts`,
+`apps/api/src/routes/audit.ts`, `packages/types/src/index.ts`,
+`apps/dashboard/src/lib/roles.ts`, `apps/dashboard/src/routes/members.tsx`,
+`apps/dashboard/src/routes/audit.tsx`, `apps/dashboard/src/routes/join.tsx`,
+`apps/api/src/rbac.test.ts`, `apps/api/src/audit.test.ts`,
+`apps/api/src/routes.test.ts`.
+
+Remaining (optional, deferred): the instance **host** filesystem browser — a
+distinct feature from the existing container file browser, and one that needs a
+strict root-path allowlist, `..` rejection, and an audit entry per list/read
+before it is worth shipping.
+
+## Not Yet Built
 
 ### Phase 7 - Managed Datastores
 
@@ -370,12 +382,13 @@ that tag contains; the release gate itself is under *Cutting v0.6.0* at the end.
 
 ### Next: v0.7.0 - Multi-User And Audit
 
-- [ ] Add invitations.
-- [ ] Add role guards.
-- [ ] Add user management UI.
-- [ ] Add audit log model.
-- [ ] Record mutating actions.
-- [ ] Keep secret values out of audit entries.
+- [x] Add invitations. (copy-link, hashed single-use tokens; no email dependency)
+- [x] Add role guards.
+- [x] Add user management UI.
+- [x] Add audit log model.
+- [x] Record mutating actions.
+- [x] Keep secret values out of audit entries.
+- [ ] Optional: instance host filesystem browser with a path allowlist and per-read auditing.
 
 ### Later: v0.8.0 / v2 Candidate - Managed Postgres And Redis
 

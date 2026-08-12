@@ -21,12 +21,10 @@ import IORedis from "ioredis";
 import { z } from "zod";
 import { defaultApplicationSelect, serializeAppListRow } from "../app-public";
 import { getRunningAppContainer } from "../container-fs";
-import { authPreHandler } from "../session";
+import { recordAudit } from "../audit";
+import { requireRole } from "../rbac";
 
 const docker = new Docker();
-const deployQueue = createQueue();
-// Shared read-only client for polling the worker's short-TTL stats keys.
-const statsRedis = new IORedis(getRedisUrl());
 
 const IdParam = z.object({ id: z.string().uuid() });
 const DepParam = z.object({ deploymentId: z.string().uuid() });
@@ -145,18 +143,39 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
   const sel20 = defaultApplicationSelect(20);
   const sel30 = defaultApplicationSelect(30);
 
-  // The deploy queue and the stats client are opened at module load and would
-  // otherwise keep the process alive after `app.close()` — which SIGTERM calls,
-  // and which a test run needs in order to exit at all.
+  // Redis connections are owned by this server instance, not the module:
+  // `onClose` below shuts them down, and a module-level connection would leave
+  // every *other* instance built in the same process holding a closed handle.
+  // Production builds one server; the route tests build a fresh one per test.
+  //
+  // They are also opened lazily, on the first request that needs one. Opening
+  // eagerly means a server that never deploys still connects and then tears the
+  // connection down at close, which races any handshake still in flight.
+  let deployQueue: ReturnType<typeof createQueue> | null = null;
+  let statsRedis: IORedis | null = null;
+
+  function queue(): ReturnType<typeof createQueue> {
+    deployQueue ??= createQueue();
+    return deployQueue;
+  }
+
+  /** Read-only client for polling the worker's short-TTL stats keys. */
+  function stats(): IORedis {
+    statsRedis ??= new IORedis(getRedisUrl());
+    return statsRedis;
+  }
+
+  // Either would otherwise keep the process alive after `app.close()` — which
+  // SIGTERM calls, and which a test run needs in order to exit at all.
   app.addHook("onClose", async () => {
-    await deployQueue.close().catch(() => {});
-    statsRedis.disconnect();
+    await deployQueue?.close().catch(() => {});
+    statsRedis?.disconnect();
   });
 
   app.post(
     "/api/applications",
     {
-      preHandler: [authPreHandler],
+      preHandler: [requireRole("admin")],
       schema: { body: CreateApplicationSchema }
     },
     async (req, reply) => {
@@ -190,6 +209,21 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
         },
         select: sel20
       });
+      // `sel20` is a widened Prisma.ApplicationSelect, so the row's fields are
+      // not statically known here; the id is read back through a narrow view.
+      const { id: createdId } = created as unknown as { id: string };
+      await recordAudit(req, {
+        action: "application.create",
+        targetType: "application",
+        targetId: createdId,
+        targetLabel: body.slug,
+        metadata: {
+          gitRepo: body.gitRepo,
+          gitBranch: body.gitBranch,
+          buildMode: body.buildMode,
+          autoDeploy: body.autoDeploy
+        }
+      });
       return serializeAppListRow(created);
     }
   );
@@ -197,7 +231,7 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
   app.patch(
     "/api/applications/:id",
     {
-      preHandler: [authPreHandler],
+      preHandler: [requireRole("admin")],
       schema: { params: IdParam, body: UpdateApplicationSchema }
     },
     async (req, reply) => {
@@ -255,13 +289,22 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
         data,
         select: sel30
       });
+      // Field names only — an app's settings are not secret, but keeping the
+      // trail to keys matches how env changes are recorded.
+      await recordAudit(req, {
+        action: "application.update",
+        targetType: "application",
+        targetId: existing.id,
+        targetLabel: existing.slug,
+        metadata: { fields: Object.keys(data).sort() }
+      });
       return serializeAppListRow(updated);
     }
   );
 
   app.get(
     "/api/applications",
-    { preHandler: [authPreHandler] },
+    { preHandler: [requireRole("member")] },
     async (req, _reply) => {
       const u = req.user!;
       const rows = await prisma.application.findMany({
@@ -276,7 +319,7 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
   app.get(
     "/api/applications/:id",
     {
-      preHandler: [authPreHandler],
+      preHandler: [requireRole("member")],
       schema: { params: IdParam }
     },
     async (req, reply) => {
@@ -294,7 +337,7 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
   app.delete(
     "/api/applications/:id",
     {
-      preHandler: [authPreHandler],
+      preHandler: [requireRole("admin")],
       schema: { params: IdParam }
     },
     async (req, reply) => {
@@ -304,6 +347,7 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
         where: { id, organizationId: u.organizationId },
         select: {
           id: true,
+          slug: true,
           volumes: { select: { id: true } }
         }
       });
@@ -311,14 +355,23 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
       const volIds = a.volumes.map((v) => v.id);
       await removeDockerForApplication(a.id, volIds);
       await prisma.application.delete({ where: { id: a.id } });
+      await recordAudit(req, {
+        action: "application.delete",
+        targetType: "application",
+        targetId: a.id,
+        targetLabel: a.slug,
+        metadata: { volumesRemoved: volIds.length }
+      });
       return { ok: true };
     }
   );
 
+  // Deploy and rollback stay open to members: operating existing apps is the
+  // point of the member role. Creating and reconfiguring them is not.
   app.post(
     "/api/applications/:id/deploy",
     {
-      preHandler: [authPreHandler],
+      preHandler: [requireRole("member")],
       schema: { params: IdParam }
     },
     async (req, reply) => {
@@ -331,11 +384,18 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
       const d = await prisma.deployment.create({
         data: { applicationId: a.id, status: "pending" }
       });
-      await deployQueue.add(
+      await queue().add(
         "deploy",
         { deploymentId: d.id, applicationId: a.id },
         { jobId: d.id, removeOnComplete: 200, removeOnFail: 100 }
       );
+      await recordAudit(req, {
+        action: "deployment.deploy",
+        targetType: "deployment",
+        targetId: d.id,
+        targetLabel: a.slug,
+        metadata: { applicationId: a.id, branch: a.gitBranch }
+      });
       return reply.status(202).send({ deployment: { id: d.id, status: d.status } });
     }
   );
@@ -343,7 +403,7 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
   app.post(
     "/api/applications/:id/rollback",
     {
-      preHandler: [authPreHandler],
+      preHandler: [requireRole("member")],
       schema: { params: IdParam, body: RollbackBodySchema }
     },
     async (req, reply) => {
@@ -367,7 +427,7 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
       const d = await prisma.deployment.create({
         data: { applicationId: a.id, status: "pending", trigger: "rollback" }
       });
-      await deployQueue.add(
+      await queue().add(
         "promote",
         {
           deploymentId: d.id,
@@ -376,6 +436,17 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
         },
         { jobId: d.id, removeOnComplete: 200, removeOnFail: 100 }
       );
+      await recordAudit(req, {
+        action: "deployment.rollback",
+        targetType: "deployment",
+        targetId: d.id,
+        targetLabel: a.slug,
+        metadata: {
+          applicationId: a.id,
+          sourceDeploymentId,
+          commitSha: source.commitSha
+        }
+      });
       return reply
         .status(202)
         .send({ deployment: { id: d.id, status: d.status } });
@@ -385,7 +456,7 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
   app.get(
     "/api/applications/:id/logs",
     {
-      preHandler: [authPreHandler],
+      preHandler: [requireRole("member")],
       schema: { params: IdParam }
     },
     async (req, reply) => {
@@ -431,7 +502,7 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
   app.get(
     "/api/applications/:id/stats",
     {
-      preHandler: [authPreHandler],
+      preHandler: [requireRole("member")],
       schema: { params: IdParam },
       logLevel: "silent"
     },
@@ -444,7 +515,7 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
       });
       if (!a) return reply.notFound();
 
-      const raw = await statsRedis.get(appStatsKey(id)).catch(() => null);
+      const raw = await stats().get(appStatsKey(id)).catch(() => null);
       if (!raw) return { running: false };
       try {
         return JSON.parse(raw) as unknown;
@@ -457,7 +528,7 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
   app.get(
     "/api/deployments/:deploymentId/logs",
     {
-      preHandler: [authPreHandler],
+      preHandler: [requireRole("member")],
       schema: { params: DepParam }
     },
     async (req, reply) => {

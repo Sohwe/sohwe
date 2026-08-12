@@ -10,9 +10,13 @@ import {
   normalizeContainerPath,
   readContainerFile
 } from "../container-fs";
-import { authPreHandler } from "../session";
+import { requireRole } from "../rbac";
 
 const docker = new Docker();
+
+// Admin-and-above. Reading a running container's filesystem is a read, but it
+// reaches config files, mounted volume data, and /proc/self/environ — the same
+// secrets the env var routes protect.
 
 const IdParam = z.object({ id: z.string().uuid() });
 
@@ -20,7 +24,7 @@ export async function registerAppFilesystemRoutes(app: FastifyInstance) {
   app.get(
     "/api/applications/:id/fs/list",
     {
-      preHandler: [authPreHandler],
+      preHandler: [requireRole("admin")],
       schema: { params: IdParam, querystring: FsPathQuerySchema }
     },
     async (req, reply) => {
@@ -66,7 +70,7 @@ export async function registerAppFilesystemRoutes(app: FastifyInstance) {
   app.get(
     "/api/applications/:id/fs/file",
     {
-      preHandler: [authPreHandler],
+      preHandler: [requireRole("admin")],
       schema: { params: IdParam, querystring: FsPathQuerySchema }
     },
     async (req, reply) => {

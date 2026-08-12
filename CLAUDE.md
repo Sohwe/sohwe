@@ -26,7 +26,8 @@ Milestone state (verify against `ROADMAP.md` before relying on this):
 - Phase 4 (observability) complete: runtime log SSE, live Docker stats, crash/OOM alerts.
 - Phase 4.5 (portable bundles) complete: signed passphrase-protected config bundles, local/S3/download destinations, restore preflight+apply, scheduled exports with retention.
 - Phase 5 (git-push deploys) complete: per-instance GitHub App via manifest flow, installation-token clones, signature-verified push webhook, auto-deploy toggle, commit statuses. A manual end-to-end check on a real host is still open.
-- Next unstarted milestone is Phase 6: multi-user.
+- Phase 6 (multi-user) complete except one optional item: owner/admin/member role guards, copy-link invitations, member management, org-scoped audit log. The deferred item is an instance *host* filesystem browser (distinct from the existing container browser).
+- Next unstarted milestone is Phase 7: managed datastores (post-v1).
 
 ## Repository Shape
 
@@ -102,8 +103,9 @@ Never commit real secrets or generated env files.
 
 ### API
 
-- `apps/api/src/index.ts` is the process entrypoint only (env load, `listen`, boot tasks, SIGTERM). The Fastify instance is assembled by `buildServer` in `apps/api/src/server.ts` — put new routes and plugins there, so the server stays constructible without binding a port. Routes are registered via `register*Routes` functions; modules live in `apps/api/src/routes` (`applications`, `env-vars`, `volumes`, `alert-destinations`, `app-filesystem`, `backups`, `github`, `github-webhook`).
-- Protected routes use `authPreHandler` from `apps/api/src/session.ts` and scope every query by `req.user!.organizationId`. Backups routes are org-scoped, not app-scoped.
+- `apps/api/src/index.ts` is the process entrypoint only (env load, `listen`, boot tasks, SIGTERM). The Fastify instance is assembled by `buildServer` in `apps/api/src/server.ts` — put new routes and plugins there, so the server stays constructible without binding a port. Routes are registered via `register*Routes` functions; modules live in `apps/api/src/routes` (`applications`, `env-vars`, `volumes`, `alert-destinations`, `app-filesystem`, `backups`, `github`, `github-webhook`, `members`, `audit`).
+- Protected routes use `requireRole(min)` from `apps/api/src/rbac.ts` (see *Roles, Invitations, and the Audit Log*) and scope every query by `req.user!.organizationId`. Backups routes are org-scoped, not app-scoped. `authPreHandler` in `apps/api/src/session.ts` is the underlying auth step and is fine on its own only for routes with no role floor at all.
+- Redis handles owned by a route module (the deploy queue, the stats client) are created inside `register*Routes` and closed in that instance's `onClose` — never at module load. A module-level connection is shared by every server built in the process, so one `app.close()` breaks the rest, which the route tests hit immediately.
 - Never return `Application.envVarsEncrypted` from general endpoints. Use `defaultApplicationSelect` and `serializeAppListRow` from `apps/api/src/app-public.ts` unless a route deliberately deals in secrets.
 - Mutating env routes must not log request bodies. Preserve the existing `logLevel: "silent"` pattern when editing them.
 - Serialize BigInt values (e.g. volume `sizeBytes`) before JSON responses.
@@ -147,6 +149,16 @@ Never commit real secrets or generated env files.
 - Commit-status reporting is best-effort and must swallow its own failures — it can never fail a deploy.
 - Every delivery is recorded through `recordWebhookDelivery` (`apps/api/src/webhook-deliveries.ts`), including rejected ones — a wrong webhook secret is the most common cause of a silent missed push. Recording is best-effort and must never fail a delivery that would otherwise deploy. Rejected rows may only carry GitHub's clear-text headers; repo/branch/commit are populated after the HMAC verifies.
 - `SOHWE_PUBLIC_URL` is fixed into the App's webhook/redirect URLs at creation time. Changing it later requires recreating the App on GitHub.
+
+### Roles, Invitations, and the Audit Log
+
+- Roles are strictly ordered: `owner` > `admin` > `member`. Guard routes with `requireRole(min)` from `apps/api/src/rbac.ts`, not bare `authPreHandler` — it authenticates first, so `preHandler: [requireRole("member")]` is complete on its own. Unknown role strings rank 0 and get nothing; keep that fail-closed behavior.
+- The dividing line for a new route is **can this surface expose a secret**, not read-vs-write. Env vars (including the masked listing), the container file browser, alert destinations, backups, and the GitHub connection are admin-and-above even for reads. `member` covers viewing apps plus deploy/rollback.
+- Role changes must stay effective without re-login; the role is read from the DB on every request via the session lookup. Do not cache it into the session row.
+- Invariants enforced in `apps/api/src/routes/members.ts`: the org can never lose its last owner, nobody changes their own role or removes their own account, and an admin cannot remove an owner. Keep these when touching that file.
+- Invitations are copy-link, never email. Only `tokenHash` (SHA-256) is stored; the raw token appears exactly once, in the create response. Never add an endpoint that re-reveals a token, and never log one. Acceptance claims the row with a conditional `updateMany` inside the user-creating transaction — keep that, or one link can mint two accounts.
+- Record mutating actions with `recordAudit` from `apps/api/src/audit.ts`, and add the action to the `AuditAction` union and `AUDIT_ACTIONS`. Audit writes are best-effort and must never fail the request they describe.
+- **Nothing secret goes in an audit row.** Env events carry key names and counts (`envChangeMetadata`), never values; backup events never carry passphrases or S3 credentials; GitHub events never carry the PEM or webhook secret; invitation events never carry the token. `actorEmail` is denormalized on purpose so removing a user does not erase their trail.
 
 ### Database
 

@@ -18,33 +18,28 @@ import {
 import {
   buildSetupStatus,
   clearSetupGateCookie,
-  cookieSecure,
   setSetupGateCookie,
   setupGateHook,
   verifyUnlockPassword
 } from "./setup-gate";
 import { registerAlertDestinationRoutes } from "./routes/alert-destinations";
 import { registerAppFilesystemRoutes } from "./routes/app-filesystem";
+import { registerAuditRoutes } from "./routes/audit";
 import { registerBackupRoutes } from "./routes/backups";
 import { registerApplicationRoutes } from "./routes/applications";
 import { registerGitHubRoutes } from "./routes/github";
 import { registerGitHubWebhookRoutes } from "./routes/github-webhook";
 import { registerEnvVarRoutes } from "./routes/env-vars";
+import { registerMemberRoutes } from "./routes/members";
 import { registerVolumeRoutes } from "./routes/volumes";
+import { AUTH_RATE_LIMIT } from "./rate-limit";
+import { issueSession } from "./session";
 import type { ApiConfig } from "./env";
 
 // Assembly of the Fastify instance, separated from `index.ts` so the server can
 // be built without binding a port. `index.ts` owns process concerns (env
 // loading, listen, signal handling); everything about *what the API is* lives
 // here, which is also what makes route tests possible via `app.inject()`.
-
-// Throttle the two unauthenticated, internet-facing credential endpoints. Keyed
-// by client IP; a burst past the limit gets 429 until the window rolls over.
-const AUTH_RATE_LIMIT = {
-  rateLimit: { max: 10, timeWindow: "1 minute" }
-} as const;
-
-const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 export async function buildServer(
   config: ApiConfig,
@@ -155,18 +150,7 @@ export async function buildServer(
       const valid = await argon2.verify(user.passwordHash, password);
       if (!valid) return reply.unauthorized("Invalid credentials");
 
-      const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
-      const session = await prisma.session.create({
-        data: { userId: user.id, expiresAt }
-      });
-
-      reply.setCookie("sohwe_session", session.id, {
-        httpOnly: true,
-        sameSite: "lax",
-        secure: cookieSecure(),
-        path: "/",
-        expires: expiresAt
-      });
+      await issueSession(reply, user.id);
 
       return { id: user.id, email: user.email, name: user.name };
     }
@@ -215,6 +199,8 @@ export async function buildServer(
   await registerBackupRoutes(app);
   await registerGitHubRoutes(app, config);
   await registerGitHubWebhookRoutes(app);
+  await registerMemberRoutes(app, config);
+  await registerAuditRoutes(app);
 
   return app;
 }

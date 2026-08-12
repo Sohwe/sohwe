@@ -11,9 +11,14 @@ import {
   maskedPreview
 } from "@sohwe/crypto";
 import { z } from "zod";
-import { authPreHandler } from "../session";
+import { envChangeMetadata, recordAudit } from "../audit";
+import { requireRole } from "../rbac";
 
 const IdParam = z.object({ id: z.string().uuid() });
+
+// Env vars are admin-and-above end to end, including the non-revealing read:
+// `maskedPreview` still exposes the shape and a few characters of every secret,
+// which is more than the read-only member role should see.
 
 function readEnv(
   enc: Buffer | null | undefined
@@ -28,7 +33,7 @@ export async function registerEnvVarRoutes(app: FastifyInstance) {
   app.get(
     "/api/applications/:id/env",
     {
-      preHandler: [authPreHandler],
+      preHandler: [requireRole("admin")],
       schema: { params: IdParam, querystring: EnvQuerySchema },
       ...envOpts
     },
@@ -39,7 +44,7 @@ export async function registerEnvVarRoutes(app: FastifyInstance) {
 
       const a = await prisma.application.findFirst({
         where: { id, organizationId: u.organizationId },
-        select: { id: true, envVarsEncrypted: true }
+        select: { id: true, slug: true, envVarsEncrypted: true }
       });
       if (!a) return reply.notFound();
 
@@ -53,6 +58,14 @@ export async function registerEnvVarRoutes(app: FastifyInstance) {
       }
 
       if (reveal) {
+        // Reading plaintext secrets is itself an auditable act.
+        await recordAudit(req, {
+          action: "env.reveal",
+          targetType: "env",
+          targetId: a.id,
+          targetLabel: a.slug,
+          metadata: { keys: Object.keys(map).sort(), totalKeys: Object.keys(map).length }
+        });
         return {
           keys: Object.keys(map).sort(),
           items: Object.entries(map)
@@ -73,7 +86,7 @@ export async function registerEnvVarRoutes(app: FastifyInstance) {
   app.put(
     "/api/applications/:id/env",
     {
-      preHandler: [authPreHandler],
+      preHandler: [requireRole("admin")],
       schema: { params: IdParam, body: EnvVarsReplaceSchema },
       ...envOpts
     },
@@ -83,9 +96,19 @@ export async function registerEnvVarRoutes(app: FastifyInstance) {
       const { vars } = EnvVarsReplaceSchema.parse(req.body);
 
       const a = await prisma.application.findFirst({
-        where: { id, organizationId: u.organizationId }
+        where: { id, organizationId: u.organizationId },
+        select: { id: true, slug: true, envVarsEncrypted: true }
       });
       if (!a) return reply.notFound();
+
+      // Read the previous set purely to describe the change in the audit trail;
+      // an unreadable blob is being replaced wholesale either way.
+      let before: Record<string, string> = {};
+      try {
+        before = readEnv(a.envVarsEncrypted);
+      } catch {
+        before = {};
+      }
 
       const data =
         Object.keys(vars).length === 0
@@ -96,6 +119,13 @@ export async function registerEnvVarRoutes(app: FastifyInstance) {
         where: { id },
         data
       });
+      await recordAudit(req, {
+        action: "env.update",
+        targetType: "env",
+        targetId: a.id,
+        targetLabel: a.slug,
+        metadata: { mode: "replace", ...envChangeMetadata(before, vars) }
+      });
       return { ok: true, id: updated.id };
     }
   );
@@ -103,7 +133,7 @@ export async function registerEnvVarRoutes(app: FastifyInstance) {
   app.patch(
     "/api/applications/:id/env",
     {
-      preHandler: [authPreHandler],
+      preHandler: [requireRole("admin")],
       schema: { params: IdParam, body: EnvVarsPatchSchema },
       ...envOpts
     },
@@ -121,7 +151,7 @@ export async function registerEnvVarRoutes(app: FastifyInstance) {
 
       const a = await prisma.application.findFirst({
         where: { id, organizationId: u.organizationId },
-        select: { id: true, envVarsEncrypted: true }
+        select: { id: true, slug: true, envVarsEncrypted: true }
       });
       if (!a) return reply.notFound();
 
@@ -134,6 +164,7 @@ export async function registerEnvVarRoutes(app: FastifyInstance) {
           .send({ message: "Failed to read env var configuration" });
       }
 
+      const before = { ...map };
       if (set) for (const [k, v] of Object.entries(set)) map[k] = v;
       if (unset) for (const k of unset) delete map[k];
 
@@ -145,6 +176,13 @@ export async function registerEnvVarRoutes(app: FastifyInstance) {
       const updated = await prisma.application.update({
         where: { id },
         data
+      });
+      await recordAudit(req, {
+        action: "env.update",
+        targetType: "env",
+        targetId: a.id,
+        targetLabel: a.slug,
+        metadata: { mode: "patch", ...envChangeMetadata(before, map) }
       });
       return { ok: true, id: updated.id };
     }

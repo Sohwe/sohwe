@@ -22,7 +22,11 @@ import {
   UpdateBackupScheduleSchema
 } from "@sohwe/types";
 import { z } from "zod";
-import { authPreHandler } from "../session";
+import { recordAudit } from "../audit";
+import { requireRole } from "../rbac";
+
+// Admin-and-above throughout. Bundles carry re-encrypted env vars and restore
+// can overwrite live app configuration, so neither side of it is a member action.
 
 const SOHWE_VERSION = process.env.SOHWE_VERSION ?? "0.5.0";
 
@@ -129,7 +133,7 @@ export async function registerBackupRoutes(app: FastifyInstance) {
 
   app.get(
     "/api/backups/destinations",
-    { preHandler: [authPreHandler] },
+    { preHandler: [requireRole("admin")] },
     async (req) => {
       const u = req.user!;
       const rows = await prisma.backupDestination.findMany({
@@ -143,7 +147,7 @@ export async function registerBackupRoutes(app: FastifyInstance) {
   app.post(
     "/api/backups/destinations",
     {
-      preHandler: [authPreHandler],
+      preHandler: [requireRole("admin")],
       schema: { body: CreateBackupDestinationSchema },
       ...secretOpts
     },
@@ -162,29 +166,44 @@ export async function registerBackupRoutes(app: FastifyInstance) {
           secretEncrypted
         }
       });
+      await recordAudit(req, {
+        action: "backup.destination.create",
+        targetType: "backup",
+        targetId: row.id,
+        targetLabel: row.name,
+        // Kind only; the S3 credentials never leave `secretEncrypted`.
+        metadata: { kind: row.kind }
+      });
       return reply.status(201).send(serializeDestination(row));
     }
   );
 
   app.delete(
     "/api/backups/destinations/:destId",
-    { preHandler: [authPreHandler], schema: { params: DestIdParam } },
+    { preHandler: [requireRole("admin")], schema: { params: DestIdParam } },
     async (req, reply) => {
       const u = req.user!;
       const { destId } = req.params as z.infer<typeof DestIdParam>;
       const existing = await prisma.backupDestination.findFirst({
         where: { id: destId, organizationId: u.organizationId },
-        select: { id: true }
+        select: { id: true, name: true, kind: true }
       });
       if (!existing) return reply.notFound();
       await prisma.backupDestination.delete({ where: { id: destId } });
+      await recordAudit(req, {
+        action: "backup.destination.delete",
+        targetType: "backup",
+        targetId: existing.id,
+        targetLabel: existing.name,
+        metadata: { kind: existing.kind }
+      });
       return { ok: true };
     }
   );
 
   // --- Bundle history ------------------------------------------------------
 
-  app.get("/api/backups", { preHandler: [authPreHandler] }, async (req) => {
+  app.get("/api/backups", { preHandler: [requireRole("admin")] }, async (req) => {
     const u = req.user!;
     const rows = await prisma.bundle.findMany({
       where: { organizationId: u.organizationId },
@@ -198,7 +217,7 @@ export async function registerBackupRoutes(app: FastifyInstance) {
 
   app.post(
     "/api/backups/export",
-    { preHandler: [authPreHandler], schema: { body: BackupExportSchema }, ...secretOpts },
+    { preHandler: [requireRole("admin")], schema: { body: BackupExportSchema }, ...secretOpts },
     async (req, reply) => {
       const u = req.user!;
       const body = BackupExportSchema.parse(req.body);
@@ -274,11 +293,23 @@ export async function registerBackupRoutes(app: FastifyInstance) {
             status: "ready"
           }
         });
+        await recordAudit(req, {
+          action: "backup.export",
+          targetType: "backup",
+          targetId: row.id,
+          targetLabel: filename,
+          metadata: {
+            mode: "destination",
+            destinationId: destRow.id,
+            appCount: bundleApps.length,
+            includesSecrets: body.includeSecrets
+          }
+        });
         return reply.status(201).send(serializeBundle(row));
       }
 
       // Download path: record the bundle, then return the file.
-      await prisma.bundle.create({
+      const downloaded = await prisma.bundle.create({
         data: {
           organizationId: u.organizationId,
           filename,
@@ -286,6 +317,17 @@ export async function registerBackupRoutes(app: FastifyInstance) {
           appCount: bundleApps.length,
           includesSecrets: body.includeSecrets,
           status: "ready"
+        }
+      });
+      await recordAudit(req, {
+        action: "backup.export",
+        targetType: "backup",
+        targetId: downloaded.id,
+        targetLabel: filename,
+        metadata: {
+          mode: "download",
+          appCount: bundleApps.length,
+          includesSecrets: body.includeSecrets
         }
       });
       reply
@@ -299,7 +341,7 @@ export async function registerBackupRoutes(app: FastifyInstance) {
 
   app.post(
     "/api/backups/restore/preflight",
-    { preHandler: [authPreHandler], schema: { body: RestorePreflightSchema }, ...secretOpts },
+    { preHandler: [requireRole("admin")], schema: { body: RestorePreflightSchema }, ...secretOpts },
     async (req, reply) => {
       const u = req.user!;
       const body = RestorePreflightSchema.parse(req.body);
@@ -335,7 +377,7 @@ export async function registerBackupRoutes(app: FastifyInstance) {
 
   app.post(
     "/api/backups/restore/apply",
-    { preHandler: [authPreHandler], schema: { body: RestoreApplySchema }, ...secretOpts },
+    { preHandler: [requireRole("admin")], schema: { body: RestoreApplySchema }, ...secretOpts },
     async (req, reply) => {
       const u = req.user!;
       const body = RestoreApplySchema.parse(req.body);
@@ -447,6 +489,17 @@ export async function registerBackupRoutes(app: FastifyInstance) {
         return { created, overwritten, skipped, renamed };
       });
 
+      await recordAudit(req, {
+        action: "backup.restore",
+        targetType: "backup",
+        targetLabel: parsed.source.orgName,
+        metadata: {
+          collisionPolicy: body.collisionPolicy,
+          includesSecrets: parsed.includesSecrets,
+          bundleCreatedAt: parsed.createdAt,
+          ...result
+        }
+      });
       return result;
     }
   );
@@ -455,7 +508,7 @@ export async function registerBackupRoutes(app: FastifyInstance) {
 
   app.get(
     "/api/backups/schedules",
-    { preHandler: [authPreHandler] },
+    { preHandler: [requireRole("admin")] },
     async (req) => {
       const u = req.user!;
       const rows = await prisma.backupSchedule.findMany({
@@ -470,7 +523,7 @@ export async function registerBackupRoutes(app: FastifyInstance) {
   app.post(
     "/api/backups/schedules",
     {
-      preHandler: [authPreHandler],
+      preHandler: [requireRole("admin")],
       schema: { body: CreateBackupScheduleSchema },
       ...secretOpts
     },
@@ -500,6 +553,19 @@ export async function registerBackupRoutes(app: FastifyInstance) {
         },
         include: { destination: { select: { name: true, kind: true } } }
       });
+      await recordAudit(req, {
+        action: "backup.schedule.create",
+        targetType: "backup",
+        targetId: row.id,
+        targetLabel: row.destination.name,
+        // Never the passphrase.
+        metadata: {
+          cron: row.cron,
+          enabled: row.enabled,
+          includesSecrets: row.includeSecrets,
+          retentionCount: row.retentionCount
+        }
+      });
       return reply.status(201).send(serializeSchedule(row));
     }
   );
@@ -507,7 +573,7 @@ export async function registerBackupRoutes(app: FastifyInstance) {
   app.patch(
     "/api/backups/schedules/:scheduleId",
     {
-      preHandler: [authPreHandler],
+      preHandler: [requireRole("admin")],
       schema: { params: ScheduleIdParam, body: UpdateBackupScheduleSchema },
       ...secretOpts
     },
@@ -542,22 +608,41 @@ export async function registerBackupRoutes(app: FastifyInstance) {
         },
         include: { destination: { select: { name: true, kind: true } } }
       });
+      await recordAudit(req, {
+        action: "backup.schedule.update",
+        targetType: "backup",
+        targetId: row.id,
+        targetLabel: row.destination.name,
+        // Records *that* the passphrase changed, never the value.
+        metadata: {
+          fields: Object.keys(body).sort(),
+          cron: row.cron,
+          enabled: row.enabled
+        }
+      });
       return serializeSchedule(row);
     }
   );
 
   app.delete(
     "/api/backups/schedules/:scheduleId",
-    { preHandler: [authPreHandler], schema: { params: ScheduleIdParam } },
+    { preHandler: [requireRole("admin")], schema: { params: ScheduleIdParam } },
     async (req, reply) => {
       const u = req.user!;
       const { scheduleId } = req.params as z.infer<typeof ScheduleIdParam>;
       const existing = await prisma.backupSchedule.findFirst({
         where: { id: scheduleId, organizationId: u.organizationId },
-        select: { id: true }
+        select: { id: true, cron: true, destination: { select: { name: true } } }
       });
       if (!existing) return reply.notFound();
       await prisma.backupSchedule.delete({ where: { id: scheduleId } });
+      await recordAudit(req, {
+        action: "backup.schedule.delete",
+        targetType: "backup",
+        targetId: existing.id,
+        targetLabel: existing.destination.name,
+        metadata: { cron: existing.cron }
+      });
       return { ok: true };
     }
   );

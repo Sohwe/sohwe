@@ -1,10 +1,12 @@
 import { Link, useLocation } from "@tanstack/react-router";
-import { Box, ChevronsLeft, ChevronsRight, DatabaseBackup, GitBranch, LayoutGrid, Menu } from "lucide-react";
+import { Box, ChevronsLeft, ChevronsRight, DatabaseBackup, GitBranch, LayoutGrid, Menu, ScrollText, Users } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import { Separator } from "@/components/ui/separator";
+import { isAdmin } from "@/lib/roles";
+import { ROLE_LABEL } from "@/lib/roles";
 import type { Me } from "@/lib/types";
 
 function NavLink({
@@ -38,6 +40,9 @@ function NavLink({
 }
 
 function SidebarContent({ onNavigate, me }: { onNavigate?: () => void; me: Me }) {
+  // Git, Backups, and the audit log are admin-only on the API side; showing
+  // them to a member would only lead to a 403.
+  const admin = isAdmin(me);
   return (
     <div className="flex h-full flex-col">
       <div className="flex h-14 items-center border-b border-border px-3">
@@ -48,23 +53,38 @@ function SidebarContent({ onNavigate, me }: { onNavigate?: () => void; me: Me })
         <NavLink to="/apps" icon={LayoutGrid} onClick={onNavigate}>
           Applications
         </NavLink>
-        <NavLink to="/git" icon={GitBranch} onClick={onNavigate}>
-          Git
+        {admin ? (
+          <>
+            <NavLink to="/git" icon={GitBranch} onClick={onNavigate}>
+              Git
+            </NavLink>
+            <NavLink to="/backups" icon={DatabaseBackup} onClick={onNavigate}>
+              Backups
+            </NavLink>
+          </>
+        ) : null}
+        <NavLink to="/members" icon={Users} onClick={onNavigate}>
+          Members
         </NavLink>
-        <NavLink to="/backups" icon={DatabaseBackup} onClick={onNavigate}>
-          Backups
-        </NavLink>
+        {admin ? (
+          <NavLink to="/audit" icon={ScrollText} onClick={onNavigate}>
+            Audit log
+          </NavLink>
+        ) : null}
       </nav>
       <Separator />
       <div className="p-2 text-xs text-muted-foreground">
         <p className="truncate font-medium text-foreground/90">{me.organization.name}</p>
-        <p className="mt-0.5 truncate">{me.name ?? me.email}</p>
+        <p className="mt-0.5 truncate">
+          {me.name ?? me.email} · {ROLE_LABEL[me.role] ?? me.role}
+        </p>
       </div>
     </div>
   );
 }
 
 export function AppSidebar({ me, collapsed, onToggleCollapse }: { me: Me; collapsed: boolean; onToggleCollapse: () => void }) {
+  const admin = isAdmin(me);
   return (
     <aside
       className={cn(
@@ -84,20 +104,40 @@ export function AppSidebar({ me, collapsed, onToggleCollapse }: { me: Me; collap
           >
             <LayoutGrid className="h-4 w-4" />
           </Link>
+          {admin ? (
+            <>
+              <Link
+                to="/git"
+                className="mt-1 flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-accent"
+                title="Git"
+              >
+                <GitBranch className="h-4 w-4" />
+              </Link>
+              <Link
+                to="/backups"
+                className="mt-1 flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-accent"
+                title="Backups"
+              >
+                <DatabaseBackup className="h-4 w-4" />
+              </Link>
+            </>
+          ) : null}
           <Link
-            to="/git"
+            to="/members"
             className="mt-1 flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-accent"
-            title="Git"
+            title="Members"
           >
-            <GitBranch className="h-4 w-4" />
+            <Users className="h-4 w-4" />
           </Link>
-          <Link
-            to="/backups"
-            className="mt-1 flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-accent"
-            title="Backups"
-          >
-            <DatabaseBackup className="h-4 w-4" />
-          </Link>
+          {admin ? (
+            <Link
+              to="/audit"
+              className="mt-1 flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-accent"
+              title="Audit log"
+            >
+              <ScrollText className="h-4 w-4" />
+            </Link>
+          ) : null}
         </div>
       ) : (
         <>

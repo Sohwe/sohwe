@@ -321,6 +321,73 @@ export type UpdateBackupScheduleInput = z.infer<
   typeof UpdateBackupScheduleSchema
 >;
 
+// --- Phase 6: Multi-user ----------------------------------------------------
+
+/**
+ * Organization roles, ordered from most to least privileged.
+ *
+ * - `owner`   full control, including managing other owners and the org itself
+ * - `admin`   everything operational: apps, env vars, volumes, backups, Git,
+ *             and inviting/removing members — but cannot touch owners
+ * - `member`  read-only, plus deploying and rolling back existing apps
+ *
+ * Secret-adjacent surfaces (env var values, the container file browser, backup
+ * export/restore) require `admin` or higher; see `apps/api/src/rbac.ts`.
+ */
+export const ROLES = ["owner", "admin", "member"] as const;
+export const RoleSchema = z.enum(ROLES);
+export type Role = z.infer<typeof RoleSchema>;
+
+/** Roles an invitation may grant. Owners are only ever promoted by an owner. */
+export const InvitableRoleSchema = z.enum(["admin", "member"]);
+export type InvitableRole = z.infer<typeof InvitableRoleSchema>;
+
+/** How long a freshly minted invitation link stays valid, in days. */
+export const INVITATION_TTL_DAYS = 7;
+
+export const CreateInvitationSchema = z.object({
+  // Normalize before validating: a pasted address often carries whitespace, and
+  // the duplicate checks against users and pending invitations compare exact
+  // strings, so casing has to be gone by the time the row is written.
+  email: z.string().trim().toLowerCase().email().max(320),
+  role: InvitableRoleSchema.default("member")
+});
+export type CreateInvitationInput = z.infer<typeof CreateInvitationSchema>;
+
+/** Raw invitation token as it appears in a join link. */
+export const InvitationTokenSchema = z.string().min(20).max(200);
+
+/** Public, pre-auth lookup of an invitation by token (no secrets in reply). */
+export const InvitationLookupSchema = z.object({
+  token: InvitationTokenSchema
+});
+export type InvitationLookupInput = z.infer<typeof InvitationLookupSchema>;
+
+/** Redeem an invitation by creating the account it was addressed to. */
+export const AcceptInvitationSchema = z.object({
+  token: InvitationTokenSchema,
+  name: z.string().min(1).max(200),
+  password: z.string().min(8).max(200)
+});
+export type AcceptInvitationInput = z.infer<typeof AcceptInvitationSchema>;
+
+export const UpdateMemberRoleSchema = z.object({
+  role: RoleSchema
+});
+export type UpdateMemberRoleInput = z.infer<typeof UpdateMemberRoleSchema>;
+
+/** Filters for `GET /api/audit-logs`. */
+export const AuditLogQuerySchema = z.object({
+  action: z.string().max(64).optional(),
+  targetType: z.string().max(32).optional(),
+  targetId: z.string().max(64).optional(),
+  actorId: z.string().uuid().optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  /** Opaque cursor: the `id` of the last row from the previous page. */
+  cursor: z.string().uuid().optional()
+});
+export type AuditLogQuery = z.infer<typeof AuditLogQuerySchema>;
+
 /** Docker named volume for a persist mount (Prisma `Volume.id`). */
 export function appDockerVolumeName(
   appId: string,

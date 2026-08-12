@@ -5,7 +5,11 @@ import {
   UpdateAlertDestinationSchema
 } from "@sohwe/types";
 import { z } from "zod";
-import { authPreHandler } from "../session";
+import { recordAudit } from "../audit";
+import { requireRole } from "../rbac";
+
+// Admin-and-above throughout, reads included: a Discord/Slack webhook URL is a
+// bearer credential for posting into someone's channel.
 
 const IdParam = z.object({ id: z.string().uuid() });
 const DestIdParam = z.object({
@@ -39,7 +43,7 @@ function serializeAlertDestination(d: AlertDestinationRow) {
 export async function registerAlertDestinationRoutes(app: FastifyInstance) {
   app.get(
     "/api/applications/:id/alert-destinations",
-    { preHandler: [authPreHandler], schema: { params: IdParam } },
+    { preHandler: [requireRole("admin")], schema: { params: IdParam } },
     async (req, reply) => {
       const u = req.user!;
       const { id } = req.params as z.infer<typeof IdParam>;
@@ -59,7 +63,7 @@ export async function registerAlertDestinationRoutes(app: FastifyInstance) {
   app.post(
     "/api/applications/:id/alert-destinations",
     {
-      preHandler: [authPreHandler],
+      preHandler: [requireRole("admin")],
       schema: { params: IdParam, body: CreateAlertDestinationSchema }
     },
     async (req, reply) => {
@@ -82,6 +86,14 @@ export async function registerAlertDestinationRoutes(app: FastifyInstance) {
           enabled: body.enabled
         }
       });
+      await recordAudit(req, {
+        action: "alert_destination.create",
+        targetType: "alert_destination",
+        targetId: row.id,
+        targetLabel: row.name,
+        // The webhook URL itself stays out of the trail.
+        metadata: { applicationId: a.id, type: row.type, enabled: row.enabled }
+      });
       return reply.status(201).send(serializeAlertDestination(row));
     }
   );
@@ -89,7 +101,7 @@ export async function registerAlertDestinationRoutes(app: FastifyInstance) {
   app.patch(
     "/api/applications/:id/alert-destinations/:destId",
     {
-      preHandler: [authPreHandler],
+      preHandler: [requireRole("admin")],
       schema: { params: DestIdParam, body: UpdateAlertDestinationSchema }
     },
     async (req, reply) => {
@@ -118,13 +130,20 @@ export async function registerAlertDestinationRoutes(app: FastifyInstance) {
         where: { id: destId },
         data
       });
+      await recordAudit(req, {
+        action: "alert_destination.update",
+        targetType: "alert_destination",
+        targetId: row.id,
+        targetLabel: row.name,
+        metadata: { applicationId: a.id, fields: Object.keys(data).sort() }
+      });
       return serializeAlertDestination(row);
     }
   );
 
   app.delete(
     "/api/applications/:id/alert-destinations/:destId",
-    { preHandler: [authPreHandler], schema: { params: DestIdParam } },
+    { preHandler: [requireRole("admin")], schema: { params: DestIdParam } },
     async (req, reply) => {
       const u = req.user!;
       const { id, destId } = req.params as z.infer<typeof DestIdParam>;
@@ -141,6 +160,13 @@ export async function registerAlertDestinationRoutes(app: FastifyInstance) {
       if (!existing) return reply.notFound();
 
       await prisma.alertDestination.delete({ where: { id: destId } });
+      await recordAudit(req, {
+        action: "alert_destination.delete",
+        targetType: "alert_destination",
+        targetId: existing.id,
+        targetLabel: existing.name,
+        metadata: { applicationId: a.id, type: existing.type }
+      });
       return { ok: true };
     }
   );

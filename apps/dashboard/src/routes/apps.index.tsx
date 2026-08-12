@@ -7,14 +7,18 @@ import { PageHeader } from "@/components/common/PageHeader";
 import { EmptyState } from "@/components/common/EmptyState";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { api } from "@/lib/api";
+import { api, fetchMe } from "@/lib/api";
 import { useBaseDomain } from "@/lib/config";
-import type { AppRow } from "@/lib/types";
+import { isAdmin } from "@/lib/roles";
+import type { AppRow, Me } from "@/lib/types";
 
 export function AppsListPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const baseDomain = useBaseDomain();
   const q = useQuery({ queryKey: ["applications"], queryFn: () => api<AppRow[]>("/api/applications") });
+  const { data: me } = useQuery({ queryKey: ["me"], queryFn: () => fetchMe<Me | null>() });
+  // Creating apps is admin-only server-side; members still see and deploy them.
+  const canCreate = isAdmin(me);
 
   useEffect(() => {
     const onOpen = () => setCreateOpen(true);
@@ -29,13 +33,15 @@ export function AppsListPage() {
         title="Applications"
         description={`Deploy from public Git. Default URL: your-slug.${baseDomain} (optional custom domain per app).`}
         actions={
-          <Button onClick={() => setCreateOpen(true)}>
-            <Plus className="mr-2 h-4 w-4" />
-            New app
-          </Button>
+          canCreate ? (
+            <Button onClick={() => setCreateOpen(true)}>
+              <Plus className="mr-2 h-4 w-4" />
+              New app
+            </Button>
+          ) : undefined
         }
       />
-      <CreateAppDialog open={createOpen} onOpenChange={setCreateOpen} />
+      {canCreate ? <CreateAppDialog open={createOpen} onOpenChange={setCreateOpen} /> : null}
       {q.isLoading ? (
         <div className="grid gap-4 sm:grid-cols-1 lg:grid-cols-2">
           {[1, 2, 3].map((i) => (
@@ -51,9 +57,15 @@ export function AppsListPage() {
       {q.data?.length === 0 ? (
         <EmptyState
           title="No applications yet"
-          description="Connect a public Git URL and let Sohwe build and run it on your infrastructure."
+          description={
+            canCreate
+              ? "Connect a public Git URL and let Sohwe build and run it on your infrastructure."
+              : "Nothing has been deployed here yet. Ask an admin to create the first application."
+          }
           action={
-            <Button onClick={() => setCreateOpen(true)}>Create application</Button>
+            canCreate ? (
+              <Button onClick={() => setCreateOpen(true)}>Create application</Button>
+            ) : undefined
           }
         />
       ) : null}

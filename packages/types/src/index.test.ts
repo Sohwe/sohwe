@@ -1,16 +1,21 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  AcceptInvitationSchema,
   appDockerVolumeName,
   appInternalNetworkName,
+  AuditLogQuerySchema,
   CreateApplicationSchema,
+  CreateInvitationSchema,
   EnvKeySchema,
   EnvQuerySchema,
   EnvVarsPatchSchema,
   EnvVarsReplaceSchema,
   FsPathQuerySchema,
+  RoleSchema,
   RollbackBodySchema,
   UpdateApplicationSchema,
+  UpdateMemberRoleSchema,
   VolumeCreateSchema
 } from "./index";
 
@@ -291,5 +296,95 @@ describe("Docker naming helpers", () => {
     // Cleanup on app delete finds resources by this prefix and by label.
     assert.ok(appDockerVolumeName(appId, volumeId).startsWith("sohwe_app_"));
     assert.ok(appInternalNetworkName(appId).startsWith("sohwe_app_"));
+  });
+});
+
+describe("RoleSchema", () => {
+  it("accepts exactly the three org roles", () => {
+    for (const role of ["owner", "admin", "member"]) {
+      assert.equal(RoleSchema.parse(role), role);
+    }
+  });
+
+  it("rejects anything else, including case variants", () => {
+    for (const bad of ["Owner", "superuser", "", "OWNER"]) {
+      assert.equal(RoleSchema.safeParse(bad).success, false, bad);
+    }
+  });
+
+  it("is the same vocabulary a role change may target", () => {
+    assert.ok(UpdateMemberRoleSchema.safeParse({ role: "owner" }).success);
+    assert.equal(UpdateMemberRoleSchema.safeParse({ role: "nobody" }).success, false);
+  });
+});
+
+describe("CreateInvitationSchema", () => {
+  it("normalizes the email so one address cannot be invited twice", () => {
+    // The duplicate checks on both the invitation and the user table compare
+    // exact strings, so casing and stray whitespace have to be gone by then.
+    const parsed = CreateInvitationSchema.parse({ email: "  New.Person@Example.TEST " });
+    assert.equal(parsed.email, "new.person@example.test");
+  });
+
+  it("defaults to the least privileged role", () => {
+    assert.equal(CreateInvitationSchema.parse({ email: "a@b.test" }).role, "member");
+  });
+
+  it("refuses to grant owner by invitation", () => {
+    // Owner is only ever conferred by an existing owner, never by a link.
+    assert.equal(
+      CreateInvitationSchema.safeParse({ email: "a@b.test", role: "owner" }).success,
+      false
+    );
+  });
+
+  it("rejects a malformed address", () => {
+    assert.equal(CreateInvitationSchema.safeParse({ email: "not-an-email" }).success, false);
+  });
+});
+
+describe("AcceptInvitationSchema", () => {
+  const valid = {
+    token: "x".repeat(43),
+    name: "New Person",
+    password: "correct horse battery"
+  };
+
+  it("accepts a well-formed redemption", () => {
+    assert.equal(AcceptInvitationSchema.parse(valid).name, "New Person");
+  });
+
+  it("enforces a minimum password length", () => {
+    assert.equal(
+      AcceptInvitationSchema.safeParse({ ...valid, password: "short" }).success,
+      false
+    );
+  });
+
+  it("rejects a token too short to be one of ours", () => {
+    assert.equal(AcceptInvitationSchema.safeParse({ ...valid, token: "abc" }).success, false);
+  });
+
+  it("requires a name", () => {
+    assert.equal(AcceptInvitationSchema.safeParse({ ...valid, name: "" }).success, false);
+  });
+});
+
+describe("AuditLogQuerySchema", () => {
+  it("defaults to a bounded page", () => {
+    assert.equal(AuditLogQuerySchema.parse({}).limit, 50);
+  });
+
+  it("coerces a string limit from the query string", () => {
+    assert.equal(AuditLogQuerySchema.parse({ limit: "10" }).limit, 10);
+  });
+
+  it("refuses an unbounded page size", () => {
+    assert.equal(AuditLogQuerySchema.safeParse({ limit: "100000" }).success, false);
+    assert.equal(AuditLogQuerySchema.safeParse({ limit: "0" }).success, false);
+  });
+
+  it("requires the cursor to be an id, not arbitrary text", () => {
+    assert.equal(AuditLogQuerySchema.safeParse({ cursor: "not-a-uuid" }).success, false);
   });
 });

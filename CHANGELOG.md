@@ -10,6 +10,24 @@ write-ups.
 
 ## [Unreleased]
 
+### Added
+
+- **Phase 6 roles and permission checks.** The three roles the schema always carried are now enforced. `owner` has full control including role management; `admin` covers everything operational (apps, env vars, volumes, backups, Git, invitations, removing members) but cannot touch owners; `member` is read-only plus deploying and rolling back existing apps. A `requireRole(min)` preHandler (`apps/api/src/rbac.ts`) replaces bare authentication on every route, authenticating first so a route can never end up role-checked but unauthenticated. Unknown role strings rank below `member` and get nothing, so a downgrade or a hand-edited row fails closed. The sidebar, app tabs, and the "New app" button hide what the caller cannot use, but the API is the enforcement point.
+
+  Surfaces that can expose an app's secrets are admin-and-above **including reads**: env vars (even the masked listing — `maskedPreview` still shows part of every value), the container file browser (it reaches config files and `/proc/self/environ`), alert destinations (a Discord/Slack webhook URL is a bearer credential), backups (bundles carry re-encrypted env vars), and the GitHub connection. Existing single-owner installs are unaffected — the owner keeps every permission.
+
+- **Phase 6 invitations.** An admin creates a single-use join link from the new **Members** page; Sohwe does not send email, so the link is copied and delivered by hand. That keeps self-hosted instances free of an SMTP relay or a third-party email API key. Only the SHA-256 of the token is stored, so the raw link is shown exactly once, in the create response — a lost link is revoked and reissued, not recovered. Links expire after 7 days, grant `admin` or `member` (never `owner`), and are consumed inside a transaction that claims the row conditionally, so two people opening the same link cannot both get an account. Accepting creates the account and signs the new member straight in. Routes: `GET/POST /api/invitations`, `DELETE /api/invitations/:id`, plus rate-limited pre-auth `GET /api/invitations/lookup` and `POST /api/invitations/accept`. New `Invitation` model, new dashboard route `/join?token=…`.
+
+- **Phase 6 member management.** `GET /api/members` lists the organization (any member may see who else is in it), `PATCH /api/members/:id/role` is owner-only, and `DELETE /api/members/:id` is admin-and-above. The organization can never be left without an owner, nobody can change their own role or remove their own account, and an admin cannot remove an owner. Removing a member cascades their sessions, so they are signed out everywhere immediately. Role changes take effect on the target's next request without re-login.
+
+- **Phase 6 audit log.** A new append-only `AuditLog` model records who did what, org-scoped, readable at `GET /api/audit-logs` (admin-and-above, filterable by action/target/actor with cursor pagination) and on a new **Audit log** page. Covered: application create/update/delete, deploy, rollback, env var updates and reveals, volume create/delete, alert destination changes, backup export/restore, backup destination and schedule changes, GitHub connect/disconnect, and every membership event (invite, revoke, join, role change, removal). **No secret material is recorded**: env events carry key *names*, counts, and which keys were added/removed/changed, never values; backup events carry app counts and destination kinds, never passphrases or S3 credentials; GitHub events carry the public App identity, never the PEM or webhook secret; invitation events never carry the token. The actor's email is denormalized onto the row, so removing a user leaves their trail readable instead of erasing it. Recording is best-effort and can never fail the action it describes.
+
+### Changed
+
+- The API's deploy queue and stats Redis client are now created per server instance and opened lazily on first use, instead of at module load. Previously one `app.close()` closed connections shared by every server built in the same process, which only mattered to the route tests — they build a fresh server per test, and every deploy after the first failed with `Connection is closed`.
+
+- `AUTH_RATE_LIMIT` moved to `apps/api/src/rate-limit.ts` and the request-origin helper to `apps/api/src/public-url.ts`, both now shared with the invitation routes. Login and setup unlock behave as before; the pre-auth invitation lookup and accept endpoints carry the same limit.
+
 ## [0.6.0] - 2026-08-12
 
 The first release since v0.3.8, covering everything that accumulated on `main`

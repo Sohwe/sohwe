@@ -4,7 +4,8 @@ import { appDockerVolumeName, VolumeCreateSchema } from "@sohwe/types";
 import Docker from "dockerode";
 import { z } from "zod";
 import { serializeVolume } from "../app-public";
-import { authPreHandler } from "../session";
+import { recordAudit } from "../audit";
+import { requireRole } from "../rbac";
 
 const docker = new Docker();
 
@@ -17,7 +18,8 @@ const VolIdParam = z.object({
 export async function registerVolumeRoutes(app: FastifyInstance) {
   app.get(
     "/api/applications/:id/volumes",
-    { preHandler: [authPreHandler], schema: { params: IdParam } },
+    // Mount paths and size hints are configuration, not secrets.
+    { preHandler: [requireRole("member")], schema: { params: IdParam } },
     async (req, reply) => {
       const u = req.user!;
       const { id } = req.params as z.infer<typeof IdParam>;
@@ -37,7 +39,7 @@ export async function registerVolumeRoutes(app: FastifyInstance) {
   app.post(
     "/api/applications/:id/volumes",
     {
-      preHandler: [authPreHandler],
+      preHandler: [requireRole("admin")],
       schema: { params: IdParam, body: VolumeCreateSchema }
     },
     async (req, reply) => {
@@ -46,7 +48,8 @@ export async function registerVolumeRoutes(app: FastifyInstance) {
       const body = VolumeCreateSchema.parse(req.body);
 
       const a = await prisma.application.findFirst({
-        where: { id, organizationId: u.organizationId }
+        where: { id, organizationId: u.organizationId },
+        select: { id: true, slug: true }
       });
       if (!a) return reply.notFound();
 
@@ -57,6 +60,13 @@ export async function registerVolumeRoutes(app: FastifyInstance) {
             mountPath: body.mountPath,
             sizeBytes: body.sizeBytes != null ? BigInt(body.sizeBytes) : null
           }
+        });
+        await recordAudit(req, {
+          action: "volume.create",
+          targetType: "volume",
+          targetId: row.id,
+          targetLabel: `${a.slug}:${row.mountPath}`,
+          metadata: { applicationId: a.id, mountPath: row.mountPath }
         });
         return reply.status(201).send(serializeVolume(row));
       } catch (e) {
@@ -74,13 +84,14 @@ export async function registerVolumeRoutes(app: FastifyInstance) {
 
   app.delete(
     "/api/applications/:id/volumes/:volumeId",
-    { preHandler: [authPreHandler], schema: { params: VolIdParam } },
+    { preHandler: [requireRole("admin")], schema: { params: VolIdParam } },
     async (req, reply) => {
       const u = req.user!;
       const { id, volumeId } = req.params as z.infer<typeof VolIdParam>;
 
       const a = await prisma.application.findFirst({
-        where: { id, organizationId: u.organizationId }
+        where: { id, organizationId: u.organizationId },
+        select: { id: true, slug: true }
       });
       if (!a) return reply.notFound();
 
@@ -108,6 +119,13 @@ export async function registerVolumeRoutes(app: FastifyInstance) {
       }
 
       await prisma.volume.delete({ where: { id: row.id } });
+      await recordAudit(req, {
+        action: "volume.delete",
+        targetType: "volume",
+        targetId: row.id,
+        targetLabel: `${a.slug}:${row.mountPath}`,
+        metadata: { applicationId: a.id, mountPath: row.mountPath }
+      });
       return { ok: true };
     }
   );

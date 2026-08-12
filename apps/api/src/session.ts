@@ -1,5 +1,28 @@
 import type { FastifyBaseLogger, FastifyReply, FastifyRequest } from "fastify";
 import { prisma } from "@sohwe/db";
+import { cookieSecure } from "./setup-gate";
+
+export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * Create a session row and set the auth cookie. Shared by password login and
+ * invitation acceptance, which logs the new member straight in.
+ */
+export async function issueSession(
+  reply: FastifyReply,
+  userId: string
+): Promise<{ id: string; expiresAt: Date }> {
+  const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
+  const session = await prisma.session.create({ data: { userId, expiresAt } });
+  reply.setCookie("sohwe_session", session.id, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: cookieSecure(),
+    path: "/",
+    expires: expiresAt
+  });
+  return { id: session.id, expiresAt };
+}
 
 export type AuthedUser = {
   id: string;
