@@ -15,8 +15,22 @@ the box if you want to test a real domain, and `root`/`sudo`.
 curl -fsSL https://raw.githubusercontent.com/Sohwe/sohwe/main/scripts/install.sh | sudo bash
 ```
 
+Or, when testing unreleased code, from a clone (the installer then uses the
+checkout's compose files and `sohwe` CLI instead of fetching from `main`):
+
+```bash
+git clone https://github.com/Sohwe/sohwe.git && cd sohwe
+sudo SOHWE_VERSION=dev bash scripts/install.sh   # dev = images published via workflow_dispatch
+```
+
 - [ ] Installer prompts for (or accepts via env) `SOHWE_BASE_DOMAIN` and writes it to
       `/etc/sohwe/sohwe.env`.
+- [ ] With a domain configured, the installer prints the DNS records to create
+      (dashboard A + apps wildcard, with the server's public IP) and verifies
+      them, including the wildcard via a random label; skipping is possible and
+      never blocks the install.
+- [ ] The installer waits for the dashboard to respond before printing the
+      final banner and next steps.
 - [ ] `sohwe` CLI is installed on the host (`which sohwe`).
 - [ ] `sohwe status` (or `docker compose ps`) shows api, worker, dashboard, postgres,
       redis, and traefik all healthy.
@@ -26,6 +40,9 @@ curl -fsSL https://raw.githubusercontent.com/Sohwe/sohwe/main/scripts/install.sh
 - [ ] Create an app from a public Git repo, deploy it, and confirm:
   - [ ] Build logs stream live in the deployment view.
   - [ ] The app responds at `http://<slug>.<SOHWE_BASE_DOMAIN>` via Traefik.
+  - [ ] Add an env var to the app, redeploy, and confirm the app sees it —
+        this proves the generated `SOHWE_ENCRYPTION_KEY` is usable end-to-end
+        (the gap that hid the pre-v0.6.0 hex-key bug).
   - [ ] **Logs** tab streams runtime output.
   - [ ] **Metrics** tab shows live CPU/memory.
   - [ ] (Optional) Add a Slack/Discord/generic webhook under Settings → Crash

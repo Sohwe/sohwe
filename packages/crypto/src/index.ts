@@ -12,21 +12,31 @@ const IV_LEN = 12;
 const TAG_LEN = 16;
 
 /**
- * 32-byte key from `SOHWE_ENCRYPTION_KEY` (base64).
+ * 32-byte key from `SOHWE_ENCRYPTION_KEY`.
  * Shared between API and worker; never log or return this to clients.
+ *
+ * Base64 of 32 bytes (44 chars) is the documented format. A 64-char hex
+ * string is also accepted: installers before v0.6.0 generated hex, and hex
+ * characters are all valid base64 — decoding to 48 bytes, never 32 — so the
+ * two formats cannot collide. A hex key could never have encrypted anything
+ * (it always threw here), so accepting it now cannot misread existing data.
  */
 export function getSohweEncryptionKey(): Buffer {
-  const b64 = process.env.SOHWE_ENCRYPTION_KEY;
-  if (!b64?.trim()) {
+  const raw = process.env.SOHWE_ENCRYPTION_KEY;
+  if (!raw?.trim()) {
     throw new Error("SOHWE_ENCRYPTION_KEY is not set or is empty");
   }
-  const key = Buffer.from(b64, "base64");
-  if (key.length !== 32) {
-    throw new Error(
-      "SOHWE_ENCRYPTION_KEY must decode to exactly 32 bytes (AES-256)"
-    );
+  const value = raw.trim();
+  const b64 = Buffer.from(value, "base64");
+  if (b64.length === 32) {
+    return b64;
   }
-  return key;
+  if (/^[0-9a-fA-F]{64}$/.test(value)) {
+    return Buffer.from(value, "hex");
+  }
+  throw new Error(
+    "SOHWE_ENCRYPTION_KEY must be exactly 32 bytes (AES-256), as base64 (44 chars) or hex (64 chars)"
+  );
 }
 
 /**

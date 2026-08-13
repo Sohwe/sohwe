@@ -28,19 +28,27 @@ On a fresh Ubuntu 22.04 or 24.04 host:
 curl -fsSL https://raw.githubusercontent.com/Sohwe/sohwe/main/scripts/install.sh | bash
 ```
 
+Or from a clone — the installer then uses the checkout's own compose files and `sohwe` CLI instead of fetching them from `main`, so what gets installed always matches the checked-out code:
+
+```bash
+git clone https://github.com/Sohwe/sohwe.git && cd sohwe
+sudo bash scripts/install.sh
+```
+
 The installer will:
 
 1. Install Docker Engine + the compose plugin if they aren't already present.
-2. Prompt for an **HTTP port** for the dashboard (default **8080**) and verify it is free on the host.
-3. Optionally prompt for a **public domain** and Let's Encrypt email — skip to use `http://<server-ip>:<port>` only.
-4. Prompt for an **apps base domain** (`SOHWE_BASE_DOMAIN`) — the wildcard parent for deployed app URLs, e.g. `apps.example.com` gives you `myapp.apps.example.com`. Defaults to the dashboard host, falling back to `sohwe.localhost`. Point a wildcard DNS record (`*.apps.example.com A <ip>`) at the box for this to resolve.
-5. Prompt for an **installer password** (confirmed twice); this unlocks the dashboard for first-run setup before anyone can create the owner account.
-6. Generate `/etc/sohwe/sohwe.env` with random `SESSION_SECRET`, `SOHWE_ENCRYPTION_KEY`, Postgres password, and your chosen values (mode 0600).
-7. Pull the `api`, `worker`, and `dashboard` images from GHCR and start the stack.
-8. Apply the database schema via the running API container.
-9. Print the dashboard URL(s).
+2. Prompt for a **public domain** and Let's Encrypt email — skip to use `http://<server-ip>:<port>` only.
+3. Prompt for an **apps base domain** (`SOHWE_BASE_DOMAIN`) — the wildcard parent for deployed app URLs, e.g. `apps.example.com` gives you `myapp.apps.example.com`. Defaults to the dashboard host, falling back to `sohwe.localhost`.
+4. Print the **exact DNS records** to create (dashboard A record + apps wildcard, with this server's detected public IP) and verify them against a public resolver. Re-check on demand or skip — it never blocks the install; HTTPS simply activates once DNS propagates.
+5. Prompt for an **HTTP port** for the dashboard (default **8080**) and verify it is free on the host.
+6. Prompt for an **installer password** (confirmed twice); this unlocks the dashboard for first-run setup before anyone can create the owner account.
+7. Generate `/etc/sohwe/sohwe.env` with random `SESSION_SECRET`, `SOHWE_ENCRYPTION_KEY`, Postgres password, and your chosen values (mode 0600).
+8. Pull the `api`, `worker`, and `dashboard` images from GHCR and start the stack.
+9. Apply the database schema via the running API container.
+10. Wait until the dashboard responds, then print its URL(s) and the next steps.
 
-Unlock first-run setup with your installer password, then complete setup (owner account + organization) in the dashboard.
+Unlock first-run setup with your installer password, then complete setup (owner account + organization) in the dashboard. The installer password is a one-time gate — after setup you sign in with the owner account you created.
 
 Non-interactive installs can pass **`SOHWE_HTTP_PORT`**, **`SOHWE_SETUP_PASSWORD`**, **`SOHWE_BASE_DOMAIN`**, **`SOHWE_HOST`**, **`SOHWE_ACME_EMAIL`**, **`SOHWE_PUBLIC_URL`**, and **`SOHWE_VERSION`** via the environment, with `SOHWE_NONINTERACTIVE=1` (see the header comments in `scripts/install.sh`).
 

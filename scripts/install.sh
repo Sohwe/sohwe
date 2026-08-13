@@ -5,6 +5,12 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/Sohwe/sohwe/main/scripts/install.sh | bash
 #
+# or, from a git checkout (installs the checkout's own compose files and
+# `sohwe` CLI instead of fetching them from GitHub, so the installed files
+# always match the checked-out code):
+#
+#   sudo bash scripts/install.sh
+#
 # Optional environment variables (or pass as `KEY=value bash install.sh`):
 #
 #   SOHWE_VERSION        image tag to install (default: latest)
@@ -36,12 +42,14 @@ set -euo pipefail
 # Cosmetics
 #-----------------------------------------------------------------------------#
 
-readonly C_RESET='\033[0m'
-readonly C_BOLD='\033[1m'
-readonly C_GREEN='\033[32m'
-readonly C_YELLOW='\033[33m'
-readonly C_RED='\033[31m'
-readonly C_BLUE='\033[34m'
+# $'…' so the variables hold real escape characters: printf '%b' would also
+# interpret the backslash form, but heredocs (cat <<EOF) print it literally.
+readonly C_RESET=$'\033[0m'
+readonly C_BOLD=$'\033[1m'
+readonly C_GREEN=$'\033[32m'
+readonly C_YELLOW=$'\033[33m'
+readonly C_RED=$'\033[31m'
+readonly C_BLUE=$'\033[34m'
 
 log()   { printf '%b==>%b %s\n'   "${C_BLUE}"   "${C_RESET}" "$*"; }
 ok()    { printf '%b ok%b %s\n'   "${C_GREEN}"  "${C_RESET}" "$*"; }
@@ -108,6 +116,29 @@ if [[ $EUID -ne 0 ]]; then
     # shellcheck disable=SC2093  # exec replaces this shell; nothing after runs.
     exec sudo -E bash "${tmp_self}" "$@"
 fi
+
+#-----------------------------------------------------------------------------#
+# Checkout detection
+#-----------------------------------------------------------------------------#
+#
+# When run from a git checkout (sudo bash scripts/install.sh), the checkout's
+# own compose files and `sohwe` wrapper are installed instead of fetched from
+# GitHub — fetching would pair whatever code was checked out with files from
+# `main`, which may not match. `curl | bash` has no source file on disk, so
+# BASH_SOURCE points nowhere and fetch mode is used.
+
+SOURCE_ROOT=""
+if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
+    _script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || true)"
+    if [[ -n "${_script_dir}" \
+          && -f "${_script_dir}/../docker-compose.prod.yml" \
+          && -f "${_script_dir}/../docker-compose.https.yml" \
+          && -f "${_script_dir}/sohwe" ]]; then
+        SOURCE_ROOT="$(cd "${_script_dir}/.." && pwd)"
+    fi
+    unset _script_dir
+fi
+readonly SOURCE_ROOT
 
 #-----------------------------------------------------------------------------#
 # OS detection — Ubuntu 22.04 / 24.04 only for v0.2
@@ -192,8 +223,9 @@ collect_inputs() {
     cat <<EOF
 
 ${C_BOLD}Sohwe setup${C_RESET}
-You can skip the domain and use http://<this-host>:${SOHWE_HTTP_PORT} only, or add
-a DNS name later. Set HTTPS later with:  sohwe enable-https <host> <email>
+You can skip the domain and use http://<this-host>:<port> only. To add a
+domain and HTTPS later: edit /etc/sohwe/sohwe.env (it documents how), then
+run \`sohwe restart\`.
 
 EOF
     prompt_if_interactive SOHWE_HOST_INPUT       "Public domain for the dashboard (blank = HTTP only): "
@@ -216,6 +248,119 @@ EOF
         "Base domain for deployed apps [${default_base}]: "
     [[ -n "${SOHWE_BASE_DOMAIN_INPUT}" ]] \
         || SOHWE_BASE_DOMAIN_INPUT="${default_base}"
+}
+
+#-----------------------------------------------------------------------------#
+# DNS guidance + verification (never blocks the install)
+#-----------------------------------------------------------------------------#
+
+detect_public_ip() {
+    local ip svc
+    for svc in "https://api.ipify.org" "https://ifconfig.me" "https://ipv4.icanhazip.com"; do
+        ip="$(curl -fsSL --max-time 5 "${svc}" 2>/dev/null | tr -d '[:space:]' || true)"
+        if [[ "${ip}" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; then
+            echo "${ip}"
+            return
+        fi
+    done
+    hostname -I 2>/dev/null | awk '{print $1}'
+}
+
+# First A record for a name. Prefer dig against a public resolver so the
+# host's own resolver cache cannot mask a missing record; getent (always
+# present on Ubuntu) is the fallback, with that caveat.
+resolve_a() {
+    local name="$1"
+    if command -v dig >/dev/null 2>&1; then
+        dig +short A "${name}" @1.1.1.1 2>/dev/null \
+            | grep -E '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' | head -n1 || true
+    else
+        getent ahostsv4 "${name}" 2>/dev/null | awk '{print $1; exit}' || true
+    fi
+}
+
+# Report one record; return 0 when the name resolves at all. Resolving to a
+# different IP still counts — proxied DNS (e.g. Cloudflare) legitimately
+# answers with the proxy's address — but it is called out.
+report_record() {
+    local name="$1" expected="$2" got
+    got="$(resolve_a "${name}")"
+    if [[ -z "${got}" ]]; then
+        printf '%b  ..%b %s does not resolve yet\n' "${C_YELLOW}" "${C_RESET}" "${name}"
+        return 1
+    fi
+    if [[ "${got}" == "${expected}" ]]; then
+        ok "${name} -> ${got}"
+    else
+        warn "${name} resolves to ${got}, expected ${expected} — fine if the record is proxied (e.g. Cloudflare), otherwise fix it."
+    fi
+    return 0
+}
+
+check_dns() {
+    local check_wildcard=0
+    if [[ -n "${SOHWE_BASE_DOMAIN_INPUT}" && "${SOHWE_BASE_DOMAIN_INPUT}" != *localhost* ]]; then
+        check_wildcard=1
+    fi
+    # Nothing to check for a pure HTTP/IP install.
+    if [[ -z "${SOHWE_HOST_INPUT}" ]] && (( check_wildcard == 0 )); then
+        return
+    fi
+
+    local ip
+    ip="$(detect_public_ip)"
+    if [[ -z "${ip}" ]]; then
+        warn "Could not detect this server's public IP; skipping DNS verification."
+        return
+    fi
+
+    cat <<EOF
+
+${C_BOLD}DNS records${C_RESET}
+Point these at this server (IP ${ip}):
+
+EOF
+    [[ -n "${SOHWE_HOST_INPUT}" ]] \
+        && printf '  A      %-32s -> %s   (dashboard)\n' "${SOHWE_HOST_INPUT}" "${ip}"
+    (( check_wildcard )) \
+        && printf '  A      %-32s -> %s   (deployed app URLs)\n' "*.${SOHWE_BASE_DOMAIN_INPUT}" "${ip}"
+    printf '\n'
+
+    # Verify, but never block: the stack serves HTTP right away, and Traefik
+    # retries ACME on its own, so HTTPS starts working once DNS propagates.
+    while true; do
+        local all_ok=1
+        if [[ -n "${SOHWE_HOST_INPUT}" ]]; then
+            report_record "${SOHWE_HOST_INPUT}" "${ip}" || all_ok=0
+        fi
+        if (( check_wildcard )); then
+            # A random label proves the *wildcard* exists — the base domain's
+            # own A record does not cover <slug>.<base-domain>.
+            report_record "sohwe-dns-check-${RANDOM}${RANDOM}.${SOHWE_BASE_DOMAIN_INPUT}" "${ip}" || all_ok=0
+        fi
+        if (( all_ok )); then
+            ok "DNS looks good."
+            return
+        fi
+        if [[ "${NONINTERACTIVE}" == "1" ]]; then
+            warn "Continuing without DNS. HTTPS and app URLs start working once the records above propagate."
+            return
+        fi
+        local answer=""
+        if [[ ! -t 0 ]] && [[ -r /dev/tty ]]; then
+            printf '%s' "Press Enter to re-check DNS, or type s to continue without it: " > /dev/tty
+            read -r answer < /dev/tty
+        elif [[ -t 0 ]]; then
+            printf '%s' "Press Enter to re-check DNS, or type s to continue without it: "
+            read -r answer
+        else
+            answer="s"
+        fi
+        if [[ "${answer}" == "s" || "${answer}" == "S" ]]; then
+            warn "Continuing without DNS. HTTPS and app URLs start working once the records above propagate."
+            return
+        fi
+    done
 }
 
 #-----------------------------------------------------------------------------#
@@ -377,6 +522,18 @@ random_password() {
     fi
 }
 
+random_key_b64() {
+    # Exactly 32 random bytes, base64-encoded (44 chars). The API requires
+    # SOHWE_ENCRYPTION_KEY to decode to exactly 32 bytes (AES-256), so unlike
+    # random_password this must keep the full base64 alphabet and padding.
+    # Safe unquoted in the env file: base64 has no '$' for compose to expand.
+    if command -v openssl >/dev/null 2>&1; then
+        openssl rand -base64 32
+    else
+        head -c 32 /dev/urandom | base64 | tr -d '\n'
+    fi
+}
+
 write_env_file() {
     mkdir -p "${DATA_DIR}"
     chmod 750 "${DATA_DIR}"
@@ -403,7 +560,11 @@ write_env_file() {
 
     local session_secret encryption_key pg_password
     session_secret="$(random_hex)"
-    encryption_key="$(random_hex)"
+    # base64 of exactly 32 bytes — the format @sohwe/crypto validates. The
+    # pre-v0.6.0 installer generated 64 hex chars here, which base64-decode to
+    # 48 bytes; the API now also accepts that legacy hex form, but new
+    # installs get the documented format.
+    encryption_key="$(random_key_b64)"
     pg_password="$(random_password)"
 
     cat > "${ENV_FILE}" <<ENV
@@ -417,6 +578,9 @@ SOHWE_IMAGE_DASHBOARD=ghcr.io/${IMAGE_NS}-dashboard:${SOHWE_VERSION}
 
 # Public-facing
 SOHWE_HTTP_PORT=${SOHWE_HTTP_PORT}
+# To enable HTTPS after an HTTP-only install: point DNS at this server, set
+# SOHWE_HOST and SOHWE_ACME_EMAIL, flip SOHWE_HTTPS_ENABLED=true, set
+# SOHWE_COMPOSE_OVERLAYS=${COMPOSE_HTTPS}, then run \`sohwe restart\`.
 SOHWE_HOST=${SOHWE_HOST_INPUT}
 SOHWE_ACME_EMAIL=${SOHWE_ACME_EMAIL_INPUT}
 SOHWE_HTTPS_ENABLED=${https_enabled}
@@ -486,6 +650,18 @@ fetch_assets() {
     mkdir -p "${DATA_DIR}"
     chmod 750 "${DATA_DIR}"
 
+    if [[ -n "${SOURCE_ROOT}" ]]; then
+        log "Installing compose files from the local checkout (${SOURCE_ROOT})…"
+        install -m 644 "${SOURCE_ROOT}/docker-compose.prod.yml" "${COMPOSE_BASE}"
+        install -m 644 "${SOURCE_ROOT}/docker-compose.https.yml" "${COMPOSE_HTTPS}"
+        ok "Compose files installed in ${DATA_DIR}."
+
+        log "Installing \`sohwe\` CLI wrapper to ${WRAPPER}…"
+        install -m 755 "${SOURCE_ROOT}/scripts/sohwe" "${WRAPPER}"
+        ok "${WRAPPER} installed."
+        return
+    fi
+
     log "Fetching compose files from ${RAW_BASE}…"
     fetch "${RAW_BASE}/docker-compose.prod.yml"  "${COMPOSE_BASE}"
     fetch "${RAW_BASE}/docker-compose.https.yml" "${COMPOSE_HTTPS}"
@@ -534,6 +710,23 @@ print_banner() {
     [[ -z "${ip_hint}" ]] && ip_hint="<server-ip>"
     http_url="http://${ip_hint}:${http_port}"
 
+    # Confirm the stack is actually serving before declaring success — a
+    # banner over a dead stack is worse than a slow banner.
+    log "Waiting for the dashboard to respond on port ${http_port}…"
+    local responded=0
+    for _ in $(seq 1 30); do
+        if curl -fsS -o /dev/null --max-time 2 "http://127.0.0.1:${http_port}" 2>/dev/null; then
+            responded=1
+            break
+        fi
+        sleep 2
+    done
+    if (( responded )); then
+        ok "Dashboard is responding."
+    else
+        warn "Dashboard did not respond within 60s. Check \`sohwe status\` and \`sohwe logs dashboard\`."
+    fi
+
     cat <<EOF
 
 ${C_GREEN}${C_BOLD}Sohwe is up.${C_RESET}
@@ -554,7 +747,12 @@ EOF
   Data dir:   ${DATA_DIR}
   CLI:        sohwe --help
 
-Unlock first-run setup with your installer password, then create the owner account.
+Next steps:
+
+  1. Open the dashboard and enter the installer password you chose during
+     this install — it unlocks first-run setup.
+  2. Create your owner account (its own email and password). The installer
+     password is a one-time gate and is not used to sign in afterwards.
 
 EOF
 }
@@ -567,8 +765,12 @@ main() {
     log "Sohwe installer (${SOHWE_VERSION}, channel=${CHANNEL})"
     detect_os
     ensure_docker
-    collect_http_port
+    # Domain first: it decides SOHWE_PUBLIC_URL and whether HTTPS is in play,
+    # and it is the expensive-to-change value (later baked into the GitHub
+    # App). The password closes the flow — set it, get the URL, go use it.
     collect_inputs
+    check_dns
+    collect_http_port
     warn_standard_ports
     collect_setup_password
     fetch_assets

@@ -57,6 +57,31 @@ describe("getSohweEncryptionKey", () => {
       assert.deepEqual(key, Buffer.from(b64, "base64"));
     });
   });
+
+  it("accepts a 64-char hex key (pre-v0.6.0 installer format)", () => {
+    const bytes = randomBytes(32);
+    withKey(bytes.toString("hex"), () => {
+      const key = getSohweEncryptionKey();
+      assert.equal(key.length, 32);
+      assert.deepEqual(key, bytes);
+    });
+  });
+
+  it("decodes hex as hex, not as base64", () => {
+    // Hex chars are all valid base64, so a naive base64 decode of a 64-char
+    // hex string "succeeds" — at 48 bytes. The hex path must win.
+    const hex = "ab".repeat(32);
+    withKey(hex, () => {
+      assert.deepEqual(getSohweEncryptionKey(), Buffer.from(hex, "hex"));
+    });
+  });
+
+  it("rejects a 64-char string that is not hex", () => {
+    // 64 base64 chars decode to 48 bytes and 'z'/'Z' break the hex regex.
+    withKey("z".repeat(64), () => {
+      assert.throws(() => getSohweEncryptionKey(), /exactly 32 bytes/);
+    });
+  });
 });
 
 describe("encryptUtf8 / decryptToUtf8", () => {
