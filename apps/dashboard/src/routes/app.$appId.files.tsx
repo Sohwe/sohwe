@@ -22,7 +22,12 @@ export function AppFilesPage() {
   return (
     <div>
       <PageHeader title="Container files" description="Read-only. Browse the running container, including volume mounts." />
-      <FileBrowser appId={appId} />
+      <FileBrowser
+        listUrl={(p) => `/api/applications/${appId}/fs/list?path=${encodeURIComponent(p)}`}
+        fileUrl={(p) => `/api/applications/${appId}/fs/file?path=${encodeURIComponent(p)}`}
+        title="Container files"
+        description="Read-only view of the running container filesystem. Browse mounted volumes and app files."
+      />
     </div>
   );
 }

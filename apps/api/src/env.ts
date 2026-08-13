@@ -1,4 +1,5 @@
 import { getSohweEncryptionKey } from "@sohwe/crypto";
+import { parseHostFsAllowlist } from "./host-fs";
 
 // Boot-time environment validation. The goal is fail-fast: a misconfigured
 // instance should refuse to start with one clear message listing everything
@@ -30,6 +31,13 @@ export type ApiConfig = {
    * API on :3001, so the default is that origin.
    */
   corsOrigin: boolean | string | string[];
+  /**
+   * Normalized absolute paths the host file browser may serve, from
+   * `SOHWE_HOST_FS_ALLOWLIST` (comma-separated). Empty means the feature is
+   * disabled, which is the default. In production the API container can only
+   * see what is bind-mounted in; the prod compose mounts /etc/sohwe read-only.
+   */
+  hostFsRoots: string[];
 };
 
 const MIN_SESSION_SECRET_LEN = 16;
@@ -124,6 +132,13 @@ export function loadApiConfig(): ApiConfig {
   // here silently produces a GitHub App whose webhook points nowhere.
   const publicUrl = normalizePublicUrl(process.env.SOHWE_PUBLIC_URL, errors);
 
+  // A typo'd allowlist entry refuses to boot rather than silently exposing
+  // nothing (or something unintended) through the host file browser.
+  const hostFsRoots = parseHostFsAllowlist(
+    process.env.SOHWE_HOST_FS_ALLOWLIST,
+    errors
+  );
+
   if (errors.length > 0) {
     throw new Error(
       "Invalid environment configuration:\n" +
@@ -143,6 +158,7 @@ export function loadApiConfig(): ApiConfig {
     baseDomain: process.env.SOHWE_BASE_DOMAIN ?? "sohwe.localhost",
     setupPassword: setupPassword && setupPassword.length > 0 ? setupPassword : null,
     publicUrl,
-    corsOrigin: resolveCorsOrigin()
+    corsOrigin: resolveCorsOrigin(),
+    hostFsRoots
   };
 }

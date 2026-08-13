@@ -2,7 +2,7 @@
 
 Current snapshot: latest tag is **v0.3.8**. Phases 4, 4.5, and 5 are implemented on `main` and staged for release as **v0.6.0** — `CHANGELOG.md` and the root `package.json` are prepared; the tag itself is held until the manual host verification below passes.
 
-Phases 0 through 5 are implemented in the repo. **Phase 4 - Observability** covers runtime logs, live metrics, and crash alerts. **Phase 4.5 - Portable Bundles** is feature-complete: signed config + re-encrypted env var bundles, local + S3-compatible + download destinations, restore preflight/apply, scheduled exports with cron + retention (worker-driven), and the org-level Backups UI. **Phase 5 - Git-Push Deploys** is implemented: per-instance GitHub App via the manifest flow, installation-token clones for private repos, a signature-verified push webhook, the auto-deploy toggle, and commit-status reporting. The build-log UX slice is also done: bounded build-log storage, derived failure summaries, copy/download, and clearer deployment states. All of this ships as **v0.6.0**. Three Phase 3.5 items remain as manual VPS verification (see `docs/vps-smoke-test.md`), and Phase 5 has its own manual end-to-end check; those are the only things holding the tag. **Phase 6 - Multi-User** has since landed on `main` for **v0.7.0**: owner/admin/member role guards on every route, copy-link invitations with hashed single-use tokens, member management, and an org-scoped audit log that records key names and counts but never secret values. Its one optional item — an instance *host* filesystem browser, distinct from the existing container browser — is deferred. **Phase 7 - Managed Datastores** has since landed on `main` for **v0.8.0**: managed Postgres/Redis containers with encrypted generated credentials, private app bindings that inject connection URLs into encrypted env vars, opt-in public host ports, password rotation, and config-only inclusion in portable bundles (bundle format v2).
+Phases 0 through 5 are implemented in the repo. **Phase 4 - Observability** covers runtime logs, live metrics, and crash alerts. **Phase 4.5 - Portable Bundles** is feature-complete: signed config + re-encrypted env var bundles, local + S3-compatible + download destinations, restore preflight/apply, scheduled exports with cron + retention (worker-driven), and the org-level Backups UI. **Phase 5 - Git-Push Deploys** is implemented: per-instance GitHub App via the manifest flow, installation-token clones for private repos, a signature-verified push webhook, the auto-deploy toggle, and commit-status reporting. The build-log UX slice is also done: bounded build-log storage, derived failure summaries, copy/download, and clearer deployment states. All of this ships as **v0.6.0**. Three Phase 3.5 items remain as manual VPS verification (see `docs/vps-smoke-test.md`), and Phase 5 has its own manual end-to-end check; those are the only things holding the tag. **Phase 6 - Multi-User** has since landed on `main` for **v0.7.0**: owner/admin/member role guards on every route, copy-link invitations with hashed single-use tokens, member management, and an org-scoped audit log that records key names and counts but never secret values. Its one optional item — an instance *host* filesystem browser, distinct from the existing container browser — has since shipped too: allowlist-gated (`SOHWE_HOST_FS_ALLOWLIST`, off by default), symlink-escape-proof, and audited per list/read. **Phase 7 - Managed Datastores** has since landed on `main` for **v0.8.0**: managed Postgres/Redis containers with encrypted generated credentials, private app bindings that inject connection URLs into encrypted env vars, opt-in public host ports, password rotation, and config-only inclusion in portable bundles (bundle format v2).
 
 This file is a working checklist. It is based on `README.md`, `CHANGELOG.md`, `sohwe-getting-started.md`, `sohwe-prd.md`, and a code scan across the API, worker, dashboard, Docker, installer, and release workflow.
 
@@ -17,7 +17,7 @@ This file is a working checklist. It is based on `README.md`, `CHANGELOG.md`, `s
 - [x] **Phase 4 - Observability**
 - [x] **Phase 4.5 - Portable Bundles**
 - [x] **Phase 5 - Git-Push Deploys**
-- [x] **Phase 6 - Multi-User** (optional host file browser deferred)
+- [x] **Phase 6 - Multi-User** (incl. the optional host file browser)
 - [x] **Phase 7 - Managed Datastores**
 
 ## Completed
@@ -246,9 +246,9 @@ Known follow-ups (not blockers):
 - [x] Record env var key changes without values.
 - [x] Record volume changes.
 - [x] Record bundle events (export, restore, destinations, schedules).
-- [ ] Optional: owner/admin host filesystem browser.
-- [ ] Optional: strict host path allowlist.
-- [ ] Optional: audit every host file list/read action.
+- [x] Optional: owner/admin host filesystem browser. (dashboard "Host files" page + `GET /api/host-fs{,/list,/file}` in `apps/api/src/routes/host-fs.ts`, admin-and-above; disabled unless configured)
+- [x] Optional: strict host path allowlist. (`SOHWE_HOST_FS_ALLOWLIST`, comma-separated absolute paths validated at boot in `apps/api/src/env.ts`; every path is realpath-resolved and re-checked in `apps/api/src/host-fs.ts` so symlinks cannot escape a root; empty allowlist = feature off; prod compose mounts `/etc/sohwe` read-only into the API)
+- [x] Optional: audit every host file list/read action. (`host_fs.list` / `host_fs.read` audit events with the path as target label; denied attempts return 403/404 without leaking whether a symlink target exists)
 
 Invitations are copy-link, not email: the API mints a single-use token, returns
 the join link once, and stores only its SHA-256. A self-hosted instance
@@ -264,10 +264,12 @@ Evidence: `packages/db/prisma/schema.prisma` (`Invitation`, `AuditLog`),
 `apps/api/src/rbac.test.ts`, `apps/api/src/audit.test.ts`,
 `apps/api/src/routes.test.ts`.
 
-Remaining (optional, deferred): the instance **host** filesystem browser — a
-distinct feature from the existing container file browser, and one that needs a
-strict root-path allowlist, `..` rejection, and an audit entry per list/read
-before it is worth shipping.
+The optional instance **host** filesystem browser has since shipped with
+exactly the guardrails that made it worth shipping: a strict root-path
+allowlist (`SOHWE_HOST_FS_ALLOWLIST`, empty = off), `..` rejection plus
+realpath re-checks so symlinks cannot escape a root, and an audit entry per
+list/read. Evidence: `apps/api/src/host-fs.ts`, `apps/api/src/routes/host-fs.ts`,
+`apps/dashboard/src/routes/host-files.tsx`, `apps/api/src/routes.test.ts`.
 
 ## Staged For v0.8.0
 
@@ -299,6 +301,16 @@ Open design questions, resolved:
 - [x] Backups: **config-only in bundles now**; raw data backup waits for full-state bundles.
 - [x] Redis persistence: **`appendonly yes` by default** — a managed datastore should not lose data on restart.
 - [x] Administration scope: **create/delete/rotate/bind only.** No DB browser, SQL console, dumps, or per-database metrics in this phase.
+
+Deferred — known gaps vs Railway, to be added later:
+
+- [ ] TLS on the public endpoint. Public access is plain TCP guarded only by the generated password; Railway's Postgres ships self-signed certs so `sslmode=require` works. Provision certs into the container (or front the port with a TLS-terminating proxy) so external connections are encrypted on the wire. Highest-value gap to close first.
+- [ ] Datastore metrics and logs in the dashboard. Datastores deliberately omit the `sohwe.app` label, keeping them out of the per-app stats/log/crash subsystems; the detail page shows only live container state. Needs a datastore-aware path in the worker (or a shared label) for CPU/memory/disk graphs and log streaming.
+- [ ] Data backups. Bundles carry datastore *config* only; deleting a datastore deletes its volume. Add scheduled `pg_dump` / RDB snapshot export through the existing backup destinations (local/S3), and/or volume data in full-state bundles.
+- [ ] Data browser / SQL console. Table view and query runner in the dashboard, admin-and-above, with statements recorded in the audit log.
+- [ ] More engines: MySQL, MongoDB, and eventually template-defined services.
+
+Deliberate differences, not planned as work: datastore visibility is admin-and-above even for the list (consistent with the "secret-adjacent surfaces are admin+" rule, stricter than Railway), and datastores are single-host by nature — no HA/failover story on a one-VPS platform.
 
 Remaining manual verification:
 
@@ -404,7 +416,7 @@ that tag contains; the release gate itself is under *Cutting v0.6.0* at the end.
 - [x] Add audit log model.
 - [x] Record mutating actions.
 - [x] Keep secret values out of audit entries.
-- [ ] Optional: instance host filesystem browser with a path allowlist and per-read auditing.
+- [x] Optional: instance host filesystem browser with a path allowlist and per-read auditing. (shipped after the v0.7.0 slice landed; see Phase 6 above)
 
 ### Next: v0.8.0 - Managed Postgres And Redis
 
@@ -417,6 +429,7 @@ that tag contains; the release gate itself is under *Cutting v0.6.0* at the end.
 - [x] Opt-in public host port per datastore (Railway-style), off by default.
 - [x] Datastore config in portable bundles (format v2).
 - [ ] Manual end-to-end verification on a real host. (see Phase 7 above)
+- [ ] Later: public-endpoint TLS, datastore metrics/logs, data backups, DB browser/SQL console, more engines. (see the Phase 7 deferred list)
 
 ## Cutting v0.6.0
 

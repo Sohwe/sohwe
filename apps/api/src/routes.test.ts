@@ -1,6 +1,9 @@
 import { after, before, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { buildBundle, canonicalize } from "@sohwe/bundler";
 import {
@@ -94,6 +97,7 @@ describe("API routes", { skip }, () => {
       `TRUNCATE TABLE ${TABLES.map((t) => `"${t}"`).join(", ")} CASCADE`
     );
     delete process.env.SOHWE_SETUP_PASSWORD;
+    delete process.env.SOHWE_HOST_FS_ALLOWLIST;
     // A fresh instance per test also resets the in-memory rate-limit counters,
     // so one test spending the login budget cannot fail the next.
     if (app) await app.close();
@@ -1804,6 +1808,173 @@ describe("API routes", { skip }, () => {
       const result = apply.json() as { created: number; datastoresCreated: number };
       assert.equal(result.created, 1);
       assert.equal(result.datastoresCreated, 0);
+    });
+  });
+
+  describe("host filesystem browser", () => {
+    /**
+     * Build a server whose config carries an allowlist. The env var is read at
+     * `loadApiConfig()` time and deleted immediately after, so nothing leaks
+     * into the shared `app` (which `beforeEach` builds with the feature off).
+     */
+    async function buildWithAllowlist(roots: string): Promise<FastifyInstance> {
+      process.env.SOHWE_HOST_FS_ALLOWLIST = roots;
+      try {
+        return await buildServer(loadApiConfig(), { logger: false });
+      } finally {
+        delete process.env.SOHWE_HOST_FS_ALLOWLIST;
+      }
+    }
+
+    /** Temp root with a file, a subdirectory, and a symlink escaping the root. */
+    async function makeFixture(): Promise<{ root: string; outside: string }> {
+      const root = await mkdtemp(join(tmpdir(), "sohwe-hostfs-"));
+      const outside = await mkdtemp(join(tmpdir(), "sohwe-hostfs-outside-"));
+      await writeFile(join(root, "top.txt"), "hello host\n");
+      await mkdir(join(root, "conf"));
+      await writeFile(join(root, "conf", "app.txt"), "conf file");
+      await writeFile(join(outside, "secret.txt"), "must stay unreachable");
+      await symlink(join(outside, "secret.txt"), join(root, "escape"));
+      return { root, outside };
+    }
+
+    it("is disabled without an allowlist", async () => {
+      const cookie = await signIn();
+
+      const status = await app.inject({
+        method: "GET",
+        url: "/api/host-fs",
+        headers: { cookie }
+      });
+      assert.equal(status.statusCode, 200, status.body);
+      assert.deepEqual(status.json(), { enabled: false, roots: [] });
+
+      for (const url of ["/api/host-fs/list", "/api/host-fs/file?path=/etc/hostname"]) {
+        const res = await app.inject({ method: "GET", url, headers: { cookie } });
+        assert.equal(res.statusCode, 403, `${url} should refuse when disabled`);
+      }
+    });
+
+    it("lists and reads under an allowlisted root, auditing every access", async () => {
+      const cookie = await signIn();
+      const { root, outside } = await makeFixture();
+      const gated = await buildWithAllowlist(root);
+      try {
+        const status = await gated.inject({
+          method: "GET",
+          url: "/api/host-fs",
+          headers: { cookie }
+        });
+        assert.deepEqual(status.json(), { enabled: true, roots: [root] });
+
+        const list = await gated.inject({
+          method: "GET",
+          url: `/api/host-fs/list?path=${encodeURIComponent(root)}`,
+          headers: { cookie }
+        });
+        assert.equal(list.statusCode, 200, list.body);
+        const { entries } = list.json() as {
+          entries: { name: string; kind: string }[];
+        };
+        assert.deepEqual(
+          entries.map((e) => `${e.kind}:${e.name}`),
+          ["dir:conf", "symlink:escape", "file:top.txt"]
+        );
+
+        const file = await gated.inject({
+          method: "GET",
+          url: `/api/host-fs/file?path=${encodeURIComponent(join(root, "top.txt"))}`,
+          headers: { cookie }
+        });
+        assert.equal(file.statusCode, 200, file.body);
+        const body = file.json() as {
+          content: string;
+          encoding: string;
+          truncated: boolean;
+        };
+        assert.equal(body.content, "hello host\n");
+        assert.equal(body.encoding, "utf8");
+        assert.equal(body.truncated, false);
+
+        // The roadmap item is "audit every host file list/read action".
+        const audits = await prisma.auditLog.findMany({
+          where: { action: { in: ["host_fs.list", "host_fs.read"] } },
+          orderBy: { createdAt: "asc" }
+        });
+        assert.deepEqual(
+          audits.map((a) => a.action),
+          ["host_fs.list", "host_fs.read"]
+        );
+        assert.equal(audits[0]?.targetLabel, root);
+        assert.equal(audits[1]?.targetLabel, join(root, "top.txt"));
+      } finally {
+        await gated.close();
+        await rm(root, { recursive: true, force: true });
+        await rm(outside, { recursive: true, force: true });
+      }
+    });
+
+    it("rejects traversal, out-of-root paths, and symlink escapes", async () => {
+      const cookie = await signIn();
+      const { root, outside } = await makeFixture();
+      const gated = await buildWithAllowlist(root);
+      try {
+        const cases: [string, number][] = [
+          // ".." never parses, even when it would stay inside the root.
+          [`${root}/conf/../top.txt`, 400],
+          // Outside every allowed root.
+          [`/definitely-not-allowlisted`, 403],
+          [outside, 403],
+          // Inside the root lexically, but resolves outside it.
+          [join(root, "escape"), 403],
+          // Inside the root, but nothing there.
+          [join(root, "missing.txt"), 404]
+        ];
+        for (const [path, expected] of cases) {
+          const res = await gated.inject({
+            method: "GET",
+            url: `/api/host-fs/file?path=${encodeURIComponent(path)}`,
+            headers: { cookie }
+          });
+          assert.equal(
+            res.statusCode,
+            expected,
+            `${path} returned ${String(res.statusCode)}: ${res.body}`
+          );
+        }
+
+        // Refused access is not "not found": the symlink escape must not leak
+        // whether its target exists, and no audit row records a denied path.
+        const audits = await prisma.auditLog.count({
+          where: { action: { in: ["host_fs.list", "host_fs.read"] } }
+        });
+        assert.equal(audits, 0);
+      } finally {
+        await gated.close();
+        await rm(root, { recursive: true, force: true });
+        await rm(outside, { recursive: true, force: true });
+      }
+    });
+
+    it("is admin-and-above even when enabled", async () => {
+      await signIn();
+      const cookie = await signInAs("member");
+      const { root, outside } = await makeFixture();
+      const gated = await buildWithAllowlist(root);
+      try {
+        for (const url of [
+          "/api/host-fs",
+          `/api/host-fs/list?path=${encodeURIComponent(root)}`,
+          `/api/host-fs/file?path=${encodeURIComponent(join(root, "top.txt"))}`
+        ]) {
+          const res = await gated.inject({ method: "GET", url, headers: { cookie } });
+          assert.equal(res.statusCode, 403, `${url} should be admin-only`);
+        }
+      } finally {
+        await gated.close();
+        await rm(root, { recursive: true, force: true });
+        await rm(outside, { recursive: true, force: true });
+      }
     });
   });
 });

@@ -19,6 +19,7 @@ import { BackupsPage } from "@/routes/backups";
 import { DatastoresPage } from "@/routes/datastores";
 import { DatastoreDetailPage } from "@/routes/datastore.$datastoreId";
 import { GitPage } from "@/routes/git";
+import { HostFilesPage } from "@/routes/host-files";
 import { JoinPage } from "@/routes/join";
 import { MembersPage } from "@/routes/members";
 import { AuditPage } from "@/routes/audit";
@@ -131,6 +132,12 @@ const gitRoute = createRoute({
   getParentRoute: () => authedLayoutRoute,
   path: "git",
   component: GitPage
+});
+
+const hostFilesRoute = createRoute({
+  getParentRoute: () => authedLayoutRoute,
+  path: "host-files",
+  component: HostFilesPage
 });
 
 const membersRoute = createRoute({
@@ -248,6 +255,7 @@ const routeTree = rootRoute.addChildren([
     datastoresRoute,
     datastoreDetailRoute,
     gitRoute,
+    hostFilesRoute,
     membersRoute,
     auditRoute
   ])

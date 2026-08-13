@@ -257,6 +257,9 @@ export function joinFsPath(dir: string, name: string): string {
   return `${dir}/${name}`;
 }
 
+/** GET /api/host-fs — whether the host file browser is on, and its roots. */
+export type HostFsStatus = { enabled: boolean; roots: string[] };
+
 export function parentFsPath(p: string): string {
   if (p === "/") return "/";
   const parts = p.split("/").filter(Boolean);

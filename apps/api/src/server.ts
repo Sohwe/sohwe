@@ -30,6 +30,7 @@ import { registerApplicationRoutes } from "./routes/applications";
 import { registerDatastoreRoutes } from "./routes/datastores";
 import { registerGitHubRoutes } from "./routes/github";
 import { registerGitHubWebhookRoutes } from "./routes/github-webhook";
+import { registerHostFsRoutes } from "./routes/host-fs";
 import { registerEnvVarRoutes } from "./routes/env-vars";
 import { registerMemberRoutes } from "./routes/members";
 import { registerVolumeRoutes } from "./routes/volumes";
@@ -197,6 +198,7 @@ export async function buildServer(
   await registerVolumeRoutes(app);
   await registerAlertDestinationRoutes(app);
   await registerAppFilesystemRoutes(app);
+  await registerHostFsRoutes(app, config);
   await registerBackupRoutes(app);
   await registerDatastoreRoutes(app, config);
   await registerGitHubRoutes(app, config);

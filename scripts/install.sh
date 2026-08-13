@@ -438,6 +438,11 @@ SOHWE_PUBLIC_URL=${public_url}
 # production. Set a comma-separated origin list only if you front the API
 # separately.
 # SOHWE_CORS_ORIGIN=
+# Optional host file browser (dashboard "Host files" page, admin-and-above,
+# every access audited). Comma-separated absolute paths the API may list/read.
+# Unset keeps the feature off. The API container only sees /etc/sohwe (mounted
+# read-only by docker-compose.prod.yml); other paths need their own mounts.
+# SOHWE_HOST_FS_ALLOWLIST=/etc/sohwe
 SOHWE_COMPOSE_OVERLAYS=${overlays}
 TRAEFIK_LOG_LEVEL=INFO
 

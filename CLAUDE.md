@@ -26,7 +26,7 @@ Milestone state (verify against `ROADMAP.md` before relying on this):
 - Phase 4 (observability) complete: runtime log SSE, live Docker stats, crash/OOM alerts.
 - Phase 4.5 (portable bundles) complete: signed passphrase-protected config bundles, local/S3/download destinations, restore preflight+apply, scheduled exports with retention.
 - Phase 5 (git-push deploys) complete: per-instance GitHub App via manifest flow, installation-token clones, signature-verified push webhook, auto-deploy toggle, commit statuses. A manual end-to-end check on a real host is still open.
-- Phase 6 (multi-user) complete except one optional item: owner/admin/member role guards, copy-link invitations, member management, org-scoped audit log. The deferred item is an instance *host* filesystem browser (distinct from the existing container browser).
+- Phase 6 (multi-user) complete: owner/admin/member role guards, copy-link invitations, member management, org-scoped audit log, and the optional instance *host* filesystem browser (allowlist-gated via `SOHWE_HOST_FS_ALLOWLIST`, off by default, audited per list/read).
 - Next unstarted milestone is Phase 7: managed datastores (post-v1).
 
 ## Repository Shape
@@ -103,7 +103,7 @@ Never commit real secrets or generated env files.
 
 ### API
 
-- `apps/api/src/index.ts` is the process entrypoint only (env load, `listen`, boot tasks, SIGTERM). The Fastify instance is assembled by `buildServer` in `apps/api/src/server.ts` — put new routes and plugins there, so the server stays constructible without binding a port. Routes are registered via `register*Routes` functions; modules live in `apps/api/src/routes` (`applications`, `env-vars`, `volumes`, `alert-destinations`, `app-filesystem`, `backups`, `github`, `github-webhook`, `members`, `audit`).
+- `apps/api/src/index.ts` is the process entrypoint only (env load, `listen`, boot tasks, SIGTERM). The Fastify instance is assembled by `buildServer` in `apps/api/src/server.ts` — put new routes and plugins there, so the server stays constructible without binding a port. Routes are registered via `register*Routes` functions; modules live in `apps/api/src/routes` (`applications`, `env-vars`, `volumes`, `alert-destinations`, `app-filesystem`, `host-fs`, `backups`, `datastores`, `github`, `github-webhook`, `members`, `audit`).
 - Protected routes use `requireRole(min)` from `apps/api/src/rbac.ts` (see *Roles, Invitations, and the Audit Log*) and scope every query by `req.user!.organizationId`. Backups routes are org-scoped, not app-scoped. `authPreHandler` in `apps/api/src/session.ts` is the underlying auth step and is fine on its own only for routes with no role floor at all.
 - Redis handles owned by a route module (the deploy queue, the stats client) are created inside `register*Routes` and closed in that instance's `onClose` — never at module load. A module-level connection is shared by every server built in the process, so one `app.close()` breaks the rest, which the route tests hit immediately.
 - Never return `Application.envVarsEncrypted` from general endpoints. Use `defaultApplicationSelect` and `serializeAppListRow` from `apps/api/src/app-public.ts` unless a route deliberately deals in secrets.

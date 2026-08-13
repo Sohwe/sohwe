@@ -5,18 +5,18 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import type { FsFileResponse } from "@/lib/types";
 
 export function FilePreviewDialog({
-  appId,
+  url,
   path: filePath,
   onClose
 }: {
-  appId: string;
+  /** Fully-built API URL that returns an FsFileResponse for this path. */
+  url: string;
   path: string;
   onClose: () => void;
 }) {
   const fileQuery = useQuery({
-    queryKey: ["fs-file", appId, filePath],
-    queryFn: () =>
-      apiGet<FsFileResponse>(`/api/applications/${appId}/fs/file?path=${encodeURIComponent(filePath)}`)
+    queryKey: ["fs-file", url],
+    queryFn: () => apiGet<FsFileResponse>(url)
   });
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>

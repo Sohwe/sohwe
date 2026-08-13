@@ -68,7 +68,7 @@ Sohwe lets you connect a Git repo and get a running, HTTPS-terminated container 
 | **4. Observability** | Live logs, build logs, CPU/mem, crash alerts | Shipped |
 | **4.5. Portable Bundles** | Config export/restore, local + S3 destinations, scheduled exports | Shipped |
 | **5. Git-Push Deploys** | GitHub App, webhooks, auto-deploy | Shipped (manual e2e check open) |
-| **6. Multi-User** | Invites, roles, audit log | Shipped (instance-host file browser deferred) |
+| **6. Multi-User** | Invites, roles, audit log | Shipped (incl. the allowlisted instance-host file browser) |
 | **7. Managed Datastores** | One-click Postgres/Redis, private bindings | Post-v1 / v2 |
 
 `ROADMAP.md` is the authoritative per-item checklist with file-level evidence.

@@ -21,6 +21,7 @@ export type AuditTargetType =
   | "backup"
   | "github"
   | "datastore"
+  | "host_fs"
   | "organization";
 
 /**
@@ -57,6 +58,8 @@ export type AuditAction =
   | "datastore.unbind"
   | "github.connect"
   | "github.disconnect"
+  | "host_fs.list"
+  | "host_fs.read"
   | "member.invite"
   | "member.invite_revoke"
   | "member.join"
@@ -93,6 +96,8 @@ export const AUDIT_ACTIONS: readonly AuditAction[] = [
   "datastore.unbind",
   "github.connect",
   "github.disconnect",
+  "host_fs.list",
+  "host_fs.read",
   "member.invite",
   "member.invite_revoke",
   "member.join",

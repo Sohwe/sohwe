@@ -7,22 +7,28 @@ import { joinFsPath, parentFsPath, type FsListResponse } from "@/lib/types";
 
 function Crumbs({
   path,
+  rootPath,
   onPath
 }: {
   path: string;
+  rootPath: string;
   onPath: (p: string) => void;
 }) {
   const items = useMemo(() => {
-    if (path === "/") return [{ label: "root", path: "/" as const }];
-    const segments = path.split("/").filter(Boolean);
-    const out: { label: string; path: string }[] = [{ label: "root", path: "/" }];
-    let acc = "";
-    for (const seg of segments) {
-      acc = `${acc}/${seg}`;
-      out.push({ label: seg, path: acc });
+    const rootLabel = rootPath === "/" ? "root" : rootPath;
+    const out: { label: string; path: string }[] = [
+      { label: rootLabel, path: rootPath }
+    ];
+    if (path !== rootPath) {
+      const rest = rootPath === "/" ? path : path.slice(rootPath.length);
+      let acc = rootPath === "/" ? "" : rootPath;
+      for (const seg of rest.split("/").filter(Boolean)) {
+        acc = `${acc}/${seg}`;
+        out.push({ label: seg, path: acc });
+      }
     }
     return out;
-  }, [path]);
+  }, [path, rootPath]);
   return (
     <nav className="flex flex-wrap items-center gap-0.5 text-xs text-muted-foreground" aria-label="Path">
       {items.map((c, i) => (
@@ -37,25 +43,41 @@ function Crumbs({
   );
 }
 
-export function FileBrowser({ appId }: { appId: string }) {
-  const [path, setPath] = useState("/");
+/**
+ * Generic read-only filesystem browser over any pair of list/file endpoints
+ * that speak FsListResponse/FsFileResponse — the app container filesystem and
+ * the host file browser both render through this. `rootPath` fences navigation:
+ * breadcrumbs stop there and ".." never goes above it.
+ */
+export function FileBrowser({
+  listUrl,
+  fileUrl,
+  title,
+  description,
+  rootPath = "/"
+}: {
+  listUrl: (path: string) => string;
+  fileUrl: (path: string) => string;
+  title: string;
+  description: string;
+  rootPath?: string;
+}) {
+  const [path, setPath] = useState(rootPath);
   const [previewPath, setPreviewPath] = useState<string | null>(null);
 
   const listQuery = useQuery({
-    queryKey: ["fs-list", appId, path],
-    queryFn: () => apiGet<FsListResponse>(`/api/applications/${appId}/fs/list?path=${encodeURIComponent(path)}`),
+    queryKey: ["fs-list", listUrl(path)],
+    queryFn: () => apiGet<FsListResponse>(listUrl(path)),
     staleTime: 15_000
   });
 
   return (
     <div className="space-y-3 rounded-lg border border-border bg-card/30 p-4">
       <div>
-        <p className="text-xs font-medium text-muted-foreground">Container files</p>
-        <p className="mt-0.5 text-xs text-muted-foreground">
-          Read-only view of the running container filesystem. Browse mounted volumes and app files.
-        </p>
+        <p className="text-xs font-medium text-muted-foreground">{title}</p>
+        <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
       </div>
-      <Crumbs path={path} onPath={setPath} />
+      <Crumbs path={path} rootPath={rootPath} onPath={setPath} />
 
       {listQuery.isLoading ? <p className="text-sm text-muted-foreground">Loading directory…</p> : null}
       {listQuery.isError ? (
@@ -66,7 +88,7 @@ export function FileBrowser({ appId }: { appId: string }) {
 
       {listQuery.data ? (
         <ul className="max-h-64 space-y-0.5 overflow-auto font-mono text-sm">
-          {path !== "/" ? (
+          {path !== rootPath ? (
             <li>
               <Button type="button" variant="link" className="h-auto p-0 text-foreground" onClick={() => setPath(parentFsPath(path))}>
                 ..
@@ -100,7 +122,9 @@ export function FileBrowser({ appId }: { appId: string }) {
         </ul>
       ) : null}
 
-      {previewPath ? <FilePreviewDialog appId={appId} path={previewPath} onClose={() => setPreviewPath(null)} /> : null}
+      {previewPath ? (
+        <FilePreviewDialog url={fileUrl(previewPath)} path={previewPath} onClose={() => setPreviewPath(null)} />
+      ) : null}
     </div>
   );
 }

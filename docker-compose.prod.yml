@@ -150,6 +150,16 @@ services:
       <<: *sohwe-env
       PORT: "3001"
       SOHWE_SETUP_PASSWORD: ${SOHWE_SETUP_PASSWORD:-}
+      # Optional host file browser. Comma-separated absolute paths the API may
+      # list/read (dashboard "Host files" page, admin-and-above, every access
+      # audited). Empty (the default) disables the feature. The API container
+      # only sees what is mounted below — /etc/sohwe by default — so extra
+      # allowlisted paths also need their own read-only volume entries.
+      SOHWE_HOST_FS_ALLOWLIST: ${SOHWE_HOST_FS_ALLOWLIST:-}
+    volumes:
+      # Read-only instance config for the host file browser. Harmless while the
+      # feature is off; the same secrets already reach this container via env.
+      - /etc/sohwe:/etc/sohwe:ro
     healthcheck:
       test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
       interval: 30s
