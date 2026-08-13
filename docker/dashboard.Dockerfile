@@ -34,6 +34,7 @@ COPY packages/builder/package.json  packages/builder/package.json
 COPY packages/bundler/package.json  packages/bundler/package.json
 COPY packages/crypto/package.json   packages/crypto/package.json
 COPY packages/db/package.json       packages/db/package.json
+COPY packages/github/package.json   packages/github/package.json
 COPY packages/queue/package.json    packages/queue/package.json
 COPY packages/types/package.json    packages/types/package.json
 RUN --mount=type=cache,id=pnpm-store-dashboard,target=/root/.local/share/pnpm/store \

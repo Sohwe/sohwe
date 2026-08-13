@@ -278,3 +278,23 @@ jobs:
             fi
           done
           echo "Line endings OK."
+
+      # Every workspace manifest must be COPY'd into each image's deps stage.
+      # A missing one means pnpm never registers that package as an importer,
+      # its node_modules links are never created, and the api/worker crash at
+      # import time — in production images only, invisible to typecheck and
+      # tests. This drifted once (packages/github was missing from all three
+      # Dockerfiles in v0.6.0) and broke the first real install.
+      - name: Dockerfiles copy every workspace manifest
+        run: |
+          status=0
+          for df in docker/api.Dockerfile docker/worker.Dockerfile docker/dashboard.Dockerfile; do
+            for manifest in packages/*/package.json apps/*/package.json; do
+              if ! grep -qF "$manifest" "$df"; then
+                echo "::error file=$df::Missing 'COPY $manifest' in the deps stage."
+                status=1
+              fi
+            done
+          done
+          [ "$status" -eq 0 ] && echo "All workspace manifests are copied."
+          exit $status
