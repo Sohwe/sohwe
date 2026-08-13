@@ -22,7 +22,7 @@ Shipped through **Phase 5**:
 
 ## Install on a server (production)
 
-On a fresh Ubuntu 22.04 or 24.04 host:
+On a fresh Ubuntu 22.04, 24.04, or 26.04 host:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Sohwe/sohwe/main/scripts/install.sh | bash
@@ -217,7 +217,7 @@ Certificates are only requested for apps on a real public domain — Let's Encry
 | `docker-compose.dev.yml` | Local Postgres, Redis, Traefik |
 | `docker-compose.prod.yml` + `docker-compose.https.yml` | Production stack (api + worker + dashboard + infra) |
 | `docker/*.Dockerfile` | Multi-stage production images (api / worker / dashboard) |
-| `scripts/install.sh` | One-command installer for Ubuntu 22.04/24.04 |
+| `scripts/install.sh` | One-command installer for Ubuntu 22.04/24.04/26.04 |
 | `scripts/sohwe` | Host-side CLI installed to `/usr/local/bin/sohwe` |
 | `.github/workflows/ci.yml` | Typecheck/lint/build, migration replay, and script checks on every push + PR |
 | `.github/workflows/release.yml` | Multi-arch GHCR publish on `v*` tags |

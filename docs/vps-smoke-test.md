@@ -5,8 +5,8 @@ fresh Ubuntu VPS (they exercise the installer, Docker, Traefik routing, and the
 host `sohwe` CLI), so they can't be done from a dev laptop or CI. Run them after
 any installer or base-domain change.
 
-Prereqs: a clean Ubuntu 22.04/24.04 host, a DNS A record (or wildcard) pointing at
-the box if you want to test a real domain, and `root`/`sudo`.
+Prereqs: a clean Ubuntu 22.04/24.04/26.04 host, a DNS A record (or wildcard)
+pointing at the box if you want to test a real domain, and `root`/`sudo`.
 
 ## 1. Fresh-Ubuntu install smoke test
 

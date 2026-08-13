@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 #
-# Sohwe installer. Target: a fresh Ubuntu 22.04 or 24.04 VPS.
+# Sohwe installer. Target: a fresh Ubuntu 22.04 / 24.04 / 26.04 VPS.
 #
 #   curl -fsSL https://raw.githubusercontent.com/Sohwe/sohwe/main/scripts/install.sh | bash
 #
@@ -100,13 +100,23 @@ if [[ $EUID -ne 0 ]]; then
         fail "Run as root (or install sudo)."
     fi
 
+    # Forward SOHWE_* variables explicitly instead of `sudo -E`: Ubuntu 25.10+
+    # ships sudo-rs, which ignores -E with a warning — silently dropping
+    # settings like SOHWE_VERSION at the sudo boundary. `env` behaves the same
+    # under both sudos. (A value containing a newline is not forwarded intact;
+    # SOHWE_SETUP_PASSWORD forbids newlines anyway.)
+    sohwe_env=()
+    while IFS= read -r line; do
+        sohwe_env+=("${line}")
+    done < <(env | grep -E '^SOHWE_[A-Z0-9_]*=' || true)
+
     if [[ -f "$0" && -r "$0" ]]; then
         # Invoked as a real file (e.g. bash ./install.sh). Normal re-exec.
-        exec sudo -E bash "$0" "$@"
+        exec sudo env "${sohwe_env[@]}" bash "$0" "$@"
     fi
 
-    # Piped case: materialize ourselves to disk, then re-exec. Preserves env
-    # so SOHWE_VERSION, SOHWE_HOST, etc. carry through the sudo boundary.
+    # Piped case: materialize ourselves to disk, then re-exec, carrying
+    # SOHWE_VERSION, SOHWE_HOST, etc. through the sudo boundary.
     tmp_self="$(mktemp -t sohwe-install.XXXXXX.sh)"
     if ! curl -fsSL "${RAW_BASE}/scripts/install.sh" -o "${tmp_self}"; then
         rm -f "${tmp_self}"
@@ -114,7 +124,7 @@ if [[ $EUID -ne 0 ]]; then
     fi
     chmod +x "${tmp_self}"
     # shellcheck disable=SC2093  # exec replaces this shell; nothing after runs.
-    exec sudo -E bash "${tmp_self}" "$@"
+    exec sudo env "${sohwe_env[@]}" bash "${tmp_self}" "$@"
 fi
 
 #-----------------------------------------------------------------------------#
@@ -141,7 +151,7 @@ fi
 readonly SOURCE_ROOT
 
 #-----------------------------------------------------------------------------#
-# OS detection — Ubuntu 22.04 / 24.04 only for v0.2
+# OS detection — Ubuntu LTS releases, Debian close enough
 #-----------------------------------------------------------------------------#
 
 detect_os() {
@@ -149,10 +159,18 @@ detect_os() {
     # shellcheck disable=SC1091
     . /etc/os-release
     case "${ID:-}:${VERSION_ID:-}" in
-        ubuntu:22.04|ubuntu:24.04) : ;;
+        ubuntu:22.04|ubuntu:24.04|ubuntu:26.04) : ;;
+        ubuntu:*)
+            # Don't hard-fail on an Ubuntu release this script merely hasn't
+            # met yet — that stranded every 26.04 user until the allowlist
+            # grew. Docker publishes for new Ubuntu releases quickly; if its
+            # apt repo lacks this codename, ensure_docker fails with a clear
+            # apt error.
+            warn "Ubuntu ${VERSION_ID:-unknown} is untested with Sohwe — continuing anyway."
+            ;;
         debian:12) warn "Debian 12 is untested but close enough — continuing." ;;
         *)
-            fail "Unsupported OS: ${ID:-unknown} ${VERSION_ID:-unknown}. Sohwe supports Ubuntu 22.04 and 24.04."
+            fail "Unsupported OS: ${ID:-unknown} ${VERSION_ID:-unknown}. Sohwe supports Ubuntu 22.04/24.04/26.04."
             ;;
     esac
     ok "OS ${PRETTY_NAME:-$ID}"

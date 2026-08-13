@@ -17,7 +17,9 @@ readonly REPO="Sohwe/sohwe"
 readonly IMAGE_NS="sohwe/sohwe"
 readonly RAW_BASE="https://raw.githubusercontent.com/${REPO}/main"
 
-[[ $EUID -eq 0 ]] || { exec sudo -E bash "$0" "$@"; }
+# Plain sudo, not -E: the wrapper reads everything from /etc/sohwe/sohwe.env,
+# and Ubuntu 25.10+'s sudo-rs warns that -E is unsupported.
+[[ $EUID -eq 0 ]] || { exec sudo bash "$0" "$@"; }
 
 [[ -f "${ENV_FILE}" ]] || { echo "Missing ${ENV_FILE}. Run the installer first." >&2; exit 1; }
 [[ -f "${COMPOSE_BASE}" ]] || { echo "Missing ${COMPOSE_BASE}." >&2; exit 1; }

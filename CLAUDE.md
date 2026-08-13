@@ -188,7 +188,7 @@ Never commit real secrets or generated env files.
 ### Installer and Production Files
 
 - `scripts/install.sh`, `scripts/sohwe`, production compose files, and Dockerfiles are user-facing product surface. Update `README.md` and `CHANGELOG.md` when their behavior changes.
-- The installer targets fresh Ubuntu 22.04/24.04 hosts and writes state under `/etc/sohwe/`.
+- The installer targets fresh Ubuntu 22.04/24.04/26.04 hosts (other Ubuntu releases warn and continue) and writes state under `/etc/sohwe/`.
 - Any new API or worker env var must be threaded through `scripts/install.sh` (into `/etc/sohwe/sohwe.env`) *and* the shared env block in `docker-compose.prod.yml`, or it will silently fall back to a default in production.
 - Production images publish to GHCR from `.github/workflows/release.yml` on `v*` tags.
 
