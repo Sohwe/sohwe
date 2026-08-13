@@ -68,6 +68,12 @@ ARG NIXPACKS_VERSION
 #
 # The Docker apt repository publishes `docker-ce-cli` for Debian. We avoid
 # `docker-ce` + `containerd` — the worker never runs its own daemon.
+#
+# docker-buildx-plugin is required, not optional: the modern CLI delegates
+# `docker build` to buildx (a client-side plugin), so without it every app
+# build — Dockerfile mode and Nixpacks alike — fails with "BuildKit is
+# enabled but the buildx component is missing". The host daemon having buildx
+# does not help; CLI plugins live with the client, in this image.
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
@@ -80,7 +86,7 @@ RUN set -eux; \
 https://download.docker.com/linux/debian $(lsb_release -cs) stable" \
         > /etc/apt/sources.list.d/docker.list; \
     apt-get update; \
-    apt-get install -y --no-install-recommends docker-ce-cli; \
+    apt-get install -y --no-install-recommends docker-ce-cli docker-buildx-plugin; \
     apt-get purge -y --auto-remove gnupg lsb-release; \
     rm -rf /var/lib/apt/lists/*
 
