@@ -84,7 +84,7 @@ Three years from now, Sohwe is:
 
 - **Kubernetes orchestration** — Sohwe runs on Docker Engine only.
 - **Multi-node clustering** — single-server deployment in v1. Multi-node is a v2 goal.
-- **Databases-as-a-service** — users bring their own DB in v1. One-click Postgres/Redis ships in v2.
+- ~~**Databases-as-a-service**~~ — shipped: one-click Postgres/Redis landed as Phase 7 (v0.8.0).
 - **Preview deployments per pull request** — deferred to v2.
 - **Built-in CI** — no custom pipelines; we consume the output of a Git push.
 - **Marketplace / app templates** — deferred.
@@ -265,7 +265,7 @@ Grouped by release phase (see [Release Plan](#12-release-plan) for timing).
 - As the **owner**, I want backups to be incremental where possible, so daily snapshots don't cost me gigabytes each.
 - As the **owner**, I want a documented restore drill, so I know my backups actually work before I need them.
 
-### 9.9 Phase 7 — Managed Datastores (post-v1 / v2)
+### 9.9 Phase 7 — Managed Datastores (shipped — v0.8.0)
 
 - As a **developer**, I want to create a Postgres database from the dashboard, so my app can use a production database on the same VPS without manual Docker or SSH setup.
 - As a **developer**, I want to create a Redis instance from the dashboard, so my app can add queues, cache, sessions, or pub/sub without leaving Sohwe.
@@ -413,9 +413,9 @@ written; this records where the implementation diverged. See
 - **Cross-version restore** — bundles carry `version: 1`, but no older-version bundle exists to test against, so the "restore across at least one major version" guarantee is unverified.
 - **Audit trail** — built in `P6`. Export and restore record actor, destination kind, app counts, and collision policy; never the passphrase or S3 credentials.
 
-### 10.10 Managed Datastores (Post-v1 / v2)
+### 10.10 Managed Datastores (Shipped — Phase 7, v0.8.0)
 
-Managed datastores let Sohwe provision first-party Postgres and Redis containers on the same VPS as user applications. They are intentionally post-v1 because they turn Sohwe from a deployment control plane into a data-hosting tool, which raises the bar for backups, restore, upgrades, and operational safety.
+Managed datastores let Sohwe provision first-party Postgres and Redis containers on the same VPS as user applications. Everything below is implemented; see `ROADMAP.md` for evidence.
 
 Functional requirements:
 
@@ -432,9 +432,12 @@ Functional requirements:
 - `[P7]` Require explicit confirmation before deleting a datastore volume.
 - `[P7]` Include managed datastore configuration in config-mode bundles, but defer raw datastore contents to full-state backup.
 
+Shipped beyond the original scope:
+
+- Opt-in public TCP exposure for external clients (per-datastore host port, off by default).
+
 Deferred from the first managed-datastore release:
 
-- Public TCP exposure for external clients.
 - Multi-node replication/high availability.
 - Point-in-time recovery.
 - SQL browser/admin console.

@@ -1,20 +1,34 @@
 import type { FastifyInstance } from "fastify";
 import parser from "cron-parser";
-import { prisma } from "@sohwe/db";
-import { buildBundle, parseBundle } from "@sohwe/bundler";
-import { encryptJson } from "@sohwe/crypto";
+import { Prisma, prisma } from "@sohwe/db";
+import {
+  buildBundle,
+  parseBundle,
+  type BundleDatastoreEntry
+} from "@sohwe/bundler";
+import { decryptJson, encryptJson } from "@sohwe/crypto";
 import { parseGitHubRepoUrl, repoFullName } from "@sohwe/github";
 import {
   describeDestination,
   encryptS3Credentials,
   encryptSchedulePassphrase,
   gatherBundleApps,
+  gatherBundleDatastores,
   makeBundleFilename,
   resolveDestination,
   writeBundle
 } from "@sohwe/backups";
 import {
   BackupExportSchema,
+  buildDatastoreConnectionUrl,
+  DATASTORE_KINDS,
+  DATASTORE_PUBLIC_PORT_MAX,
+  DATASTORE_PUBLIC_PORT_MIN,
+  datastoreContainerName,
+  datastoreEngineVersions,
+  datastoreServicePort,
+  type DatastoreCredentials,
+  type DatastoreKind,
   CreateBackupDestinationSchema,
   CreateBackupScheduleSchema,
   RestoreApplySchema,
@@ -23,10 +37,218 @@ import {
 } from "@sohwe/types";
 import { z } from "zod";
 import { recordAudit } from "../audit";
+import { generateDatastoreCredentials } from "./datastores";
 import { requireRole } from "../rbac";
 
 // Admin-and-above throughout. Bundles carry re-encrypted env vars and restore
 // can overwrite live app configuration, so neither side of it is a member action.
+
+function readEncJson(enc: Buffer | Uint8Array | null): Record<string, string> {
+  if (!enc || enc.length === 0) return {};
+  return decryptJson(Buffer.isBuffer(enc) ? enc : Buffer.from(enc));
+}
+
+type RestoredDatastoreCounts = {
+  datastoresCreated: number;
+  datastoresOverwritten: number;
+  datastoresSkipped: number;
+  datastoresRenamed: number;
+  bindingsRestored: number;
+  bindingsDropped: number;
+};
+
+/**
+ * Restore the bundle's datastore entries inside the same transaction as the
+ * apps. Bundles carry config only, so every created datastore gets fresh
+ * credentials and lands in `idle` — nothing provisions until the user acts,
+ * mirroring restored apps. Bindings are re-pointed at the restored apps (by
+ * bundle slug) and the injected env keys are rewritten with this instance's
+ * new credentials, so provision -> deploy works without a manual re-bind.
+ *
+ * `overwrite` narrows deliberately for datastores: only name and resource
+ * limits are updated. Engine version, credentials, status, and public port of
+ * a live datastore are never touched — swapping an engine under an existing
+ * data volume is destructive.
+ */
+async function restoreDatastores(
+  tx: Prisma.TransactionClient,
+  organizationId: string,
+  entries: BundleDatastoreEntry[],
+  collisionPolicy: "rename" | "overwrite" | "skip",
+  appIdByBundleSlug: Map<string, string>
+): Promise<RestoredDatastoreCounts> {
+  const counts: RestoredDatastoreCounts = {
+    datastoresCreated: 0,
+    datastoresOverwritten: 0,
+    datastoresSkipped: 0,
+    datastoresRenamed: 0,
+    bindingsRestored: 0,
+    bindingsDropped: 0
+  };
+  if (entries.length === 0) return counts;
+
+  const existing = await tx.datastore.findMany({
+    where: { organizationId },
+    select: { id: true, slug: true }
+  });
+  const usedSlugs = new Set(existing.map((d) => d.slug));
+  const idBySlug = new Map(existing.map((d) => [d.slug, d.id]));
+  // publicPort is unique across the whole instance, not just this org.
+  const portRows = await tx.datastore.findMany({
+    where: { publicPort: { not: null } },
+    select: { publicPort: true }
+  });
+  const usedPorts = new Set(portRows.map((r) => r.publicPort));
+
+  /** Bundle datastore slug -> what it became on this instance. */
+  const mapped = new Map<
+    string,
+    { id: string; kind: DatastoreKind; slug: string; creds: DatastoreCredentials }
+  >();
+
+  for (const d of entries) {
+    if (!(DATASTORE_KINDS as readonly string[]).includes(d.kind)) {
+      counts.datastoresSkipped++;
+      counts.bindingsDropped += d.bindings.length;
+      continue;
+    }
+    const kind = d.kind as DatastoreKind;
+    const collides = usedSlugs.has(d.slug);
+
+    if (collides && collisionPolicy === "skip") {
+      counts.datastoresSkipped++;
+      counts.bindingsDropped += d.bindings.length;
+      continue;
+    }
+
+    if (collides && collisionPolicy === "overwrite") {
+      const id = idBySlug.get(d.slug)!;
+      const row = await tx.datastore.update({
+        where: { id },
+        data: {
+          name: d.name,
+          memoryLimitMb: d.memoryLimitMb,
+          cpuLimit: d.cpuLimit
+        }
+      });
+      const vars = readEncJson(row.credentialsEncrypted);
+      mapped.set(d.slug, {
+        id,
+        kind,
+        slug: row.slug,
+        creds: {
+          username: vars.username,
+          password: vars.password ?? "",
+          database: vars.database
+        }
+      });
+      counts.datastoresOverwritten++;
+      continue;
+    }
+
+    let slug = d.slug;
+    if (collides) {
+      slug = `${d.slug}-restored`;
+      let n = 2;
+      while (usedSlugs.has(slug)) slug = `${d.slug}-restored-${n++}`;
+      counts.datastoresRenamed++;
+    } else {
+      counts.datastoresCreated++;
+    }
+
+    // A bundle from a newer Sohwe may name a version this build cannot run.
+    const versions = datastoreEngineVersions(kind);
+    const engineVersion = versions.includes(d.engineVersion)
+      ? d.engineVersion
+      : versions[0]!;
+
+    // Ports are host-specific: keep the bundled one only if it is valid and
+    // free here; otherwise the datastore lands private and the user re-enables.
+    let publicPort: number | null = null;
+    if (
+      d.publicPort != null &&
+      d.publicPort >= DATASTORE_PUBLIC_PORT_MIN &&
+      d.publicPort <= DATASTORE_PUBLIC_PORT_MAX &&
+      !usedPorts.has(d.publicPort)
+    ) {
+      publicPort = d.publicPort;
+      usedPorts.add(d.publicPort);
+    }
+
+    const creds = generateDatastoreCredentials(kind, slug);
+    const row = await tx.datastore.create({
+      data: {
+        organizationId,
+        kind,
+        name: d.name,
+        slug,
+        engineVersion,
+        status: "idle",
+        memoryLimitMb: d.memoryLimitMb,
+        cpuLimit: d.cpuLimit,
+        publicPort,
+        credentialsEncrypted: encryptJson(creds)
+      }
+    });
+    usedSlugs.add(slug);
+    idBySlug.set(slug, row.id);
+    mapped.set(d.slug, {
+      id: row.id,
+      kind,
+      slug,
+      creds: {
+        username: creds.username,
+        password: creds.password ?? "",
+        database: creds.database
+      }
+    });
+  }
+
+  for (const d of entries) {
+    const ds = mapped.get(d.slug);
+    if (!ds) continue; // skipped above; its bindings are already counted
+    const url = buildDatastoreConnectionUrl(
+      ds.kind,
+      ds.creds,
+      datastoreContainerName(ds.slug),
+      datastoreServicePort(ds.kind)
+    );
+    for (const b of d.bindings) {
+      const appId = appIdByBundleSlug.get(b.appSlug);
+      if (!appId || b.envKeys.length === 0) {
+        counts.bindingsDropped++;
+        continue;
+      }
+      const existingBinding = await tx.datastoreBinding.findFirst({
+        where: { datastoreId: ds.id, applicationId: appId },
+        select: { id: true }
+      });
+      if (existingBinding) {
+        await tx.datastoreBinding.update({
+          where: { id: existingBinding.id },
+          data: { envKeys: b.envKeys }
+        });
+      } else {
+        await tx.datastoreBinding.create({
+          data: { datastoreId: ds.id, applicationId: appId, envKeys: b.envKeys }
+        });
+      }
+      const app = await tx.application.findUnique({
+        where: { id: appId },
+        select: { envVarsEncrypted: true }
+      });
+      const envMap = readEncJson(app?.envVarsEncrypted ?? null);
+      for (const key of b.envKeys) envMap[key] = url;
+      await tx.application.update({
+        where: { id: appId },
+        data: { envVarsEncrypted: encryptJson(envMap) }
+      });
+      counts.bindingsRestored++;
+    }
+  }
+
+  return counts;
+}
 
 const SOHWE_VERSION = process.env.SOHWE_VERSION ?? "0.5.0";
 
@@ -234,13 +456,19 @@ export async function registerBackupRoutes(app: FastifyInstance) {
           .send({ message: "Failed to read env var configuration for export" });
       }
 
+      const bundleDatastores = await gatherBundleDatastores(u.organizationId);
+
       const createdAtIso = new Date().toISOString();
-      const manifest = buildBundle(bundleApps, {
-        passphrase: body.passphrase,
-        includeSecrets: body.includeSecrets,
-        source: { orgName: u.organization.name, sohweVersion: SOHWE_VERSION },
-        createdAtIso
-      });
+      const manifest = buildBundle(
+        bundleApps,
+        {
+          passphrase: body.passphrase,
+          includeSecrets: body.includeSecrets,
+          source: { orgName: u.organization.name, sohweVersion: SOHWE_VERSION },
+          createdAtIso
+        },
+        bundleDatastores
+      );
 
       const json = JSON.stringify(manifest);
       const sizeBytes = Buffer.byteLength(json, "utf8");
@@ -358,6 +586,11 @@ export async function registerBackupRoutes(app: FastifyInstance) {
         select: { slug: true }
       });
       const existingSlugs = new Set(existing.map((a) => a.slug));
+      const existingDs = await prisma.datastore.findMany({
+        where: { organizationId: u.organizationId },
+        select: { slug: true }
+      });
+      const existingDsSlugs = new Set(existingDs.map((d) => d.slug));
 
       return {
         sourceOrgName: parsed.source.orgName,
@@ -370,6 +603,14 @@ export async function registerBackupRoutes(app: FastifyInstance) {
           volumeCount: a.volumes.length,
           alertCount: a.alertDestinations.length,
           envKeyCount: Object.keys(a.envVars).length
+        })),
+        datastores: parsed.datastores.map((d) => ({
+          name: d.name,
+          slug: d.slug,
+          kind: d.kind,
+          engineVersion: d.engineVersion,
+          collides: existingDsSlugs.has(d.slug),
+          bindingCount: d.bindings.length
         }))
       };
     }
@@ -401,6 +642,8 @@ export async function registerBackupRoutes(app: FastifyInstance) {
         let overwritten = 0;
         let skipped = 0;
         let renamed = 0;
+        /** Bundle app slug -> restored/overwritten app id, for datastore bindings. */
+        const appIdByBundleSlug = new Map<string, string>();
 
         for (const a of parsed.apps) {
           const collides = usedSlugs.has(a.slug);
@@ -442,6 +685,7 @@ export async function registerBackupRoutes(app: FastifyInstance) {
 
           if (collides && body.collisionPolicy === "overwrite") {
             const appId = idBySlug.get(a.slug)!;
+            appIdByBundleSlug.set(a.slug, appId);
             await tx.application.update({
               where: { id: appId },
               data: { ...scalars, status: "idle" }
@@ -484,9 +728,18 @@ export async function registerBackupRoutes(app: FastifyInstance) {
           });
           usedSlugs.add(slug);
           idBySlug.set(slug, newApp.id);
+          appIdByBundleSlug.set(a.slug, newApp.id);
         }
 
-        return { created, overwritten, skipped, renamed };
+        const datastores = await restoreDatastores(
+          tx,
+          u.organizationId,
+          parsed.datastores,
+          body.collisionPolicy,
+          appIdByBundleSlug
+        );
+
+        return { created, overwritten, skipped, renamed, ...datastores };
       });
 
       await recordAudit(req, {

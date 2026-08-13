@@ -21,6 +21,7 @@ import {
 } from "@sohwe/queue";
 import Docker from "dockerode";
 import { startBackupSubsystem, type BackupSubsystem } from "./backups";
+import { startDatastoreSubsystem, type DatastoreSubsystem } from "./datastores";
 import {
   BUILD_FAILURE_SCAN_LINES,
   formatBuildFailureSummary,
@@ -859,6 +860,13 @@ try {
   console.error("Failed to start backup subsystem", e);
 }
 
+let datastores: DatastoreSubsystem | null = null;
+try {
+  datastores = await startDatastoreSubsystem(docker);
+} catch (e) {
+  console.error("Failed to start datastore subsystem", e);
+}
+
 worker.on("failed", (job, err) => {
   console.error("Job failed", job?.id, err);
 });
@@ -872,6 +880,7 @@ const shutdown = async () => {
   for (const appId of runtimeLogTails.keys()) stopRuntimeLogTail(appId);
   await worker.close();
   if (backups) await backups.close();
+  if (datastores) await datastores.close();
   await publishRedis.quit();
   await prisma.$disconnect();
   process.exit(0);

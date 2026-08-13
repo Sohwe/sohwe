@@ -27,6 +27,7 @@ import { registerAppFilesystemRoutes } from "./routes/app-filesystem";
 import { registerAuditRoutes } from "./routes/audit";
 import { registerBackupRoutes } from "./routes/backups";
 import { registerApplicationRoutes } from "./routes/applications";
+import { registerDatastoreRoutes } from "./routes/datastores";
 import { registerGitHubRoutes } from "./routes/github";
 import { registerGitHubWebhookRoutes } from "./routes/github-webhook";
 import { registerEnvVarRoutes } from "./routes/env-vars";
@@ -197,6 +198,7 @@ export async function buildServer(
   await registerAlertDestinationRoutes(app);
   await registerAppFilesystemRoutes(app);
   await registerBackupRoutes(app);
+  await registerDatastoreRoutes(app, config);
   await registerGitHubRoutes(app, config);
   await registerGitHubWebhookRoutes(app);
   await registerMemberRoutes(app, config);

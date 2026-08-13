@@ -16,6 +16,7 @@ export {
   encryptS3Credentials,
   encryptSchedulePassphrase,
   gatherBundleApps,
+  gatherBundleDatastores,
   makeBundleFilename,
   runScheduledExport,
   type ScheduledExportResult

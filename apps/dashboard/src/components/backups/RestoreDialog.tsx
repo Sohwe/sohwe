@@ -90,8 +90,13 @@ export function RestoreDialog({
       }),
     onSuccess: (r) => {
       void queryClient.invalidateQueries({ queryKey: ["applications"] });
+      const dsTotal =
+        r.datastoresCreated + r.datastoresRenamed + r.datastoresOverwritten;
       toast.success(
-        `Restored: ${r.created} created, ${r.renamed} renamed, ${r.overwritten} overwritten, ${r.skipped} skipped`
+        `Restored: ${r.created} created, ${r.renamed} renamed, ${r.overwritten} overwritten, ${r.skipped} skipped` +
+          (dsTotal > 0 || r.datastoresSkipped > 0
+            ? ` · ${dsTotal} datastore${dsTotal === 1 ? "" : "s"} (idle, provision to start)`
+            : "")
       );
       reset();
       onOpenChange(false);
@@ -101,7 +106,9 @@ export function RestoreDialog({
     }
   });
 
-  const collisions = preflight?.apps.filter((a) => a.collides).length ?? 0;
+  const collisions =
+    (preflight?.apps.filter((a) => a.collides).length ?? 0) +
+    (preflight?.datastores.filter((d) => d.collides).length ?? 0);
 
   return (
     <Dialog
@@ -188,6 +195,33 @@ export function RestoreDialog({
                   </li>
                 ))}
               </ul>
+              {preflight.datastores.length > 0 ? (
+                <ul className="space-y-1 border-t border-border/60 pt-2">
+                  {preflight.datastores.map((d) => (
+                    <li
+                      key={d.slug}
+                      className="flex flex-wrap items-center justify-between gap-2 text-sm"
+                    >
+                      <span className="font-medium">
+                        {d.name}{" "}
+                        <span className="font-mono text-xs text-muted-foreground">
+                          {d.kind}:{d.engineVersion} /{d.slug}
+                        </span>
+                      </span>
+                      <span className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <span>
+                          datastore · {d.bindingCount} binding{d.bindingCount === 1 ? "" : "s"}
+                        </span>
+                        {d.collides ? (
+                          <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-amber-600 dark:text-amber-400">
+                            slug exists
+                          </span>
+                        ) : null}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
               {collisions > 0 ? (
                 <Field label={`Collision policy (${collisions} slug${collisions === 1 ? "" : "s"} already exist)`}>
                   <Select

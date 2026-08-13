@@ -2,7 +2,7 @@
 
 Current snapshot: latest tag is **v0.3.8**. Phases 4, 4.5, and 5 are implemented on `main` and staged for release as **v0.6.0** — `CHANGELOG.md` and the root `package.json` are prepared; the tag itself is held until the manual host verification below passes.
 
-Phases 0 through 5 are implemented in the repo. **Phase 4 - Observability** covers runtime logs, live metrics, and crash alerts. **Phase 4.5 - Portable Bundles** is feature-complete: signed config + re-encrypted env var bundles, local + S3-compatible + download destinations, restore preflight/apply, scheduled exports with cron + retention (worker-driven), and the org-level Backups UI. **Phase 5 - Git-Push Deploys** is implemented: per-instance GitHub App via the manifest flow, installation-token clones for private repos, a signature-verified push webhook, the auto-deploy toggle, and commit-status reporting. The build-log UX slice is also done: bounded build-log storage, derived failure summaries, copy/download, and clearer deployment states. All of this ships as **v0.6.0**. Three Phase 3.5 items remain as manual VPS verification (see `docs/vps-smoke-test.md`), and Phase 5 has its own manual end-to-end check; those are the only things holding the tag. **Phase 6 - Multi-User** has since landed on `main` for **v0.7.0**: owner/admin/member role guards on every route, copy-link invitations with hashed single-use tokens, member management, and an org-scoped audit log that records key names and counts but never secret values. Its one optional item — an instance *host* filesystem browser, distinct from the existing container browser — is deferred. Next unbuilt milestone is **Phase 7 - Managed Datastores**.
+Phases 0 through 5 are implemented in the repo. **Phase 4 - Observability** covers runtime logs, live metrics, and crash alerts. **Phase 4.5 - Portable Bundles** is feature-complete: signed config + re-encrypted env var bundles, local + S3-compatible + download destinations, restore preflight/apply, scheduled exports with cron + retention (worker-driven), and the org-level Backups UI. **Phase 5 - Git-Push Deploys** is implemented: per-instance GitHub App via the manifest flow, installation-token clones for private repos, a signature-verified push webhook, the auto-deploy toggle, and commit-status reporting. The build-log UX slice is also done: bounded build-log storage, derived failure summaries, copy/download, and clearer deployment states. All of this ships as **v0.6.0**. Three Phase 3.5 items remain as manual VPS verification (see `docs/vps-smoke-test.md`), and Phase 5 has its own manual end-to-end check; those are the only things holding the tag. **Phase 6 - Multi-User** has since landed on `main` for **v0.7.0**: owner/admin/member role guards on every route, copy-link invitations with hashed single-use tokens, member management, and an org-scoped audit log that records key names and counts but never secret values. Its one optional item — an instance *host* filesystem browser, distinct from the existing container browser — is deferred. **Phase 7 - Managed Datastores** has since landed on `main` for **v0.8.0**: managed Postgres/Redis containers with encrypted generated credentials, private app bindings that inject connection URLs into encrypted env vars, opt-in public host ports, password rotation, and config-only inclusion in portable bundles (bundle format v2).
 
 This file is a working checklist. It is based on `README.md`, `CHANGELOG.md`, `sohwe-getting-started.md`, `sohwe-prd.md`, and a code scan across the API, worker, dashboard, Docker, installer, and release workflow.
 
@@ -18,7 +18,7 @@ This file is a working checklist. It is based on `README.md`, `CHANGELOG.md`, `s
 - [x] **Phase 4.5 - Portable Bundles**
 - [x] **Phase 5 - Git-Push Deploys**
 - [x] **Phase 6 - Multi-User** (optional host file browser deferred)
-- [ ] **Phase 7 - Managed Datastores** (post-v1/v2)
+- [x] **Phase 7 - Managed Datastores**
 
 ## Completed
 
@@ -269,36 +269,52 @@ distinct feature from the existing container file browser, and one that needs a
 strict root-path allowlist, `..` rejection, and an audit entry per list/read
 before it is worth shipping.
 
-## Not Yet Built
+## Staged For v0.8.0
 
 ### Phase 7 - Managed Datastores
 
-Status: **post-v1 / v2 candidate**
+Status: **complete**
 
-Goal: let an owner create a Postgres or Redis instance on the same VPS with a few clicks, then attach its connection details to one or more apps without SSH, manual Docker commands, or plaintext credential handling.
+An owner/admin creates a Postgres or Redis instance on the same VPS with a few
+clicks, then attaches its connection details to one or more apps without SSH,
+manual Docker commands, or plaintext credential handling.
 
-MVP scope:
+- [x] Add `Datastore` table scoped by organization with kind (`postgres` or `redis`), name, slug, status, engine version, resource limits, storage size hint, public port, encrypted credentials, and timestamps. (`packages/db/prisma/schema.prisma`, migration `20260813082152_add_datastores` — purely additive)
+- [x] Add `DatastoreBinding` table tracking which apps use a datastore and which env var keys were injected.
+- [x] Add shared Docker naming helpers for datastore containers and volumes. (`datastoreContainerName`, `datastoreVolumeName`, `DATASTORE_LABEL` in `packages/types/src/index.ts`; no `sohwe.app` label, which keeps datastores out of the worker's per-app log/stats/crash subsystems)
+- [x] Add queue job type for datastore provision/delete/rotate-password operations. (`DATASTORE_QUEUE` + job constants in `packages/queue/src/index.ts`)
+- [x] Worker creates a Docker named volume per datastore and starts official `postgres` or `redis` images with Sohwe labels. (`apps/worker/src/datastore-spec.ts` builds the exact container spec, pure and unit-tested; `apps/worker/src/datastores.ts` runs the jobs, pulls images via dockerode, and readiness-polls with `pg_isready` / authenticated `redis-cli ping`)
+- [x] Worker attaches datastores to the app's internal Docker network when bound, so apps use private DNS/container names instead of public ports.
+- [x] API exposes authenticated CRUD routes for datastores and app bindings, scoped by organization. (`apps/api/src/routes/datastores.ts`, admin-and-above throughout)
+- [x] API never returns plaintext datastore passwords except through a deliberate reveal/connection-string endpoint. (`GET /api/datastores/:id/connection`, audited as `datastore.reveal`)
+- [x] Dashboard adds a Datastores area with create/list/detail/delete, connection info, password rotate, and app binding flows. (`apps/dashboard/src/routes/datastores.tsx`, `datastore.$datastoreId.tsx`, `apps/dashboard/src/components/datastores/`)
+- [x] Binding flow can inject `DATABASE_URL`, `REDIS_URL`, or custom env var keys into the selected app's encrypted env vars. (takes effect on the app's next deploy; rotation rewrites the injected URLs)
+- [x] Delete flow requires confirmation and makes clear that deleting the datastore deletes its Docker volume/data.
+- [x] Add basic health/status checks by inspecting the container and, later, running `pg_isready` / `redis-cli ping`. (detail endpoint reports live container state; provisioning readiness already uses `pg_isready` / `redis-cli ping`)
+- [x] Include managed datastore config in portable bundles; defer raw data backup to full-state bundles. (bundle format v2 — config and bindings by app slug, never credentials; restore generates fresh credentials, rewrites bound env keys, and lands datastores in `idle`)
 
-- [ ] Add `Datastore` table scoped by organization with kind (`postgres` or `redis`), name, slug, status, image version, resource limits, storage size hint, encrypted credentials, and timestamps.
-- [ ] Add optional `DatastoreBinding` table to track which apps can use a datastore and which env var keys were injected.
-- [ ] Add shared Docker naming helpers for datastore containers, volumes, and networks.
-- [ ] Add queue job type for datastore provision/delete/rotate-password operations.
-- [ ] Worker creates a Docker named volume per datastore and starts official `postgres` or `redis` images with Sohwe labels.
-- [ ] Worker attaches datastores to the app's internal Docker network when bound, so apps use private DNS/container names instead of public ports.
-- [ ] API exposes authenticated CRUD routes for datastores and app bindings, scoped by organization.
-- [ ] API never returns plaintext datastore passwords except through a deliberate reveal/connection-string endpoint.
-- [ ] Dashboard adds a Datastores area with create/list/detail/delete, connection info, password rotate, and app binding flows.
-- [ ] Binding flow can inject `DATABASE_URL`, `REDIS_URL`, or custom env var keys into the selected app's encrypted env vars.
-- [ ] Delete flow requires confirmation and makes clear that deleting the datastore deletes its Docker volume/data.
-- [ ] Add basic health/status checks by inspecting the container and, later, running `pg_isready` / `redis-cli ping`.
-- [ ] Include managed datastore config in portable bundles; defer raw data backup to full-state bundles.
+Open design questions, resolved:
 
-Open design questions:
+- [x] Public TCP exposure: **opt-in per datastore**, Railway-style. Private Docker networking is the default; a toggle publishes a stable host port (20000-29999) and the connection endpoint returns both an internal and a public URL. The UI warns that public traffic is plain TCP guarded only by the generated password.
+- [x] Backups: **config-only in bundles now**; raw data backup waits for full-state bundles.
+- [x] Redis persistence: **`appendonly yes` by default** — a managed datastore should not lose data on restart.
+- [x] Administration scope: **create/delete/rotate/bind only.** No DB browser, SQL console, dumps, or per-database metrics in this phase.
 
-- [ ] Should the first version expose datastores only to bound apps on private Docker networks, or also offer optional public TCP exposure?
-- [ ] Should backups be part of the first managed-datastore release, or arrive with full-state bundles?
-- [ ] Should Redis default to persistence enabled (`appendonly yes`) or ephemeral cache mode with an explicit persistence toggle?
-- [ ] How much database administration belongs in Sohwe v2: create DB/user only, or browser, SQL console, dumps, restores, and metrics?
+Remaining manual verification:
+
+- [ ] End-to-end on a real host: create a Postgres datastore, bind it to an app, deploy, and confirm the app reaches it over the internal network; enable public access and connect externally; rotate and confirm bound apps pick up the new URL on redeploy.
+
+Evidence: `packages/db/prisma/schema.prisma`,
+`packages/db/prisma/migrations/20260813082152_add_datastores/`,
+`packages/types/src/index.ts`, `packages/queue/src/index.ts`,
+`apps/worker/src/datastore-spec.ts`, `apps/worker/src/datastores.ts`,
+`apps/api/src/routes/datastores.ts`, `apps/api/src/audit.ts`,
+`packages/bundler/src/index.ts`, `packages/backups/src/export.ts`,
+`apps/api/src/routes/backups.ts`, `apps/dashboard/src/routes/datastores.tsx`,
+`apps/dashboard/src/routes/datastore.$datastoreId.tsx`,
+`apps/dashboard/src/components/datastores/`,
+`apps/worker/src/datastore-spec.test.ts`, `packages/bundler/src/index.test.ts`,
+`apps/api/src/routes.test.ts`.
 
 ## Release Sequence
 
@@ -390,14 +406,17 @@ that tag contains; the release gate itself is under *Cutting v0.6.0* at the end.
 - [x] Keep secret values out of audit entries.
 - [ ] Optional: instance host filesystem browser with a path allowlist and per-read auditing.
 
-### Later: v0.8.0 / v2 Candidate - Managed Postgres And Redis
+### Next: v0.8.0 - Managed Postgres And Redis
 
-- [ ] One-click Postgres create/delete.
-- [ ] One-click Redis create/delete.
-- [ ] Private app-to-datastore networking.
-- [ ] Encrypted generated credentials.
-- [ ] App binding that injects connection strings into encrypted env vars.
-- [ ] Basic datastore health and status display.
+- [x] One-click Postgres create/delete.
+- [x] One-click Redis create/delete.
+- [x] Private app-to-datastore networking.
+- [x] Encrypted generated credentials.
+- [x] App binding that injects connection strings into encrypted env vars.
+- [x] Basic datastore health and status display.
+- [x] Opt-in public host port per datastore (Railway-style), off by default.
+- [x] Datastore config in portable bundles (format v2).
+- [ ] Manual end-to-end verification on a real host. (see Phase 7 above)
 
 ## Cutting v0.6.0
 

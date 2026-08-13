@@ -5,7 +5,14 @@ import {
   appDockerVolumeName,
   appInternalNetworkName,
   AuditLogQuerySchema,
+  buildDatastoreConnectionUrl,
   CreateApplicationSchema,
+  CreateDatastoreBindingSchema,
+  CreateDatastoreSchema,
+  datastoreContainerName,
+  datastoreDefaultEnvKey,
+  datastoreServicePort,
+  datastoreVolumeName,
   CreateInvitationSchema,
   EnvKeySchema,
   EnvQuerySchema,
@@ -386,5 +393,103 @@ describe("AuditLogQuerySchema", () => {
 
   it("requires the cursor to be an id, not arbitrary text", () => {
     assert.equal(AuditLogQuerySchema.safeParse({ cursor: "not-a-uuid" }).success, false);
+  });
+});
+
+describe("datastore naming helpers", () => {
+  it("derives the data volume name from the datastore id", () => {
+    assert.equal(datastoreVolumeName("abc-123"), "sohwe_datastore_abc-123_data");
+  });
+
+  it("derives the container (DNS) name from the slug", () => {
+    assert.equal(datastoreContainerName("main-db"), "sohwe-ds-main-db");
+  });
+
+  it("sanitizes and caps the container name at Docker's 63-char limit", () => {
+    assert.equal(datastoreContainerName("has_underscore"), "sohwe-ds-has-underscore");
+    const long = datastoreContainerName("x".repeat(100));
+    assert.equal(long.length, 63);
+  });
+
+  it("maps kinds to their service ports and default env keys", () => {
+    assert.equal(datastoreServicePort("postgres"), 5432);
+    assert.equal(datastoreServicePort("redis"), 6379);
+    assert.equal(datastoreDefaultEnvKey("postgres"), "DATABASE_URL");
+    assert.equal(datastoreDefaultEnvKey("redis"), "REDIS_URL");
+  });
+});
+
+describe("buildDatastoreConnectionUrl", () => {
+  it("builds a postgres URL with user, password, host, port, and database", () => {
+    assert.equal(
+      buildDatastoreConnectionUrl(
+        "postgres",
+        { username: "sohwe", password: "p_w-1", database: "main_db" },
+        "sohwe-ds-main-db",
+        5432
+      ),
+      "postgresql://sohwe:p_w-1@sohwe-ds-main-db:5432/main_db"
+    );
+  });
+
+  it("builds a redis URL with only the password", () => {
+    assert.equal(
+      buildDatastoreConnectionUrl("redis", { password: "p" }, "sohwe-ds-cache", 6379),
+      "redis://:p@sohwe-ds-cache:6379/0"
+    );
+  });
+});
+
+describe("CreateDatastoreSchema", () => {
+  const valid = { kind: "postgres", name: "Main DB", slug: "main-db" };
+
+  it("accepts a minimal create and leaves engineVersion to the server", () => {
+    const parsed = CreateDatastoreSchema.parse(valid);
+    assert.equal(parsed.kind, "postgres");
+    assert.equal(parsed.engineVersion, undefined);
+  });
+
+  it("rejects an unknown kind", () => {
+    assert.equal(
+      CreateDatastoreSchema.safeParse({ ...valid, kind: "mysql" }).success,
+      false
+    );
+  });
+
+  it("rejects an invalid slug", () => {
+    assert.equal(
+      CreateDatastoreSchema.safeParse({ ...valid, slug: "Has Spaces" }).success,
+      false
+    );
+  });
+
+  it("bounds the resource limits", () => {
+    assert.equal(
+      CreateDatastoreSchema.safeParse({ ...valid, memoryLimitMb: 4 }).success,
+      false
+    );
+    assert.equal(
+      CreateDatastoreSchema.safeParse({ ...valid, cpuLimit: 100 }).success,
+      false
+    );
+  });
+});
+
+describe("CreateDatastoreBindingSchema", () => {
+  const appId = "6b1f8f0a-2c3d-4e5f-8a9b-0c1d2e3f4a5b";
+
+  it("accepts an app id with the env key defaulted", () => {
+    const parsed = CreateDatastoreBindingSchema.parse({ applicationId: appId });
+    assert.equal(parsed.envKey, undefined);
+  });
+
+  it("rejects a malformed env key", () => {
+    assert.equal(
+      CreateDatastoreBindingSchema.safeParse({
+        applicationId: appId,
+        envKey: "1BAD-KEY"
+      }).success,
+      false
+    );
   });
 });

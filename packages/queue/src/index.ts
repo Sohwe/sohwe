@@ -24,6 +24,22 @@ export type BackupTickJobData = Record<string, never>;
 export type BackupExportJobData = { scheduleId: string };
 export type BackupJobData = BackupTickJobData | BackupExportJobData;
 
+// --- Datastores (Phase 7): provision / delete / rotate ----------------------
+
+export const DATASTORE_QUEUE = "datastore";
+
+export const DATASTORE_PROVISION_JOB = "datastore-provision";
+export const DATASTORE_DELETE_JOB = "datastore-delete";
+export const DATASTORE_ROTATE_JOB = "datastore-rotate";
+
+export type DatastoreProvisionJobData = { datastoreId: string };
+export type DatastoreDeleteJobData = { datastoreId: string };
+export type DatastoreRotateJobData = { datastoreId: string };
+export type DatastoreJobData =
+  | DatastoreProvisionJobData
+  | DatastoreDeleteJobData
+  | DatastoreRotateJobData;
+
 export function logChannelName(deploymentId: string): string {
   return `logs:deployment:${deploymentId}`;
 }
@@ -59,6 +75,13 @@ export function createQueue(): Queue<DeployJobData> {
 
 export function createBackupQueue(): Queue<BackupJobData> {
   return new Queue<BackupJobData>(BACKUP_QUEUE, {
+    connection: getConnectionOptionsForBull(),
+    defaultJobOptions: { removeOnComplete: 100, removeOnFail: 100 }
+  });
+}
+
+export function createDatastoreQueue(): Queue<DatastoreJobData> {
+  return new Queue<DatastoreJobData>(DATASTORE_QUEUE, {
     connection: getConnectionOptionsForBull(),
     defaultJobOptions: { removeOnComplete: 100, removeOnFail: 100 }
   });

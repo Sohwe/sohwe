@@ -160,11 +160,21 @@ export type RestorePreflightApp = {
   envKeyCount: number;
 };
 
+export type RestorePreflightDatastore = {
+  name: string;
+  slug: string;
+  kind: string;
+  engineVersion: string;
+  collides: boolean;
+  bindingCount: number;
+};
+
 export type RestorePreflight = {
   sourceOrgName: string;
   createdAt: string;
   includesSecrets: boolean;
   apps: RestorePreflightApp[];
+  datastores: RestorePreflightDatastore[];
 };
 
 export type RestoreResult = {
@@ -172,6 +182,12 @@ export type RestoreResult = {
   overwritten: number;
   skipped: number;
   renamed: number;
+  datastoresCreated: number;
+  datastoresOverwritten: number;
+  datastoresSkipped: number;
+  datastoresRenamed: number;
+  bindingsRestored: number;
+  bindingsDropped: number;
 };
 
 /** Connection state of this instance's GitHub App. Never carries secrets. */
@@ -314,4 +330,47 @@ export type AuditLogEntry = {
 export type AuditLogPage = {
   items: AuditLogEntry[];
   nextCursor: string | null;
+};
+
+// --- Phase 7: Managed datastores --------------------------------------------
+
+export type Datastore = {
+  id: string;
+  kind: "postgres" | "redis";
+  name: string;
+  slug: string;
+  engineVersion: string;
+  status: string;
+  memoryLimitMb: number | null;
+  cpuLimit: number | null;
+  /** Host port the service is published on; null means private-only. */
+  publicPort: number | null;
+  errorMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type DatastoreBinding = {
+  id: string;
+  applicationId: string;
+  appName: string;
+  appSlug: string;
+  envKeys: string[];
+  createdAt: string;
+};
+
+export type DatastoreDetail = Datastore & {
+  containerState: string;
+  bindings: DatastoreBinding[];
+};
+
+/** Response of the deliberate, audited connection-info reveal. */
+export type DatastoreConnection = {
+  host: string;
+  port: number;
+  username: string | null;
+  database: string | null;
+  password: string;
+  url: string;
+  publicUrl: string | null;
 };

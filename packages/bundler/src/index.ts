@@ -10,7 +10,14 @@ import {
 import { z } from "zod";
 
 export const BUNDLE_FORMAT = "sohwe-backup" as const;
-export const BUNDLE_VERSION = 1 as const;
+/**
+ * Bundle format history:
+ * - v1: apps (+ volumes, alert destinations, optional encrypted env vars)
+ * - v2: adds a required top-level `datastores` array (managed datastore
+ *   config — never credentials or data). `buildBundle` always emits the
+ *   current version; `parseBundle` accepts every version listed here.
+ */
+export const BUNDLE_VERSION = 2 as const;
 
 // --- Input shapes (plaintext, supplied by the API) -------------------------
 
@@ -45,6 +52,24 @@ export type BundleAppInput = {
   envVars: Record<string, string>;
 };
 
+export type BundleDatastoreBindingInput = {
+  /** Bound app referenced by slug — ids differ across instances. */
+  appSlug: string;
+  envKeys: string[];
+};
+
+export type BundleDatastoreInput = {
+  kind: string;
+  name: string;
+  slug: string;
+  engineVersion: string;
+  memoryLimitMb: number | null;
+  cpuLimit: number | null;
+  /** Host-specific; nulled on restore when the port is taken. */
+  publicPort: number | null;
+  bindings: BundleDatastoreBindingInput[];
+};
+
 export type BuildBundleOptions = {
   passphrase: string;
   includeSecrets: boolean;
@@ -65,6 +90,23 @@ const AlertSchema = z.object({
   name: z.string(),
   url: z.string(),
   enabled: z.boolean()
+});
+
+const DatastoreBindingEntrySchema = z.object({
+  appSlug: z.string(),
+  envKeys: z.array(z.string())
+});
+
+// Config only — no credentials, no data. Restore generates fresh credentials.
+const DatastoreEntrySchema = z.object({
+  kind: z.string(),
+  name: z.string(),
+  slug: z.string(),
+  engineVersion: z.string(),
+  memoryLimitMb: z.number().nullable(),
+  cpuLimit: z.number().nullable(),
+  publicPort: z.number().nullable(),
+  bindings: z.array(DatastoreBindingEntrySchema)
 });
 
 const AppEntrySchema = z.object({
@@ -94,19 +136,45 @@ const KdfSchema = z.object({
   p: z.number()
 });
 
-export const BundleManifestSchema = z.object({
+const ManifestBase = {
   format: z.literal(BUNDLE_FORMAT),
-  version: z.literal(BUNDLE_VERSION),
   createdAt: z.string(),
   source: z.object({ orgName: z.string(), sohweVersion: z.string() }),
   kdf: KdfSchema,
   includesSecrets: z.boolean(),
   apps: z.array(AppEntrySchema),
   signature: z.string()
+};
+
+/** v1 exactly as shipped in Phase 4.5 — no `datastores` key existed. */
+export const BundleManifestV1Schema = z.object({
+  ...ManifestBase,
+  version: z.literal(1)
 });
 
-export type BundleManifest = z.infer<typeof BundleManifestSchema>;
+/**
+ * v2 requires `datastores` (possibly empty). Required, not optional: zod
+ * strips unknown keys before the signature is checked over the canonicalized
+ * parse result, so a field the schema does not keep would silently change
+ * what gets signed versus what gets verified.
+ */
+export const BundleManifestV2Schema = z.object({
+  ...ManifestBase,
+  version: z.literal(2),
+  datastores: z.array(DatastoreEntrySchema)
+});
+
+export const BundleManifestSchema = z.discriminatedUnion("version", [
+  BundleManifestV1Schema,
+  BundleManifestV2Schema
+]);
+
+/** The manifest `buildBundle` emits (always the current version). */
+export type BundleManifest = z.infer<typeof BundleManifestV2Schema>;
+/** Any version `parseBundle` accepts. */
+export type AnyBundleManifest = z.infer<typeof BundleManifestSchema>;
 export type BundleAppEntry = z.infer<typeof AppEntrySchema>;
+export type BundleDatastoreEntry = z.infer<typeof DatastoreEntrySchema>;
 
 /** App config with env vars decrypted, returned by `parseBundle`. */
 export type ParsedBundleApp = Omit<BundleAppEntry, "env"> & {
@@ -114,10 +182,13 @@ export type ParsedBundleApp = Omit<BundleAppEntry, "env"> & {
 };
 
 export type ParsedBundle = {
+  version: number;
   createdAt: string;
   source: { orgName: string; sohweVersion: string };
   includesSecrets: boolean;
   apps: ParsedBundleApp[];
+  /** Empty for v1 bundles, which predate managed datastores. */
+  datastores: BundleDatastoreEntry[];
 };
 
 /**
@@ -145,7 +216,8 @@ export function canonicalize(value: unknown): string {
  */
 export function buildBundle(
   apps: BundleAppInput[],
-  opts: BuildBundleOptions
+  opts: BuildBundleOptions,
+  datastores: BundleDatastoreInput[] = []
 ): BundleManifest {
   const salt = randomBundleSalt();
   const key = deriveBundleKey(opts.passphrase, salt);
@@ -199,7 +271,20 @@ export function buildBundle(
       p: SCRYPT_PARAMS.p
     },
     includesSecrets: opts.includeSecrets,
-    apps: appEntries
+    apps: appEntries,
+    datastores: datastores.map((d) => ({
+      kind: d.kind,
+      name: d.name,
+      slug: d.slug,
+      engineVersion: d.engineVersion,
+      memoryLimitMb: d.memoryLimitMb,
+      cpuLimit: d.cpuLimit,
+      publicPort: d.publicPort,
+      bindings: d.bindings.map((b) => ({
+        appSlug: b.appSlug,
+        envKeys: [...b.envKeys]
+      }))
+    }))
   };
 
   const signature = hmacSign(key, canonicalize(payload)).toString("base64");
@@ -243,9 +328,11 @@ export function parseBundle(raw: unknown, passphrase: string): ParsedBundle {
   });
 
   return {
+    version: manifest.version,
     createdAt: manifest.createdAt,
     source: manifest.source,
     includesSecrets: manifest.includesSecrets,
-    apps
+    apps,
+    datastores: manifest.version === 2 ? manifest.datastores : []
   };
 }

@@ -216,21 +216,145 @@ const GOLDEN_BUNDLE = {
 describe("golden bundle (format compatibility)", () => {
   it("matches the current schema and constants", () => {
     assert.equal(GOLDEN_BUNDLE.format, BUNDLE_FORMAT);
-    assert.equal(GOLDEN_BUNDLE.version, BUNDLE_VERSION);
+    // Frozen at v1 forever; BUNDLE_VERSION has moved on (see the v2 golden).
+    assert.equal(GOLDEN_BUNDLE.version, 1);
     assert.equal(BundleManifestSchema.safeParse(GOLDEN_BUNDLE).success, true);
   });
 
   it("still parses and decrypts with the original passphrase", () => {
     const parsed = parseBundle(GOLDEN_BUNDLE, GOLDEN_PASSPHRASE);
+    assert.equal(parsed.version, 1);
     assert.equal(parsed.apps.length, 1);
     const app = parsed.apps[0]!;
     assert.equal(app.slug, "web");
     assert.deepEqual(app.envVars, { API_KEY: "sk-secret-123", DEBUG: "false" });
+    // v1 predates managed datastores; the parsed shape reports none.
+    assert.deepEqual(parsed.datastores, []);
   });
 
   it("still rejects the wrong passphrase for the frozen bundle", () => {
     assert.throws(
       () => parseBundle(GOLDEN_BUNDLE, "not the passphrase"),
+      /Invalid passphrase or corrupted bundle/
+    );
+  });
+});
+
+describe("v2 datastores round-trip", () => {
+  const DS = {
+    kind: "postgres",
+    name: "Main DB",
+    slug: "main-db",
+    engineVersion: "16",
+    memoryLimitMb: 1024,
+    cpuLimit: 2,
+    publicPort: 24001,
+    bindings: [{ appSlug: "web", envKeys: ["DATABASE_URL"] }]
+  };
+
+  it("emits the current version with a datastores array, even when empty", () => {
+    const bundle = buildBundle([sampleApp()], OPTS);
+    assert.equal(bundle.version, BUNDLE_VERSION);
+    assert.deepEqual(bundle.datastores, []);
+  });
+
+  it("preserves datastore config and bindings through build/parse", () => {
+    const bundle = buildBundle([sampleApp()], OPTS, [DS]);
+    const parsed = parseBundle(bundle, OPTS.passphrase);
+    assert.equal(parsed.version, 2);
+    assert.deepEqual(parsed.datastores, [DS]);
+  });
+
+  it("signs the datastores array (tampering breaks the signature)", () => {
+    const bundle = buildBundle([sampleApp()], OPTS, [DS]);
+    const tampered = structuredClone(bundle);
+    tampered.datastores[0]!.publicPort = 20999;
+    assert.throws(
+      () => parseBundle(tampered, OPTS.passphrase),
+      /Invalid passphrase or corrupted bundle/
+    );
+  });
+
+  it("carries no credential material for datastores", () => {
+    const bundle = buildBundle([sampleApp()], OPTS, [DS]);
+    const keys = Object.keys(bundle.datastores[0]!);
+    assert.ok(!keys.some((k) => /password|credential|secret/i.test(k)));
+  });
+});
+
+// The v2 golden: produced by a real buildBundle() with a datastore entry and
+// frozen here, exactly like the v1 golden above. Same rules apply — if this
+// breaks, bump BUNDLE_VERSION again and add a migration path.
+const GOLDEN_BUNDLE_V2 = {
+  format: "sohwe-backup",
+  version: 2,
+  createdAt: "2026-08-13T00:00:00.000Z",
+  source: { orgName: "Acme", sohweVersion: "0.8.0" },
+  kdf: { algo: "scrypt", salt: "CZjzrURerkaAMxYDyTeUYg==", N: 16384, r: 8, p: 1 },
+  includesSecrets: true,
+  apps: [
+    {
+      name: "Web",
+      slug: "web",
+      gitRepo: "https://github.com/acme/web",
+      gitBranch: "main",
+      buildMode: "auto",
+      buildCmd: null,
+      startCmd: "node server.js",
+      port: 3000,
+      domain: "web.example.com",
+      memoryLimitMb: 512,
+      cpuLimit: 1.5,
+      volumes: [{ mountPath: "/data", sizeBytes: "1048576" }],
+      alertDestinations: [
+        { type: "discord", name: "ops", url: "https://discord.example/hook", enabled: true }
+      ],
+      env: {
+        keys: ["API_KEY", "DATABASE_URL"],
+        ciphertext:
+          "ARN7XWzHEe4/hdRVCB5755Xhrd4P05NCSSWTQfBcGcZvdEicV8lE18c92ixxbT9DPnoUf5338dOHt4sWUnZMs/ClOOedzcmaguKpb5twcieYS1zsyJlrDHyaWSxrL5iEIOLdXShkXoPIV1A6ZgK1pwJpv3pLPJ9fjqQqpg35m664"
+      }
+    }
+  ],
+  datastores: [
+    {
+      kind: "postgres",
+      name: "Main DB",
+      slug: "main-db",
+      engineVersion: "16",
+      memoryLimitMb: 1024,
+      cpuLimit: 2,
+      publicPort: 24001,
+      bindings: [{ appSlug: "web", envKeys: ["DATABASE_URL"] }]
+    }
+  ],
+  signature: "1U1B/G7PaydN0No+gF5aLh4rIKCrBinM5p0cstzqoB0="
+};
+
+describe("golden bundle v2 (format compatibility)", () => {
+  it("matches the current schema and constants", () => {
+    assert.equal(GOLDEN_BUNDLE_V2.format, BUNDLE_FORMAT);
+    assert.equal(GOLDEN_BUNDLE_V2.version, BUNDLE_VERSION);
+    assert.equal(BundleManifestSchema.safeParse(GOLDEN_BUNDLE_V2).success, true);
+  });
+
+  it("still parses, decrypts, and carries its datastores", () => {
+    const parsed = parseBundle(GOLDEN_BUNDLE_V2, GOLDEN_PASSPHRASE);
+    assert.equal(parsed.version, 2);
+    assert.deepEqual(parsed.apps[0]!.envVars, {
+      API_KEY: "sk-secret-123",
+      DATABASE_URL: "postgresql://sohwe:oldpass@sohwe-ds-main-db:5432/main_db"
+    });
+    assert.equal(parsed.datastores.length, 1);
+    assert.equal(parsed.datastores[0]!.slug, "main-db");
+    assert.deepEqual(parsed.datastores[0]!.bindings, [
+      { appSlug: "web", envKeys: ["DATABASE_URL"] }
+    ]);
+  });
+
+  it("still rejects the wrong passphrase for the frozen v2 bundle", () => {
+    assert.throws(
+      () => parseBundle(GOLDEN_BUNDLE_V2, "not the passphrase"),
       /Invalid passphrase or corrupted bundle/
     );
   });

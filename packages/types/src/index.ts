@@ -400,3 +400,114 @@ export function appDockerVolumeName(
 export function appInternalNetworkName(appId: string): string {
   return `sohwe_app_${appId}_net`;
 }
+// --- Phase 7: Managed datastores --------------------------------------------
+
+export const DATASTORE_KINDS = ["postgres", "redis"] as const;
+export const DatastoreKindSchema = z.enum(DATASTORE_KINDS);
+export type DatastoreKind = z.infer<typeof DatastoreKindSchema>;
+
+/** Engine versions a datastore may run, per kind; index 0 is the default. */
+export const POSTGRES_ENGINE_VERSIONS = ["16", "17"] as const;
+export const REDIS_ENGINE_VERSIONS = ["7"] as const;
+
+export function datastoreEngineVersions(kind: DatastoreKind): readonly string[] {
+  return kind === "postgres" ? POSTGRES_ENGINE_VERSIONS : REDIS_ENGINE_VERSIONS;
+}
+
+/** Default env var key a binding injects, per kind. */
+export function datastoreDefaultEnvKey(kind: DatastoreKind): string {
+  return kind === "postgres" ? "DATABASE_URL" : "REDIS_URL";
+}
+
+/** In-container service port, per kind. */
+export function datastoreServicePort(kind: DatastoreKind): number {
+  return kind === "postgres" ? 5432 : 6379;
+}
+
+export const CreateDatastoreSchema = z.object({
+  kind: DatastoreKindSchema,
+  name: z.string().min(1).max(100),
+  slug: z
+    .string()
+    .min(1)
+    .max(50)
+    .regex(/^[a-z0-9-]+$/),
+  /** Defaults to the kind's first supported version; validated per kind server-side. */
+  engineVersion: z.string().max(8).optional(),
+  memoryLimitMb: z.coerce.number().int().min(16).max(65536).optional(),
+  cpuLimit: z.coerce.number().min(0.1).max(64).optional()
+});
+export type CreateDatastoreInput = z.infer<typeof CreateDatastoreSchema>;
+
+export const CreateDatastoreBindingSchema = z.object({
+  applicationId: z.string().uuid(),
+  /** Defaults to DATABASE_URL (postgres) / REDIS_URL (redis). */
+  envKey: EnvKeySchema.optional()
+});
+export type CreateDatastoreBindingInput = z.infer<
+  typeof CreateDatastoreBindingSchema
+>;
+
+/** Toggle Railway-style public access (a published host port) for a datastore. */
+export const DatastorePublicAccessSchema = z.object({
+  enabled: z.boolean()
+});
+export type DatastorePublicAccessInput = z.infer<
+  typeof DatastorePublicAccessSchema
+>;
+
+/**
+ * Host port range for publicly exposed datastores. Below the Linux ephemeral
+ * range (32768+) so a published port cannot collide with an outgoing socket.
+ */
+export const DATASTORE_PUBLIC_PORT_MIN = 20000;
+export const DATASTORE_PUBLIC_PORT_MAX = 29999;
+
+/** Docker named volume holding a managed datastore's data. */
+export function datastoreVolumeName(datastoreId: string): string {
+  return `sohwe_datastore_${datastoreId}_data`;
+}
+
+/**
+ * Container name for a managed datastore — also its DNS name on the internal
+ * networks of bound apps, i.e. the host in injected connection strings. Docker
+ * caps container names at 63 characters.
+ */
+export function datastoreContainerName(slug: string): string {
+  return `sohwe-ds-${slug}`.replace(/[^a-z0-9-]/g, "-").slice(0, 63);
+}
+
+/**
+ * Label carrying the datastore id on its container and volume. Datastore
+ * containers deliberately do NOT get a `sohwe.app` label: the worker's stats
+ * sampler, crash watcher, and log-tail recovery all key off that label, so its
+ * absence is what keeps datastores out of the per-app subsystems.
+ */
+export const DATASTORE_LABEL = "sohwe.datastore";
+
+/** Decrypted datastore credentials as stored in `credentialsEncrypted`. */
+export type DatastoreCredentials = {
+  username?: string;
+  password: string;
+  database?: string;
+};
+
+/**
+ * Connection URL for a datastore. Passwords are generated base64url, so no
+ * URL-encoding is needed. `host`/`port` decide which URL this is: the
+ * container DNS name + service port for the internal URL bound apps use, or
+ * the instance's base domain + `publicPort` for the public one.
+ */
+export function buildDatastoreConnectionUrl(
+  kind: DatastoreKind,
+  creds: DatastoreCredentials,
+  host: string,
+  port: number
+): string {
+  if (kind === "postgres") {
+    const user = creds.username ?? "sohwe";
+    const db = creds.database ?? "sohwe";
+    return `postgresql://${user}:${creds.password}@${host}:${String(port)}/${db}`;
+  }
+  return `redis://:${creds.password}@${host}:${String(port)}/0`;
+}

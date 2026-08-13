@@ -110,7 +110,24 @@ async function removeDockerForApplication(
   }
   const netName = appInternalNetworkName(appId);
   try {
-    await docker.getNetwork(netName).remove();
+    const network = docker.getNetwork(netName);
+    // A lingering endpoint on a per-app internal network can only be a bound
+    // datastore container (Phase 7) — the app's own containers were removed
+    // above. Docker refuses to remove a network with active endpoints, so
+    // disconnect them first (best-effort; the datastore itself lives on).
+    try {
+      const info = (await network.inspect()) as {
+        Containers?: Record<string, unknown>;
+      };
+      for (const containerId of Object.keys(info.Containers ?? {})) {
+        await network
+          .disconnect({ Container: containerId, Force: true })
+          .catch(() => {});
+      }
+    } catch {
+      // fall through to remove; a 404 is handled below
+    }
+    await network.remove();
   } catch (e) {
     const err = e as { statusCode?: number };
     if (err?.statusCode !== 404) throw e;

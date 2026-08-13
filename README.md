@@ -16,8 +16,9 @@ Shipped through **Phase 5**:
 - **Phase 4.5 (portable bundles)** — signed, passphrase-encrypted config bundles with local and S3-compatible destinations, restore preflight/apply, and scheduled exports with retention.
 - **Phase 5 (git-push deploys)** — per-instance GitHub App created through GitHub's manifest flow, private-repo cloning with short-lived installation tokens, a signed push webhook that deploys the tracked branch, and commit statuses reported back to GitHub.
 - **Phase 6 (multi-user)** — owner/admin/member roles enforced on every route, copy-link invitations, member management, and an org-scoped audit log. On `main` for **v0.7.0**.
+- **Phase 7 (managed datastores)** — one-click Postgres/Redis on the host with encrypted generated credentials, private app bindings that inject `DATABASE_URL`/`REDIS_URL` into encrypted env vars, opt-in public host ports, and password rotation. On `main` for **v0.8.0**.
 
-Next milestone: **Phase 7 (managed datastores)**, a post-v1 candidate. [`ROADMAP.md`](./ROADMAP.md) is the authoritative per-item checklist; see also [`CHANGELOG.md`](./CHANGELOG.md).
+[`ROADMAP.md`](./ROADMAP.md) is the authoritative per-item checklist; see also [`CHANGELOG.md`](./CHANGELOG.md).
 
 ## Install on a server (production)
 
@@ -77,6 +78,25 @@ The organization can never be left without an owner, nobody can change their own
 role or delete their own account, and removing someone signs out every session
 they hold. Every mutating action lands in the **Audit log** — with env var *key
 names* and counts, never values.
+
+### Managed datastores
+
+Open **Datastores** to create a managed Postgres 16/17 or Redis 7 instance on
+the same host — an official image with a persistent volume, generated
+credentials encrypted at rest, and no exposure beyond the apps you bind it to.
+Binding injects the connection URL (`DATABASE_URL` / `REDIS_URL`, or a custom
+key) into the app's encrypted env vars and attaches the datastore to the app's
+private Docker network; the app picks it up on its next deploy. Deleting a
+datastore destroys its volume and data, and says so before doing it.
+
+Need to reach a datastore from your laptop or an app hosted elsewhere? Enable
+**public access** on it: Sohwe publishes the service on a stable high port
+(20000–29999) and the connection panel shows a public URL alongside the
+internal one. This is plain TCP guarded only by the generated password —
+Docker publishes the port past ufw-style host firewalls — so treat it as a
+convenience to switch off when you are done. Password rotation updates every
+bound app's injected URL (redeploy to apply) and invalidates old external
+credentials immediately.
 
 ### Managing the instance
 
@@ -162,7 +182,7 @@ Certificates are only requested for apps on a real public domain — Let's Encry
 | --- | --- |
 | `apps/api` | Fastify HTTP API |
 | `apps/dashboard` | Vite + React control plane UI |
-| `apps/worker` | BullMQ consumer: git clone, build, dockerode, Traefik labels, log/stats streaming, crash watcher, backup scheduler |
+| `apps/worker` | BullMQ consumer: git clone, build, dockerode, Traefik labels, log/stats streaming, crash watcher, backup scheduler, datastore provisioning |
 | `packages/db` | Prisma schema and client |
 | `packages/types` | Shared Zod schemas, types, and Docker naming helpers |
 | `packages/queue` | BullMQ job types, queue config, channel/key helpers (API + worker) |

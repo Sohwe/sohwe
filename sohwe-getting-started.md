@@ -6,7 +6,7 @@ Licensed **AGPL-3.0** (see [`LICENSE`](./LICENSE)).
 
 This document describes how Sohwe is built and why. For what to run, see [`README.md`](./README.md); for what has shipped, see [`ROADMAP.md`](./ROADMAP.md) and [`CHANGELOG.md`](./CHANGELOG.md).
 
-> Phases 0 through 6 are implemented. This guide used to carry a full build-from-scratch tutorial for those phases; that walkthrough was removed once the code became the better reference — recover it from git history if you need it. The only design sketch left below is for Phase 7, which has **not** been built.
+> Phases 0 through 7 are implemented. This guide used to carry a full build-from-scratch tutorial for those phases; that walkthrough was removed once the code became the better reference — recover it from git history if you need it. Completed phases are summarized as built; there are no unbuilt design sketches left.
 
 ## Table of Contents
 
@@ -46,7 +46,7 @@ Sohwe lets you connect a Git repo and get a running, HTTPS-terminated container 
 
 ### Explicitly deferred to v2+
 
-- Databases-as-a-service (one-click Postgres/Redis) — feasible on the same VPS, but deferred until the v1 control-plane scope is stable. Sketched in [Phase 7](#phase-7--managed-datastores).
+- ~~Databases-as-a-service (one-click Postgres/Redis)~~ — shipped as [Phase 7](#phase-7--managed-datastores).
 - Multi-node / cluster scheduling
 - Preview deployments per pull request
 - Log history beyond basic storage
@@ -317,21 +317,21 @@ The dividing line is not read-vs-write, it is **can this surface expose a secret
 
 ## Phase 7 — Managed Datastores
 
-*Post-v1 / v2 candidate. Design sketch.*
+*As built (v0.8.0).*
 
-Goal: click **Create Postgres** or **Create Redis**, get a private service on the host, and bind it to an app without SSH. Builds on Phase 3's per-app internal networks and volumes. A managed datastore is not deployed from Git — it is a Sohwe-owned container using an official image, a named volume, generated credentials, and Sohwe labels.
+Click **Create Postgres** or **Create Redis**, get a private service on the host, and bind it to apps without SSH. A managed datastore is not deployed from Git — it is a Sohwe-owned container using the official `postgres:16|17` / `redis:7` image, a named volume (`sohwe_datastore_<id>_data`), generated credentials encrypted with the instance key, and Sohwe labels. Deliberately **no** `sohwe.app` label: the worker's log-tail, stats, and crash subsystems key off that label, so datastores stay invisible to them.
 
-**Flow.** API creates a `Datastore` row (`status: provisioning`), generates and encrypts credentials, enqueues a job. Worker creates `sohwe_datastore_<id>_data`, starts `postgres:<version>` or `redis:<version>` with no public ports, and attaches it to the bound app's internal network. Binding injects `DATABASE_URL` / `REDIS_URL` / a custom key into the app's encrypted env vars; the app picks it up on next deploy.
+**Flow.** The API creates a `Datastore` row (`status: provisioning`), generates and encrypts credentials (`{ username, password, database }` / `{ password }`, base64url passwords so URLs need no encoding), and enqueues a job on the `datastore` queue. The worker (`apps/worker/src/datastores.ts`) pulls the image, creates the labeled volume, builds the container spec in the pure, unit-tested `datastore-spec.ts`, starts the container, connects it to every bound app's internal network, drops the default-bridge endpoint when private, and readiness-polls (`pg_isready` / `redis-cli ping` with `REDISCLI_AUTH` — never a password in argv) before marking the row `running`. Redis runs `--appendonly yes`.
 
-**Data model.** `Datastore` (org-scoped: kind, name, slug, status, image, `credentialsEncrypted`, storage/CPU/memory hints) and `DatastoreBinding` (datastore ↔ application ↔ `envKey`, unique together).
+**Bindings.** `POST /api/datastores/:id/bindings` injects the connection URL into the app's encrypted env vars under `DATABASE_URL` / `REDIS_URL` (or a custom key), records the injected keys on the `DatastoreBinding` row, and attaches the container to `sohwe_app_<appId>_net` (creating it if the app never deployed). Apps resolve the datastore by container DNS name (`sohwe-ds-<slug>`). Changes apply on the app's next deploy. Unbind removes exactly the recorded keys. App deletion disconnects bound datastores before removing the per-app network.
 
-**API surface.** CRUD under `/api/datastores`, plus `/rotate-password`, `/bindings`, and `/connection-string`. The connection-string endpoint behaves like env-var reveal: authenticated, intentional, audited, never in list responses.
+**Password rotation.** Postgres: `ALTER USER` via `docker exec` over the container's local socket (the official image trusts local connections; the new password rides in the exec's Env, invisible to `docker inspect`). Redis: container recreation with the new `requirepass` (data survives on the volume). Either way the worker then re-encrypts the row and rewrites every bound app's injected URL, so a redeploy picks up the new credentials.
 
-**Worker.** Create/label/start/stop/delete containers and volumes, apply limits, attach private networks, health-check with `pg_isready` / `redis-cli ping`, rotate credentials.
+**Public access.** Railway-style and off by default. A per-datastore toggle assigns a stable host port (20000–29999, instance-unique) and recreates the container with that port published; `GET /connection` then returns a `publicUrl` on `SOHWE_BASE_DOMAIN` next to the internal URL. Plain TCP, password-only protection — the UI says so.
 
-**Constraints.** No public TCP exposure by default. Generated passwords encrypted at rest and absent from logs and health errors. Deleting a datastore destroys its volume — require explicit confirmation. Datastore *config* belongs in config bundles; raw contents wait for full-state backup. This feature turns Sohwe from a deploy control plane into a data host, so backup/restore docs must be solid before release.
+**Bundles.** Datastore config (kind, name, slug, engine version, limits, public port, bindings by app slug) ships in portable bundles as of bundle format **v2** — never credentials or data. Restore generates fresh credentials, rewrites bound apps' injected keys to match, and lands datastores in `idle`; `overwrite` updates only name and limits, never the engine version of a live instance. v1 bundles still parse.
 
-**Open questions.** Private-only or optional public TCP? Backups in the first release or with full-state bundles? Redis persistent (`appendonly yes`) or ephemeral by default? How much DB administration belongs in v2?
+**Constraints kept.** No public exposure without the explicit toggle. Passwords encrypted at rest, absent from logs, error messages, audit metadata, and list/detail responses; `GET /api/datastores/:id/connection` is the single deliberate, audited reveal. Deleting a datastore destroys its volume behind an explicit confirmation. The whole surface is admin-and-above.
 
 ---
 

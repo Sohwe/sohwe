@@ -1,4 +1,8 @@
-import { buildBundle, type BundleAppInput } from "@sohwe/bundler";
+import {
+  buildBundle,
+  type BundleAppInput,
+  type BundleDatastoreInput
+} from "@sohwe/bundler";
 import { decryptJson, encryptJson } from "@sohwe/crypto";
 import { prisma } from "@sohwe/db";
 import {
@@ -74,6 +78,39 @@ export async function gatherBundleApps(
 }
 
 /**
+ * Read every managed datastore in an org and shape it for the bundler —
+ * config only, never credentials. Bindings reference apps by slug because ids
+ * differ across instances. Shared by manual and scheduled export.
+ */
+export async function gatherBundleDatastores(
+  organizationId: string
+): Promise<BundleDatastoreInput[]> {
+  const rows = await prisma.datastore.findMany({
+    where: { organizationId },
+    include: {
+      bindings: {
+        include: { application: { select: { slug: true } } },
+        orderBy: { createdAt: "asc" }
+      }
+    },
+    orderBy: { createdAt: "asc" }
+  });
+  return rows.map((d) => ({
+    kind: d.kind,
+    name: d.name,
+    slug: d.slug,
+    engineVersion: d.engineVersion,
+    memoryLimitMb: d.memoryLimitMb,
+    cpuLimit: d.cpuLimit == null ? null : Number(d.cpuLimit),
+    publicPort: d.publicPort,
+    bindings: d.bindings.map((b) => ({
+      appSlug: b.application.slug,
+      envKeys: b.envKeys
+    }))
+  }));
+}
+
+/**
  * Prune a schedule's stored bundles down to its newest `retentionCount`,
  * removing both the destination file and the history row. Failures to delete a
  * remote file are tolerated (the row is still removed) so retention converges.
@@ -136,15 +173,20 @@ export async function runScheduledExport(
     schedule.organizationId,
     schedule.includeSecrets
   );
-  const manifest = buildBundle(bundleApps, {
-    passphrase,
-    includeSecrets: schedule.includeSecrets,
-    source: {
-      orgName: schedule.organization.name,
-      sohweVersion
+  const bundleDatastores = await gatherBundleDatastores(schedule.organizationId);
+  const manifest = buildBundle(
+    bundleApps,
+    {
+      passphrase,
+      includeSecrets: schedule.includeSecrets,
+      source: {
+        orgName: schedule.organization.name,
+        sohweVersion
+      },
+      createdAtIso
     },
-    createdAtIso
-  });
+    bundleDatastores
+  );
   const json = JSON.stringify(manifest);
   const sizeBytes = Buffer.byteLength(json, "utf8");
 

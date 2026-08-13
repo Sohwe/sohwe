@@ -21,6 +21,7 @@ model Organization {
   webhookDeliveries  WebhookDelivery[]
   invitations        Invitation[]
   auditLogs          AuditLog[]
+  datastores         Datastore[]
 
   @@map("organizations")
 }
@@ -81,6 +82,7 @@ model Application {
   deployments       Deployment[]
   volumes           Volume[]
   alertDestinations AlertDestination[]
+  datastoreBindings DatastoreBinding[]
 
   @@unique([organizationId, slug])
   @@index([repoFullName])
@@ -323,4 +325,58 @@ model AuditLog {
   @@index([organizationId, action, createdAt])
   @@index([organizationId, targetType, targetId, createdAt])
   @@map("audit_logs")
+}
+
+// --- Phase 7: Managed datastores --------------------------------------------
+
+// A Sohwe-owned Postgres or Redis container: official image, named volume,
+// generated credentials, Sohwe labels. Not deployed from Git. Private by
+// default — the container joins the internal networks of bound apps and is
+// addressed by container DNS name. publicPort, when set, publishes the service
+// port on the host (the Railway-style opt-in escape hatch for external access).
+//
+// credentialsEncrypted holds { username, password, database } for postgres and
+// { password } for redis, encrypted with the instance key. The API generates
+// credentials on every row-creation path (create and restore), so the worker
+// only ever decrypts.
+model Datastore {
+  id                   String       @id @default(uuid())
+  organizationId       String       @map("organization_id")
+  organization         Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  kind                 String       // postgres | redis
+  name                 String
+  slug                 String
+  engineVersion        String       @map("engine_version") // postgres: 16 | 17; redis: 7
+  status               String       @default("provisioning") // provisioning | running | deleting | error | idle
+  memoryLimitMb        Int?         @map("memory_limit_mb")
+  cpuLimit             Float?       @map("cpu_limit")
+  storageSizeHintBytes BigInt?      @map("storage_size_hint_bytes")
+  /// Host port the service is published on; null means private-only.
+  publicPort           Int?         @unique @map("public_port")
+  credentialsEncrypted Bytes        @map("credentials_encrypted")
+  errorMessage         String?      @map("error_message") @db.Text
+  createdAt            DateTime     @default(now()) @map("created_at")
+  updatedAt            DateTime     @updatedAt @map("updated_at")
+  bindings             DatastoreBinding[]
+
+  @@unique([organizationId, slug])
+  @@index([organizationId])
+  @@map("datastores")
+}
+
+// Which apps may use a datastore and which env var keys were injected into
+// their encrypted env. envKeys records exactly what bind wrote, so unbind and
+// password rotation know which keys to remove or rewrite.
+model DatastoreBinding {
+  id            String      @id @default(uuid())
+  datastoreId   String      @map("datastore_id")
+  datastore     Datastore   @relation(fields: [datastoreId], references: [id], onDelete: Cascade)
+  applicationId String      @map("application_id")
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  envKeys       String[]    @map("env_keys")
+  createdAt     DateTime    @default(now()) @map("created_at")
+
+  @@unique([datastoreId, applicationId])
+  @@index([applicationId])
+  @@map("datastore_bindings")
 }

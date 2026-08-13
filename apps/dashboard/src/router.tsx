@@ -16,6 +16,8 @@ import { AppMetricsPage } from "@/routes/app.$appId.metrics";
 import { AppFilesPage } from "@/routes/app.$appId.files";
 import { AppSettingsPage } from "@/routes/app.$appId.settings";
 import { BackupsPage } from "@/routes/backups";
+import { DatastoresPage } from "@/routes/datastores";
+import { DatastoreDetailPage } from "@/routes/datastore.$datastoreId";
 import { GitPage } from "@/routes/git";
 import { JoinPage } from "@/routes/join";
 import { MembersPage } from "@/routes/members";
@@ -111,6 +113,18 @@ const backupsRoute = createRoute({
   getParentRoute: () => authedLayoutRoute,
   path: "backups",
   component: BackupsPage
+});
+
+const datastoresRoute = createRoute({
+  getParentRoute: () => authedLayoutRoute,
+  path: "datastores",
+  component: DatastoresPage
+});
+
+const datastoreDetailRoute = createRoute({
+  getParentRoute: () => authedLayoutRoute,
+  path: "datastores/$datastoreId",
+  component: DatastoreDetailPage
 });
 
 const gitRoute = createRoute({
@@ -231,6 +245,8 @@ const routeTree = rootRoute.addChildren([
       ])
     ]),
     backupsRoute,
+    datastoresRoute,
+    datastoreDetailRoute,
     gitRoute,
     membersRoute,
     auditRoute

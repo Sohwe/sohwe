@@ -20,6 +20,7 @@ export type AuditTargetType =
   | "invitation"
   | "backup"
   | "github"
+  | "datastore"
   | "organization";
 
 /**
@@ -46,6 +47,14 @@ export type AuditAction =
   | "backup.schedule.create"
   | "backup.schedule.update"
   | "backup.schedule.delete"
+  | "datastore.create"
+  | "datastore.update"
+  | "datastore.delete"
+  | "datastore.provision"
+  | "datastore.rotate_password"
+  | "datastore.reveal"
+  | "datastore.bind"
+  | "datastore.unbind"
   | "github.connect"
   | "github.disconnect"
   | "member.invite"
@@ -74,6 +83,14 @@ export const AUDIT_ACTIONS: readonly AuditAction[] = [
   "backup.schedule.create",
   "backup.schedule.update",
   "backup.schedule.delete",
+  "datastore.create",
+  "datastore.update",
+  "datastore.delete",
+  "datastore.provision",
+  "datastore.rotate_password",
+  "datastore.reveal",
+  "datastore.bind",
+  "datastore.unbind",
   "github.connect",
   "github.disconnect",
   "member.invite",

@@ -2,6 +2,15 @@ import { after, before, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import type { FastifyInstance } from "fastify";
+import { buildBundle, canonicalize } from "@sohwe/bundler";
+import {
+  decryptJson,
+  deriveBundleKey,
+  encryptJson,
+  hmacSign,
+  randomBundleSalt,
+  SCRYPT_PARAMS
+} from "@sohwe/crypto";
 
 /**
  * HTTP-level tests for the API, driven through `app.inject()` so no port is
@@ -46,6 +55,8 @@ let loadApiConfig: typeof import("./env").loadApiConfig;
 
 /** Tables truncated between tests, children before parents. */
 const TABLES = [
+  "datastore_bindings",
+  "datastores",
   "audit_logs",
   "invitations",
   "webhook_deliveries",
@@ -792,6 +803,8 @@ describe("API routes", { skip }, () => {
         ["GET", `/api/applications/${created.id}/fs/list`, undefined],
         // Alert destination URLs are bearer credentials for a chat channel.
         ["GET", `/api/applications/${created.id}/alert-destinations`, undefined],
+        // Datastores carry generated database credentials.
+        ["GET", "/api/datastores", undefined],
         // Bundles carry re-encrypted env vars.
         ["GET", "/api/backups", undefined],
         ["GET", "/api/backups/destinations", undefined],
@@ -1390,6 +1403,407 @@ describe("API routes", { skip }, () => {
       assert.equal(items.length, 1, "removing a user must not erase their trail");
       assert.equal(items[0]?.actor.email, "member@example.test");
       assert.equal(items[0]?.actor.deleted, true);
+    });
+  });
+
+  describe("datastores", () => {
+    async function createDatastore(
+      cookie: string,
+      overrides: Record<string, unknown> = {}
+    ): Promise<{ id: string; slug: string; status: string }> {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/datastores",
+        headers: { cookie },
+        payload: { kind: "postgres", name: "Main DB", slug: "main-db", ...overrides }
+      });
+      assert.equal(res.statusCode, 201, res.body);
+      return res.json() as { id: string; slug: string; status: string };
+    }
+
+    function readRowCreds(enc: Uint8Array): Record<string, string> {
+      return decryptJson(Buffer.isBuffer(enc) ? enc : Buffer.from(enc));
+    }
+
+    it("creates a datastore with generated encrypted credentials and no secret in the response", async () => {
+      const cookie = await signIn();
+      const created = await createDatastore(cookie);
+      assert.equal(created.status, "provisioning");
+
+      const row = await prisma.datastore.findUniqueOrThrow({ where: { id: created.id } });
+      const creds = readRowCreds(row.credentialsEncrypted);
+      assert.equal(creds.username, "sohwe");
+      assert.equal(creds.database, "main_db");
+      assert.ok((creds.password ?? "").length >= 24, "expected a generated password");
+
+      // The detail response never carries credential material.
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/datastores/${created.id}`,
+        headers: { cookie }
+      });
+      assert.ok(!res.body.includes("credentialsEncrypted"));
+      assert.ok(!res.body.includes(creds.password!));
+
+      const audit = await prisma.auditLog.findFirst({ where: { action: "datastore.create" } });
+      assert.ok(audit, "expected a datastore.create audit row");
+      assert.ok(!JSON.stringify(audit.metadata).includes(creds.password!));
+    });
+
+    it("rejects a duplicate slug and an unsupported engine version", async () => {
+      const cookie = await signIn();
+      await createDatastore(cookie);
+      const dup = await app.inject({
+        method: "POST",
+        url: "/api/datastores",
+        headers: { cookie },
+        payload: { kind: "postgres", name: "Again", slug: "main-db" }
+      });
+      assert.equal(dup.statusCode, 409);
+
+      const badVersion = await app.inject({
+        method: "POST",
+        url: "/api/datastores",
+        headers: { cookie },
+        payload: { kind: "postgres", name: "Old", slug: "old-db", engineVersion: "9" }
+      });
+      assert.equal(badVersion.statusCode, 400);
+    });
+
+    it("keeps the password out of the list and reveals it only via /connection, audited", async () => {
+      const cookie = await signIn();
+      const created = await createDatastore(cookie);
+      const row = await prisma.datastore.findUniqueOrThrow({ where: { id: created.id } });
+      const password = readRowCreds(row.credentialsEncrypted).password!;
+
+      const list = await app.inject({ method: "GET", url: "/api/datastores", headers: { cookie } });
+      assert.equal(list.statusCode, 200);
+      assert.ok(!list.body.includes(password));
+      assert.ok(!list.body.includes("credentialsEncrypted"));
+
+      const conn = await app.inject({
+        method: "GET",
+        url: `/api/datastores/${created.id}/connection`,
+        headers: { cookie }
+      });
+      assert.equal(conn.statusCode, 200);
+      const c = conn.json() as { url: string; publicUrl: string | null; password: string };
+      assert.equal(c.password, password);
+      assert.equal(c.url, `postgresql://sohwe:${password}@sohwe-ds-main-db:5432/main_db`);
+      assert.equal(c.publicUrl, null);
+
+      const audit = await prisma.auditLog.findFirst({ where: { action: "datastore.reveal" } });
+      assert.ok(audit, "revealing connection info must be audited");
+    });
+
+    it("assigns a stable public port on enable and clears it on disable", async () => {
+      const cookie = await signIn();
+      const created = await createDatastore(cookie);
+      // The provision job never runs here; settle the row so the toggle is legal.
+      await prisma.datastore.update({ where: { id: created.id }, data: { status: "idle" } });
+
+      const on = await app.inject({
+        method: "PATCH",
+        url: `/api/datastores/${created.id}/public-access`,
+        headers: { cookie },
+        payload: { enabled: true }
+      });
+      assert.equal(on.statusCode, 200, on.body);
+      const port = (on.json() as { publicPort: number }).publicPort;
+      assert.ok(port >= 20000 && port <= 29999, `port ${String(port)} out of range`);
+
+      const conn = await app.inject({
+        method: "GET",
+        url: `/api/datastores/${created.id}/connection`,
+        headers: { cookie }
+      });
+      const publicUrl = (conn.json() as { publicUrl: string | null }).publicUrl;
+      assert.ok(publicUrl?.includes(`:${String(port)}/`), "expected a public URL on the assigned port");
+
+      const off = await app.inject({
+        method: "PATCH",
+        url: `/api/datastores/${created.id}/public-access`,
+        headers: { cookie },
+        payload: { enabled: false }
+      });
+      assert.equal((off.json() as { publicPort: number | null }).publicPort, null);
+    });
+
+    it("bind injects the connection URL into the app env; unbind removes it", async () => {
+      const cookie = await signIn();
+      const application = await createApp(cookie);
+      const created = await createDatastore(cookie);
+      const row = await prisma.datastore.findUniqueOrThrow({ where: { id: created.id } });
+      const password = readRowCreds(row.credentialsEncrypted).password!;
+
+      const bind = await app.inject({
+        method: "POST",
+        url: `/api/datastores/${created.id}/bindings`,
+        headers: { cookie },
+        payload: { applicationId: application.id }
+      });
+      assert.equal(bind.statusCode, 201, bind.body);
+      assert.deepEqual((bind.json() as { envKeys: string[] }).envKeys, ["DATABASE_URL"]);
+
+      const env = await app.inject({
+        method: "GET",
+        url: `/api/applications/${application.id}/env?reveal=true`,
+        headers: { cookie }
+      });
+      const items = (env.json() as { items: { key: string; value: string }[] }).items;
+      const injected = items.find((i) => i.key === "DATABASE_URL");
+      assert.equal(
+        injected?.value,
+        `postgresql://sohwe:${password}@sohwe-ds-main-db:5432/main_db`
+      );
+
+      const bindAudit = await prisma.auditLog.findFirst({ where: { action: "datastore.bind" } });
+      assert.ok(bindAudit);
+      assert.ok(!JSON.stringify(bindAudit.metadata).includes(password), "audit must not carry the URL");
+
+      const dup = await app.inject({
+        method: "POST",
+        url: `/api/datastores/${created.id}/bindings`,
+        headers: { cookie },
+        payload: { applicationId: application.id }
+      });
+      assert.equal(dup.statusCode, 409);
+
+      const bindingId = (bind.json() as { id: string }).id;
+      const unbind = await app.inject({
+        method: "DELETE",
+        url: `/api/datastores/${created.id}/bindings/${bindingId}`,
+        headers: { cookie }
+      });
+      assert.equal(unbind.statusCode, 200, unbind.body);
+
+      const envAfter = await app.inject({
+        method: "GET",
+        url: `/api/applications/${application.id}/env?reveal=true`,
+        headers: { cookie }
+      });
+      const itemsAfter = (envAfter.json() as { items: { key: string }[] }).items;
+      assert.equal(itemsAfter.some((i) => i.key === "DATABASE_URL"), false);
+      assert.equal(await prisma.datastoreBinding.count(), 0);
+    });
+
+    it("delete marks the row deleting and defers destruction to the worker", async () => {
+      const cookie = await signIn();
+      const created = await createDatastore(cookie);
+      const res = await app.inject({
+        method: "DELETE",
+        url: `/api/datastores/${created.id}`,
+        headers: { cookie }
+      });
+      assert.equal(res.statusCode, 202);
+      const row = await prisma.datastore.findUniqueOrThrow({ where: { id: created.id } });
+      assert.equal(row.status, "deleting");
+    });
+
+    it("scopes every datastore route to the caller's organization", async () => {
+      const cookie = await signIn();
+      const org = await prisma.organization.create({ data: { name: "Other", slug: "other" } });
+      const foreign = await prisma.datastore.create({
+        data: {
+          organizationId: org.id,
+          kind: "redis",
+          name: "Foreign",
+          slug: "foreign",
+          engineVersion: "7",
+          status: "running",
+          credentialsEncrypted: encryptJson({ password: "x" })
+        }
+      });
+
+      for (const [method, url, payload] of [
+        ["GET", `/api/datastores/${foreign.id}`, undefined],
+        ["GET", `/api/datastores/${foreign.id}/connection`, undefined],
+        ["POST", `/api/datastores/${foreign.id}/rotate-password`, undefined],
+        ["PATCH", `/api/datastores/${foreign.id}/public-access`, { enabled: true }],
+        ["DELETE", `/api/datastores/${foreign.id}`, undefined]
+      ] as const) {
+        const res = await app.inject({ method, url, headers: { cookie }, payload });
+        assert.equal(res.statusCode, 404, `${method} ${url} returned ${String(res.statusCode)}`);
+      }
+    });
+
+    it("keeps the whole datastore surface away from members", async () => {
+      const ownerCookie = await signIn();
+      const created = await createDatastore(ownerCookie);
+      const cookie = await signInAs("member");
+
+      for (const [method, url, payload] of [
+        ["GET", "/api/datastores", undefined],
+        ["POST", "/api/datastores", { kind: "redis", name: "Cache", slug: "cache" }],
+        ["GET", `/api/datastores/${created.id}`, undefined],
+        ["GET", `/api/datastores/${created.id}/connection`, undefined],
+        ["POST", `/api/datastores/${created.id}/provision`, undefined],
+        ["POST", `/api/datastores/${created.id}/rotate-password`, undefined],
+        ["PATCH", `/api/datastores/${created.id}/public-access`, { enabled: true }],
+        ["POST", `/api/datastores/${created.id}/bindings`, { applicationId: created.id }],
+        ["DELETE", `/api/datastores/${created.id}`, undefined]
+      ] as const) {
+        const res = await app.inject({ method, url, headers: { cookie }, payload });
+        assert.equal(res.statusCode, 403, `${method} ${url} should be admin-only`);
+      }
+    });
+
+    it("restores a v2 bundle: fresh credentials, idle status, rewritten bindings", async () => {
+      const cookie = await signIn();
+      const passphrase = "bundle-pass-1";
+      const bundle = buildBundle(
+        [
+          {
+            name: "Restored Web",
+            slug: "restored-web",
+            gitRepo: "https://github.com/acme/web",
+            gitBranch: "main",
+            buildMode: "auto",
+            buildCmd: null,
+            startCmd: null,
+            port: 3000,
+            domain: null,
+            memoryLimitMb: null,
+            cpuLimit: null,
+            volumes: [],
+            alertDestinations: [],
+            envVars: { DATABASE_URL: "postgresql://sohwe:stale@sohwe-ds-r-db:5432/r_db" }
+          }
+        ],
+        {
+          passphrase,
+          includeSecrets: true,
+          source: { orgName: "Source Org", sohweVersion: "0.8.0" },
+          createdAtIso: new Date().toISOString()
+        },
+        [
+          {
+            kind: "postgres",
+            name: "R DB",
+            slug: "r-db",
+            engineVersion: "16",
+            memoryLimitMb: null,
+            cpuLimit: null,
+            publicPort: null,
+            bindings: [{ appSlug: "restored-web", envKeys: ["DATABASE_URL"] }]
+          }
+        ]
+      );
+
+      const preflight = await app.inject({
+        method: "POST",
+        url: "/api/backups/restore/preflight",
+        headers: { cookie },
+        payload: { bundle, passphrase }
+      });
+      assert.equal(preflight.statusCode, 200, preflight.body);
+      const pf = preflight.json() as {
+        datastores: { slug: string; collides: boolean; bindingCount: number }[];
+      };
+      assert.deepEqual(pf.datastores, [
+        {
+          name: "R DB",
+          slug: "r-db",
+          kind: "postgres",
+          engineVersion: "16",
+          collides: false,
+          bindingCount: 1
+        }
+      ]);
+
+      const apply = await app.inject({
+        method: "POST",
+        url: "/api/backups/restore/apply",
+        headers: { cookie },
+        payload: { bundle, passphrase, collisionPolicy: "rename" }
+      });
+      assert.equal(apply.statusCode, 200, apply.body);
+      const result = apply.json() as {
+        created: number;
+        datastoresCreated: number;
+        bindingsRestored: number;
+      };
+      assert.equal(result.created, 1);
+      assert.equal(result.datastoresCreated, 1);
+      assert.equal(result.bindingsRestored, 1);
+
+      const ds = await prisma.datastore.findFirstOrThrow({ where: { slug: "r-db" } });
+      assert.equal(ds.status, "idle", "restored datastores must not provision themselves");
+      const creds = readRowCreds(ds.credentialsEncrypted);
+      assert.notEqual(creds.password, "stale", "restore must generate fresh credentials");
+
+      // The bound app's injected key was rewritten with the new credentials.
+      const restoredApp = await prisma.application.findFirstOrThrow({
+        where: { slug: "restored-web" }
+      });
+      const env = decryptJson(Buffer.from(restoredApp.envVarsEncrypted!));
+      assert.equal(
+        env.DATABASE_URL,
+        `postgresql://sohwe:${creds.password!}@sohwe-ds-r-db:5432/r_db`
+      );
+      assert.equal(await prisma.datastoreBinding.count(), 1);
+    });
+
+    it("still restores a v1 bundle (no datastores section)", async () => {
+      const cookie = await signIn();
+      const passphrase = "v1-pass";
+      const salt = randomBundleSalt();
+      const key = deriveBundleKey(passphrase, salt);
+      const payload = {
+        format: "sohwe-backup",
+        version: 1,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        source: { orgName: "Old Instance", sohweVersion: "0.6.0" },
+        kdf: {
+          algo: "scrypt",
+          salt: salt.toString("base64"),
+          N: SCRYPT_PARAMS.N,
+          r: SCRYPT_PARAMS.r,
+          p: SCRYPT_PARAMS.p
+        },
+        includesSecrets: false,
+        apps: [
+          {
+            name: "Legacy",
+            slug: "legacy",
+            gitRepo: "https://github.com/acme/legacy",
+            gitBranch: "main",
+            buildMode: "auto",
+            buildCmd: null,
+            startCmd: null,
+            port: 3000,
+            domain: null,
+            memoryLimitMb: null,
+            cpuLimit: null,
+            volumes: [],
+            alertDestinations: []
+          }
+        ]
+      };
+      const bundle = {
+        ...payload,
+        signature: hmacSign(key, canonicalize(payload)).toString("base64")
+      };
+
+      const preflight = await app.inject({
+        method: "POST",
+        url: "/api/backups/restore/preflight",
+        headers: { cookie },
+        payload: { bundle, passphrase }
+      });
+      assert.equal(preflight.statusCode, 200, preflight.body);
+      assert.deepEqual((preflight.json() as { datastores: unknown[] }).datastores, []);
+
+      const apply = await app.inject({
+        method: "POST",
+        url: "/api/backups/restore/apply",
+        headers: { cookie },
+        payload: { bundle, passphrase, collisionPolicy: "rename" }
+      });
+      assert.equal(apply.statusCode, 200, apply.body);
+      const result = apply.json() as { created: number; datastoresCreated: number };
+      assert.equal(result.created, 1);
+      assert.equal(result.datastoresCreated, 0);
     });
   });
 });

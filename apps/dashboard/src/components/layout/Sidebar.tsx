@@ -1,5 +1,5 @@
 import { Link, useLocation } from "@tanstack/react-router";
-import { Box, ChevronsLeft, ChevronsRight, DatabaseBackup, GitBranch, LayoutGrid, Menu, ScrollText, Users } from "lucide-react";
+import { Box, ChevronsLeft, ChevronsRight, Database, DatabaseBackup, GitBranch, LayoutGrid, Menu, ScrollText, Users } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
@@ -58,6 +58,9 @@ function SidebarContent({ onNavigate, me }: { onNavigate?: () => void; me: Me })
             <NavLink to="/git" icon={GitBranch} onClick={onNavigate}>
               Git
             </NavLink>
+            <NavLink to="/datastores" icon={Database} onClick={onNavigate}>
+              Datastores
+            </NavLink>
             <NavLink to="/backups" icon={DatabaseBackup} onClick={onNavigate}>
               Backups
             </NavLink>
@@ -112,6 +115,13 @@ export function AppSidebar({ me, collapsed, onToggleCollapse }: { me: Me; collap
                 title="Git"
               >
                 <GitBranch className="h-4 w-4" />
+              </Link>
+              <Link
+                to="/datastores"
+                className="mt-1 flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-accent"
+                title="Datastores"
+              >
+                <Database className="h-4 w-4" />
               </Link>
               <Link
                 to="/backups"
