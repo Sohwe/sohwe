@@ -34,6 +34,8 @@ write-ups.
 
 ### Changed
 
+- The worker's imperative Docker subsystems — runtime log tailing, stat sampling, crash-event watching, and the deploy path's container/volume/network operations — moved out of the entrypoint into dedicated modules (`runtime-logs.ts`, `stats.ts`, `crash-watch.ts`, `docker-ops.ts`) that take a narrow structural slice of dockerode, and are now unit-tested against Docker doubles. Behavior is unchanged with one deliberate fix: a dying Docker events stream fired both `end` and `close`, each scheduling its own resubscribe, so every disconnect leaked one extra crash-watcher events stream; the reconnect is now scheduled once.
+
 - **Bundle format bumped to v2** for the datastore section. This build reads v1 and v2 bundles; older Sohwe versions cannot read v2 bundles (they fail cleanly with "Unrecognized or unsupported bundle format"). The frozen v1 golden bundle still parses, and a v2 golden now pins the new format.
 
 - Deleting an app now disconnects any bound datastore containers from the app's internal network before removing it. Previously a lingering endpoint made Docker refuse the network removal and failed the whole app delete.

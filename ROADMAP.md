@@ -514,10 +514,19 @@ Test coverage:
       cover request schemas, Docker naming, queue channel names, backup
       destination resolution, and build-engine selection. The CI `verify` job
       runs them against Postgres and Redis service containers.
-- [ ] Remaining untested surface: the worker's imperative Docker calls
-      (container create/start/remove, network attach, log tailing, stat
-      sampling) and the backup export/restore orchestration. Both need a Docker
-      double or a live daemon. Accepted gap — not a tag blocker.
+- [x] The worker's imperative Docker calls are now unit-tested against Docker
+      doubles: the deploy path's container stop/remove, volume ensure, and
+      internal-network attach live in `apps/worker/src/docker-ops.ts`; runtime
+      log tailing (line buffering, tail replacement, startup recovery) in
+      `runtime-logs.ts`; stat sampling in `stats.ts`; crash-event
+      classification and the reconnecting event watcher in `crash-watch.ts`.
+      Each module takes a narrow structural slice of dockerode so the real
+      client and a test double are interchangeable. Extracting the watcher
+      also fixed a latent leak: a dying events stream fired both `end` and
+      `close`, each scheduling its own resubscribe.
+- [ ] Remaining untested surface: the backup export/restore orchestration
+      (`packages/backups/src/export.ts`), which still needs a Docker double or
+      a live daemon. Accepted gap — not a tag blocker.
 - [ ] Manual VPS smoke test (`docs/vps-smoke-test.md`): prove `sohwe update` and
       the pre-v0.3.8 auto-baseline on a real Ubuntu host. Requires a VPS. **This
       is the tag blocker.**

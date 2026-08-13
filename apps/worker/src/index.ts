@@ -3,15 +3,12 @@ import { spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { buildAppImage, type BuildMode } from "@sohwe/builder";
 import { decryptJson, getSohweEncryptionKey, toDockerEnvList } from "@sohwe/crypto";
-import { appDockerVolumeName, appInternalNetworkName } from "@sohwe/types";
 import { prisma } from "@sohwe/db";
 import {
   appLogChannelName,
-  appStatsKey,
   createRedisForPublish,
   DEPLOY_QUEUE,
   getConnectionOptionsForBull,
@@ -35,12 +32,20 @@ import {
   resolveRoutingConfig,
   shouldUseTls
 } from "./container-spec";
+import { buildAlertPayload, createDockerEventWatcher } from "./crash-watch";
+import {
+  connectToInternalNetwork,
+  ensureAppVolumes,
+  stopAndRemoveAppContainers
+} from "./docker-ops";
 import {
   redactDeployError,
   reportCommitStatus,
   resolveGitHubContext,
   type GitHubDeployContext
 } from "./github";
+import { createRuntimeLogTailManager } from "./runtime-logs";
+import { createStatsSampler } from "./stats";
 
 const _here = dirname(fileURLToPath(import.meta.url));
 config({ path: join(_here, "../../../.env") });
@@ -78,10 +83,33 @@ const MAX_COMMIT_MSG = 2000;
 
 const docker = new Docker();
 const publishRedis = createRedisForPublish();
-const runtimeLogTails = new Map<
-  string,
-  { containerId: string; stream: NodeJS.ReadableStream & { destroy?(): void } }
->();
+
+// Runtime log tails, one follow-stream per app, published to the app's Redis
+// log channel. Logic lives in `runtime-logs.ts`; this wires it to the real
+// Docker daemon and Redis.
+const logTails = createRuntimeLogTailManager({
+  docker,
+  publish: (appId, line) => {
+    void publishRedis.publish(appLogChannelName(appId), line);
+  },
+  demux: (stream, stdout, stderr) => {
+    (
+      docker.modem as {
+        demuxStream(
+          stream: NodeJS.ReadableStream,
+          stdout: NodeJS.WritableStream,
+          stderr: NodeJS.WritableStream
+        ): void;
+      }
+    ).demuxStream(stream, stdout, stderr);
+  }
+});
+
+// Live CPU/memory stats (Phase 4). Sampling logic lives in `stats.ts`.
+const statsSampler = createStatsSampler({
+  docker,
+  setStat: (key, json, ttlSeconds) => publishRedis.set(key, json, "EX", ttlSeconds)
+});
 
 function sh(cmd: string, args: string[], cwd: string): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -163,263 +191,6 @@ function buildImageTag(slug: string, deploymentId: string): string {
   return `sohwe/app-${slug}:dep-${deploymentId}`.toLowerCase();
 }
 
-function publishRuntimeLine(applicationId: string, line: string): void {
-  void publishRedis.publish(appLogChannelName(applicationId), line);
-}
-
-function stopRuntimeLogTail(applicationId: string): void {
-  const tail = runtimeLogTails.get(applicationId);
-  if (!tail) return;
-  runtimeLogTails.delete(applicationId);
-  tail.stream.destroy?.();
-}
-
-async function startRuntimeLogTail(
-  applicationId: string,
-  container: Docker.Container,
-  since = Math.floor(Date.now() / 1000)
-): Promise<void> {
-  stopRuntimeLogTail(applicationId);
-
-  let stream: NodeJS.ReadableStream & { destroy?(): void };
-  try {
-    stream = (await container.logs({
-      follow: true,
-      stdout: true,
-      stderr: true,
-      timestamps: false,
-      since
-    })) as NodeJS.ReadableStream & { destroy?(): void };
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    publishRuntimeLine(applicationId, `[sohwe] Failed to attach runtime logs: ${msg}`);
-    return;
-  }
-
-  runtimeLogTails.set(applicationId, { containerId: container.id, stream });
-
-  const stdout = new PassThrough();
-  const stderr = new PassThrough();
-  let buffer = "";
-
-  const onData = (chunk: Buffer) => {
-    buffer += chunk.toString("utf8");
-    const lines = buffer.split(/\r?\n/);
-    buffer = lines.pop() ?? "";
-    for (const line of lines) {
-      if (line.length > 0) publishRuntimeLine(applicationId, line);
-    }
-  };
-
-  const onEnd = () => {
-    if (buffer.length > 0) {
-      publishRuntimeLine(applicationId, buffer);
-      buffer = "";
-    }
-    const current = runtimeLogTails.get(applicationId);
-    if (current?.containerId === container.id) {
-      runtimeLogTails.delete(applicationId);
-    }
-    stdout.destroy();
-    stderr.destroy();
-  };
-
-  stdout.on("data", onData);
-  stderr.on("data", onData);
-  stream.on("end", onEnd);
-  stream.on("close", onEnd);
-  stream.on("error", (e) => {
-    const msg = e instanceof Error ? e.message : String(e);
-    publishRuntimeLine(applicationId, `[sohwe] Runtime log stream ended: ${msg}`);
-    onEnd();
-  });
-
-  try {
-    (
-      docker.modem as {
-        demuxStream(
-          stream: NodeJS.ReadableStream,
-          stdout: NodeJS.WritableStream,
-          stderr: NodeJS.WritableStream
-        ): void;
-      }
-    ).demuxStream(stream, stdout, stderr);
-  } catch {
-    stream.on("data", onData);
-  }
-}
-
-async function startRuntimeLogTailsForRunningContainers(): Promise<void> {
-  const containers = await docker.listContainers({
-    filters: { label: ["sohwe.managed=true"] }
-  });
-  for (const c of containers) {
-    const appId = c.Labels?.["sohwe.app"];
-    if (!appId) continue;
-    await startRuntimeLogTail(appId, docker.getContainer(c.Id));
-  }
-}
-
-// --- Live CPU/memory stats (Phase 4) ---------------------------------------
-//
-// Every few seconds we sample one-shot Docker stats for each managed running
-// container and write a compact JSON snapshot to Redis under `stats:app:<id>`
-// with a short TTL. The API reads this key (polling); when it expires the app
-// is reported as not running. We deliberately avoid streaming stats — periodic
-// one-shot reads are simpler and the daemon still populates `precpu_stats` so
-// the standard CPU% delta formula works.
-
-const STATS_INTERVAL_MS = 3000;
-const STATS_TTL_SECONDS = 10;
-let statsTimer: ReturnType<typeof setInterval> | null = null;
-
-type RawDockerStats = {
-  cpu_stats?: {
-    cpu_usage?: { total_usage?: number };
-    system_cpu_usage?: number;
-    online_cpus?: number;
-  };
-  precpu_stats?: {
-    cpu_usage?: { total_usage?: number };
-    system_cpu_usage?: number;
-  };
-  memory_stats?: {
-    usage?: number;
-    limit?: number;
-    stats?: { cache?: number; inactive_file?: number };
-  };
-};
-
-function computeStats(raw: RawDockerStats): {
-  cpuPercent: number;
-  memUsedBytes: number;
-  memLimitBytes: number;
-  memPercent: number;
-} {
-  const cpuTotal = raw.cpu_stats?.cpu_usage?.total_usage ?? 0;
-  const preTotal = raw.precpu_stats?.cpu_usage?.total_usage ?? 0;
-  const system = raw.cpu_stats?.system_cpu_usage ?? 0;
-  const preSystem = raw.precpu_stats?.system_cpu_usage ?? 0;
-  const onlineCpus = raw.cpu_stats?.online_cpus ?? 1;
-  const cpuDelta = cpuTotal - preTotal;
-  const systemDelta = system - preSystem;
-  const cpuPercent =
-    systemDelta > 0 && cpuDelta > 0
-      ? (cpuDelta / systemDelta) * onlineCpus * 100
-      : 0;
-
-  const rawUsage = raw.memory_stats?.usage ?? 0;
-  // Match `docker stats`: subtract page cache (cgroup v1 `cache`, v2 `inactive_file`).
-  const cache =
-    raw.memory_stats?.stats?.cache ??
-    raw.memory_stats?.stats?.inactive_file ??
-    0;
-  const memUsedBytes = Math.max(0, rawUsage - cache);
-  const memLimitBytes = raw.memory_stats?.limit ?? 0;
-  const memPercent =
-    memLimitBytes > 0 ? (memUsedBytes / memLimitBytes) * 100 : 0;
-
-  return {
-    cpuPercent: Math.round(cpuPercent * 10) / 10,
-    memUsedBytes,
-    memLimitBytes,
-    memPercent: Math.round(memPercent * 10) / 10
-  };
-}
-
-async function sampleStatsOnce(): Promise<void> {
-  const containers = await docker.listContainers({
-    filters: { label: ["sohwe.managed=true"], status: ["running"] }
-  });
-  await Promise.all(
-    containers.map(async (c) => {
-      const appId = c.Labels?.["sohwe.app"];
-      if (!appId) return;
-      try {
-        const raw = (await docker
-          .getContainer(c.Id)
-          .stats({ stream: false })) as RawDockerStats;
-        const s = computeStats(raw);
-        await publishRedis.set(
-          appStatsKey(appId),
-          JSON.stringify({ running: true, ...s, ts: Date.now() }),
-          "EX",
-          STATS_TTL_SECONDS
-        );
-      } catch {
-        // Container may have stopped between listing and sampling; skip.
-      }
-    })
-  );
-}
-
-function startStatsCollector(): void {
-  if (statsTimer) return;
-  statsTimer = setInterval(() => {
-    void sampleStatsOnce().catch(() => {});
-  }, STATS_INTERVAL_MS);
-}
-
-function stopStatsCollector(): void {
-  if (statsTimer) {
-    clearInterval(statsTimer);
-    statsTimer = null;
-  }
-}
-
-// --- Crash detection + webhook alerts (Phase 4) ----------------------------
-//
-// We watch Docker `die`/`oom` events for managed containers. On a crash we mark
-// the app `crashed` and POST a webhook to each enabled per-app destination.
-// Alert payloads carry only non-sensitive metadata (app name/slug, event, exit
-// code, container id, timestamp) — never env var values or other secrets.
-
-type DockerEvent = {
-  Type?: string;
-  Action?: string;
-  status?: string;
-  id?: string;
-  Actor?: { ID?: string; Attributes?: Record<string, string> };
-};
-
-let eventsStream: (NodeJS.ReadableStream & { destroy?(): void }) | null = null;
-let eventsStopping = false;
-
-function buildAlertPayload(
-  type: string,
-  info: {
-    appName: string;
-    appSlug: string;
-    event: string;
-    exitCode: string;
-    containerId: string;
-    timeIso: string;
-  }
-): unknown {
-  const title = `🔴 Sohwe: app "${info.appName}" ${info.event}`;
-  const detail =
-    `App: ${info.appName} (${info.appSlug})\n` +
-    `Event: ${info.event}\n` +
-    `Exit code: ${info.exitCode}\n` +
-    `Container: ${info.containerId.slice(0, 12)}\n` +
-    `Time: ${info.timeIso}`;
-  if (type === "slack") {
-    return { text: `${title}\n${detail}` };
-  }
-  if (type === "discord") {
-    return { content: `**${title}**\n${detail}` };
-  }
-  // generic
-  return {
-    type: "sohwe.crash",
-    app: { name: info.appName, slug: info.appSlug },
-    event: info.event,
-    exitCode: info.exitCode,
-    containerId: info.containerId,
-    time: info.timeIso
-  };
-}
-
 async function sendCrashAlerts(
   appId: string,
   event: string,
@@ -464,81 +235,25 @@ async function sendCrashAlerts(
   );
 }
 
-async function handleDockerEvent(ev: DockerEvent): Promise<void> {
-  if (ev.Type && ev.Type !== "container") return;
-  const action = ev.Action ?? ev.status ?? "";
-  const isOom = action === "oom";
-  const isDie = action === "die";
-  if (!isOom && !isDie) return;
-
-  const attrs = ev.Actor?.Attributes ?? {};
-  const appId = attrs["sohwe.app"];
-  if (!appId) return;
-
-  const exitCode = attrs.exitCode ?? "";
-  // A clean stop (exit 0) is not a crash; an OOM kill always is.
-  if (isDie && (exitCode === "0" || exitCode === "")) return;
-
-  const containerId = ev.Actor?.ID ?? ev.id ?? "";
-  await prisma.application
-    .update({ where: { id: appId }, data: { status: "crashed" } })
-    .catch(() => {});
-  await sendCrashAlerts(appId, isOom ? "out of memory" : "crashed", exitCode, containerId);
-}
-
-async function startDockerEventWatcher(): Promise<void> {
-  if (eventsStopping) return;
-  try {
-    eventsStream = (await docker.getEvents({
-      filters: {
-        type: ["container"],
-        event: ["die", "oom"],
-        label: ["sohwe.managed=true"]
-      }
-    })) as NodeJS.ReadableStream & { destroy?(): void };
-  } catch (e) {
-    console.error("Failed to subscribe to Docker events", e);
-    return;
+// Crash detection (Phase 4). Classification and the reconnecting event stream
+// live in `crash-watch.ts`; this binds a confirmed crash to the DB status flip
+// and the webhook alerts.
+const eventWatcher = createDockerEventWatcher({
+  // Wrapped rather than passed directly: dockerode's callback-style overloads
+  // of getEvents defeat structural assignability to the narrow EventsDocker.
+  docker: { getEvents: (opts) => docker.getEvents(opts) },
+  onCrash: async (crash) => {
+    await prisma.application
+      .update({ where: { id: crash.appId }, data: { status: "crashed" } })
+      .catch(() => {});
+    await sendCrashAlerts(
+      crash.appId,
+      crash.event,
+      crash.exitCode,
+      crash.containerId
+    );
   }
-
-  let buffer = "";
-  const onData = (chunk: Buffer) => {
-    buffer += chunk.toString("utf8");
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      try {
-        void handleDockerEvent(JSON.parse(trimmed) as DockerEvent);
-      } catch {
-        // ignore malformed line
-      }
-    }
-  };
-
-  const reconnect = () => {
-    eventsStream = null;
-    if (eventsStopping) return;
-    setTimeout(() => {
-      void startDockerEventWatcher();
-    }, 1000);
-  };
-
-  eventsStream.on("data", onData);
-  eventsStream.on("end", reconnect);
-  eventsStream.on("close", reconnect);
-  eventsStream.on("error", (e) => {
-    console.error("Docker events stream error", e);
-    reconnect();
-  });
-}
-
-function stopDockerEventWatcher(): void {
-  eventsStopping = true;
-  eventsStream?.destroy?.();
-  eventsStream = null;
-}
+});
 
 async function runDeploy(job: { data: DeployJobData }): Promise<void> {
   const { deploymentId, applicationId, promoteImageFromDeploymentId } = job.data;
@@ -698,16 +413,8 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
 
     await sink.end();
     onLog(`[sohwe] Stopping old containers for this app (if any)...`);
-    stopRuntimeLogTail(app.id);
-    const existing = await docker.listContainers({
-      all: true,
-      filters: { label: [`sohwe.app=${app.id}`] }
-    });
-    for (const c of existing) {
-      const d = docker.getContainer(c.Id);
-      await d.stop({ t: 10 }).catch(() => {});
-      await d.remove().catch(() => {});
-    }
+    logTails.stop(app.id);
+    await stopAndRemoveAppContainers(docker, app.id);
 
     const hosts = resolveHosts(app, routing.baseDomain);
     onLog(
@@ -715,21 +422,7 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
     );
 
     const vols = await prisma.volume.findMany({ where: { applicationId: app.id } });
-    for (const v of vols) {
-      const vn = appDockerVolumeName(app.id, v.id);
-      try {
-        await docker.getVolume(vn).inspect();
-      } catch {
-        await docker.createVolume({
-          Name: vn,
-          Labels: {
-            "sohwe.managed": "true",
-            "sohwe.app": app.id,
-            "sohwe.volume": v.id
-          }
-        });
-      }
-    }
+    await ensureAppVolumes(docker, app.id, vols);
 
     let envList: string[] = [];
     if (app.envVarsEncrypted) {
@@ -751,21 +444,9 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
     );
 
     await c.start();
-    await startRuntimeLogTail(app.id, c, Math.floor(Date.now() / 1000) - 1);
+    await logTails.start(app.id, c, Math.floor(Date.now() / 1000) - 1);
 
-    const intNetName = appInternalNetworkName(app.id);
-    try {
-      await docker.createNetwork({
-        Name: intNetName,
-        Driver: "bridge",
-        Internal: true,
-        Labels: { "sohwe.managed": "true", "sohwe.app": app.id }
-      });
-    } catch {
-      // already exists
-    }
-    const internalNet = docker.getNetwork(intNetName);
-    await internalNet.connect({ Container: c.id });
+    await connectToInternalNetwork(docker, app.id, c.id);
 
     await prisma.deployment.update({
       where: { id: deploymentId },
@@ -844,12 +525,12 @@ const worker = new Worker<DeployJobData>(DEPLOY_QUEUE, async (job) => {
   await runDeploy({ data: job.data });
 }, { connection });
 
-await startRuntimeLogTailsForRunningContainers().catch((e) => {
+await logTails.startForRunning().catch((e) => {
   console.error("Failed to attach runtime log tails", e);
 });
 
-startStatsCollector();
-await startDockerEventWatcher().catch((e) => {
+statsSampler.start();
+await eventWatcher.start().catch((e) => {
   console.error("Failed to start Docker event watcher", e);
 });
 
@@ -875,9 +556,9 @@ worker.on("error", (err) => {
 });
 
 const shutdown = async () => {
-  stopStatsCollector();
-  stopDockerEventWatcher();
-  for (const appId of runtimeLogTails.keys()) stopRuntimeLogTail(appId);
+  statsSampler.stop();
+  eventWatcher.stop();
+  logTails.stopAll();
   await worker.close();
   if (backups) await backups.close();
   if (datastores) await datastores.close();
