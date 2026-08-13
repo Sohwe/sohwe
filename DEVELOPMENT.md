@@ -19,6 +19,16 @@ Then replace `SOHWE_ENCRYPTION_KEY` in `apps/api/.env` with a real 32-byte base6
 
 ## Local Startup
 
+One command does env files (with generated secrets), infrastructure, and
+migrations — idempotent, existing values are never overwritten:
+
+```powershell
+node scripts/dev-setup.mjs
+pnpm.cmd dev
+```
+
+Or manually:
+
 ```powershell
 pnpm.cmd install
 docker compose -f docker-compose.dev.yml up -d
@@ -27,7 +37,8 @@ pnpm.cmd db:migrate:deploy
 pnpm.cmd dev
 ```
 
-Use `pnpm.cmd` if PowerShell blocks `pnpm.ps1`.
+Use `pnpm.cmd` if PowerShell blocks `pnpm.ps1`. (`pnpm run setup` also works;
+plain `pnpm setup` hits a pnpm builtin instead.)
 
 ## Deploying Apps Locally
 

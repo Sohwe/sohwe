@@ -118,6 +118,11 @@ State lives entirely under `/etc/sohwe/`. Postgres data and Let's Encrypt certs 
 
 ## Development
 
+Starting from a brand-new machine (no Node, pnpm, or Docker yet)? Follow
+[`docs/fresh-machine-setup.md`](./docs/fresh-machine-setup.md) — it walks from a
+clean Windows/macOS/Linux install to a running local instance with a first
+deployed app. The steps below assume the prerequisites are already installed.
+
 ### Requirements
 
 - **Node.js** 24+ (see `.nvmrc`)
@@ -125,6 +130,16 @@ State lives entirely under `/etc/sohwe/`. Postgres data and Let's Encrypt certs 
 - **Docker** (for local Postgres, Redis, Traefik)
 
 ### Quick start
+
+One command (checks prerequisites, installs dependencies, generates env files
+with real secrets, starts Postgres/Redis/Traefik, applies migrations —
+idempotent, never overwrites configured values):
+
+```bash
+node scripts/dev-setup.mjs
+```
+
+then `pnpm dev`. The manual equivalent:
 
 1. **Install dependencies**
 
@@ -203,6 +218,7 @@ Certificates are only requested for apps on a real public domain — Let's Encry
 
 | Command | Description |
 | --- | --- |
+| `pnpm run setup` | Guided dev setup: prereq checks, install, env files, infra, migrations (`node scripts/dev-setup.mjs`) |
 | `pnpm dev` | Run all packages’ `dev` tasks via Turborepo |
 | `pnpm build` | Production build |
 | `pnpm lint` | Lint |
@@ -220,6 +236,7 @@ Certificates are only requested for apps on a real public domain — Let's Encry
 - [`CLAUDE.md`](./CLAUDE.md) — working rules and context for coding agents
 - [`ROADMAP.md`](./ROADMAP.md) — per-phase checklist with file-level evidence
 - [`DEVELOPMENT.md`](./DEVELOPMENT.md) — local environment setup and dev deploy notes
+- [`docs/fresh-machine-setup.md`](./docs/fresh-machine-setup.md) — zero-to-running dev setup on a fresh Windows/macOS/Linux machine
 - [`sohwe-getting-started.md`](./sohwe-getting-started.md) — architecture, decisions, and unbuilt-phase design
 - [`sohwe-prd.md`](./sohwe-prd.md) — product requirements and release plan
 - [`docs/vps-smoke-test.md`](./docs/vps-smoke-test.md) — manual VPS verification checklist

@@ -61,6 +61,8 @@ pnpm db:push
 pnpm dev
 ```
 
+`node scripts/dev-setup.mjs` (aka `pnpm run setup`) automates the sequence above for a fresh machine — prereq checks, install, env file generation, dev infra, migrations. Idempotent; never overwrites configured env values.
+
 Validation: `pnpm build`, `pnpm typecheck`, `pnpm lint`, `pnpm test` — all cover every workspace package (`test` runs only where a `test` script exists).
 Database: `pnpm db:generate`, `pnpm db:push`, `pnpm db:studio`
 

@@ -4,6 +4,7 @@
   "private": true,
   "license": "AGPL-3.0",
   "scripts": {
+    "setup": "node scripts/dev-setup.mjs",
     "dev": "turbo run dev",
     "build": "turbo run build",
     "lint": "turbo run lint",
