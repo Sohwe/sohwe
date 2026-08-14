@@ -367,6 +367,42 @@ export type DatastoreDetail = Datastore & {
   bindings: DatastoreBinding[];
 };
 
+// --- Phase 8: Custom domain DNS assist ---------------------------------------
+
+export type DnsProviderInfo = {
+  id: string;
+  name: string;
+  /** Deep link to the provider's DNS console; may embed the zone name. */
+  url: string | null;
+  /** True when Sohwe can apply the record through this provider's API. */
+  apiSupported: boolean;
+};
+
+export type DnsInspection = {
+  domain: string;
+  zone: string | null;
+  nameservers: string[];
+  provider: DnsProviderInfo | null;
+  expectedIp: string | null;
+  resolvedIps: string[];
+  status: "verified" | "mismatch" | "unresolved" | "unknown";
+  record: { type: "A"; name: string; value: string } | null;
+};
+
+/** One configured provider credential; the token itself is never returned. */
+export type DnsCredentialInfo = {
+  provider: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type DnsApplyResult = {
+  action: "created" | "updated";
+  zone: string;
+  record: { type: "A"; name: string; value: string };
+  proxied: boolean;
+};
+
 /** Response of the deliberate, audited connection-info reveal. */
 export type DatastoreConnection = {
   host: string;

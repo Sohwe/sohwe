@@ -5,6 +5,7 @@ import type { AppRow } from "@/lib/types";
 import { AppSettingsForm } from "@/components/apps/AppSettingsForm";
 import { AlertsManager } from "@/components/apps/AlertsManager";
 import { AutoDeployCard } from "@/components/apps/AutoDeployCard";
+import { DomainDnsPanel } from "@/components/apps/DomainDnsPanel";
 import { PageHeader } from "@/components/common/PageHeader";
 
 export function AppSettingsPage() {
@@ -18,6 +19,7 @@ export function AppSettingsPage() {
         <PageHeader title="Settings" description="Build, domain, and container limits. Save, then deploy to apply." />
         <AppSettingsForm app={app} />
       </div>
+      <DomainDnsPanel app={app} />
       <AutoDeployCard app={app} />
       <AlertsManager appId={appId} />
     </div>

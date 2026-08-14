@@ -25,7 +25,7 @@ export type SetupUnlockInput = z.infer<typeof SetupUnlockSchema>;
  * We intentionally avoid a full RFC 1035 / IDN check — Traefik rejects
  * garbage for us at route-install time.
  */
-const DomainSchema = z
+export const DomainSchema = z
   .string()
   .min(1)
   .max(253)
@@ -511,3 +511,85 @@ export function buildDatastoreConnectionUrl(
   }
   return `redis://:${creds.password}@${host}:${String(port)}/0`;
 }
+
+// --- Phase 8: Custom domain DNS assist ---------------------------------------
+
+/**
+ * DNS providers Sohwe can write records through. Detection covers many more
+ * providers (see the registry in `apps/api/src/dns/providers.ts`); this enum is
+ * only the subset with an API integration and a stored credential.
+ */
+export const DNS_API_PROVIDERS = ["cloudflare"] as const;
+export const DnsApiProviderSchema = z.enum(DNS_API_PROVIDERS);
+export type DnsApiProvider = z.infer<typeof DnsApiProviderSchema>;
+
+/** Query for `GET /api/dns/inspect`. */
+export const DnsInspectQuerySchema = z.object({
+  domain: DomainSchema
+});
+export type DnsInspectQuery = z.infer<typeof DnsInspectQuerySchema>;
+
+/**
+ * Body for `PUT /api/dns/credentials/:provider`. The token is encrypted at
+ * rest and never returned; Cloudflare tokens are ~40 chars, other providers
+ * may differ, so the bounds are deliberately loose.
+ */
+export const SetDnsCredentialSchema = z.object({
+  token: z.string().trim().min(10).max(512)
+});
+export type SetDnsCredentialInput = z.infer<typeof SetDnsCredentialSchema>;
+
+/** Where a domain's DNS zone is hosted, as shown in the dashboard. */
+export type DnsProviderInfo = {
+  id: string;
+  name: string;
+  /** Deep link to the provider's DNS console; may embed the zone name. */
+  url: string | null;
+  /** True when Sohwe can apply the record through this provider's API. */
+  apiSupported: boolean;
+};
+
+/** The record a custom domain needs to route to this instance. */
+export type DnsRecordSuggestion = {
+  type: "A";
+  name: string;
+  value: string;
+};
+
+/**
+ * - `verified`    the domain resolves to this instance's address
+ * - `mismatch`    it resolves somewhere else (possibly a CDN proxy)
+ * - `unresolved`  no address records exist yet
+ * - `unknown`     the instance's own address could not be determined
+ */
+export type DnsInspectionStatus =
+  | "verified"
+  | "mismatch"
+  | "unresolved"
+  | "unknown";
+
+/** Response of `GET /api/dns/inspect`. Contains nothing secret. */
+export type DnsInspection = {
+  domain: string;
+  /** Zone apex the NS records were found at; null when NS lookup failed. */
+  zone: string | null;
+  nameservers: string[];
+  /** Matched provider; null when the nameservers are not in the registry. */
+  provider: DnsProviderInfo | null;
+  /** IPv4 this instance's apps resolve to (via SOHWE_BASE_DOMAIN). */
+  expectedIp: string | null;
+  /** Addresses the domain currently resolves to. */
+  resolvedIps: string[];
+  status: DnsInspectionStatus;
+  /** Suggested record; null while expectedIp is unknown. */
+  record: DnsRecordSuggestion | null;
+};
+
+/** Response of `POST /api/applications/:id/dns/apply`. */
+export type DnsApplyResult = {
+  action: "created" | "updated";
+  zone: string;
+  record: DnsRecordSuggestion;
+  /** Whether the record is proxied (Cloudflare orange cloud) after the write. */
+  proxied: boolean;
+};

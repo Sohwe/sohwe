@@ -1,8 +1,8 @@
 # Sohwe Roadmap
 
-Current snapshot: latest tag is **v0.3.8**. Phases 4, 4.5, and 5 are implemented on `main` and staged for release as **v0.6.0** — `CHANGELOG.md` and the root `package.json` are prepared; the tag itself is held until the manual host verification below passes.
+Current snapshot: latest tag is **v0.6.0**, but the images it published were broken (workspace manifests missing from the production Dockerfiles, no buildx in the worker image); the fixes are on `main` and the follow-up tag is still to be decided. The manual host verification that had held the release passed on a real Ubuntu VPS on 2026-08-14 — fresh install (via `SOHWE_VERSION=dev` images), `sohwe update`, rollback, the Phase 5 push-deploy end-to-end, and the Phase 7 datastore end-to-end. Still open: proving the pre-v0.3.8 auto-baseline on a real host.
 
-Phases 0 through 5 are implemented in the repo. **Phase 4 - Observability** covers runtime logs, live metrics, and crash alerts. **Phase 4.5 - Portable Bundles** is feature-complete: signed config + re-encrypted env var bundles, local + S3-compatible + download destinations, restore preflight/apply, scheduled exports with cron + retention (worker-driven), and the org-level Backups UI. **Phase 5 - Git-Push Deploys** is implemented: per-instance GitHub App via the manifest flow, installation-token clones for private repos, a signature-verified push webhook, the auto-deploy toggle, and commit-status reporting. The build-log UX slice is also done: bounded build-log storage, derived failure summaries, copy/download, and clearer deployment states. All of this ships as **v0.6.0**. Three Phase 3.5 items remain as manual VPS verification (see `docs/vps-smoke-test.md`), and Phase 5 has its own manual end-to-end check; those are the only things holding the tag. **Phase 6 - Multi-User** has since landed on `main` for **v0.7.0**: owner/admin/member role guards on every route, copy-link invitations with hashed single-use tokens, member management, and an org-scoped audit log that records key names and counts but never secret values. Its one optional item — an instance *host* filesystem browser, distinct from the existing container browser — has since shipped too: allowlist-gated (`SOHWE_HOST_FS_ALLOWLIST`, off by default), symlink-escape-proof, and audited per list/read. **Phase 7 - Managed Datastores** has since landed on `main` for **v0.8.0**: managed Postgres/Redis containers with encrypted generated credentials, private app bindings that inject connection URLs into encrypted env vars, opt-in public host ports, password rotation, and config-only inclusion in portable bundles (bundle format v2).
+Phases 0 through 5 are implemented in the repo. **Phase 4 - Observability** covers runtime logs, live metrics, and crash alerts. **Phase 4.5 - Portable Bundles** is feature-complete: signed config + re-encrypted env var bundles, local + S3-compatible + download destinations, restore preflight/apply, scheduled exports with cron + retention (worker-driven), and the org-level Backups UI. **Phase 5 - Git-Push Deploys** is implemented: per-instance GitHub App via the manifest flow, installation-token clones for private repos, a signature-verified push webhook, the auto-deploy toggle, and commit-status reporting. The build-log UX slice is also done: bounded build-log storage, derived failure summaries, copy/download, and clearer deployment states. All of this ships as **v0.6.0**. All three `docs/vps-smoke-test.md` sections (fresh install, `sohwe update`, rollback) and the Phase 5 end-to-end check passed on a real Ubuntu host on 2026-08-14. **Phase 6 - Multi-User** has since landed on `main` for **v0.7.0**: owner/admin/member role guards on every route, copy-link invitations with hashed single-use tokens, member management, and an org-scoped audit log that records key names and counts but never secret values. Its one optional item — an instance *host* filesystem browser, distinct from the existing container browser — has since shipped too: allowlist-gated (`SOHWE_HOST_FS_ALLOWLIST`, off by default), symlink-escape-proof, and audited per list/read. **Phase 7 - Managed Datastores** has since landed on `main` for **v0.8.0**: managed Postgres/Redis containers with encrypted generated credentials, private app bindings that inject connection URLs into encrypted env vars, opt-in public host ports, password rotation, and config-only inclusion in portable bundles (bundle format v2).
 
 This file is a working checklist. It is based on `README.md`, `CHANGELOG.md`, `sohwe-getting-started.md`, `sohwe-prd.md`, and a code scan across the API, worker, dashboard, Docker, installer, and release workflow.
 
@@ -19,6 +19,7 @@ This file is a working checklist. It is based on `README.md`, `CHANGELOG.md`, `s
 - [x] **Phase 5 - Git-Push Deploys**
 - [x] **Phase 6 - Multi-User** (incl. the optional host file browser)
 - [x] **Phase 7 - Managed Datastores**
+- [x] **Phase 8 - Custom Domain DNS Assist** (first slice: detection + verification + Cloudflare apply; Domain Connect deferred)
 
 ## Completed
 
@@ -110,16 +111,16 @@ Evidence: `packages/crypto/src/index.ts`, `packages/types/src/index.ts`, `apps/a
 - [x] GHCR multi-arch release workflow for `v*` tags.
 - [x] Traefik v3.7 for Docker Engine 29 compatibility.
 - [x] HTTP-only install cookie fix using `SOHWE_HTTPS_ENABLED`.
-- [ ] Final fresh-Ubuntu install smoke test after the latest installer/domain changes. (manual — see `docs/vps-smoke-test.md`)
-- [ ] Confirm `sohwe update` on a real VPS after the latest installer/domain changes. (manual — see `docs/vps-smoke-test.md`)
-- [ ] Confirm rollback after the latest installer/domain changes. (manual — see `docs/vps-smoke-test.md`)
+- [x] Final fresh-Ubuntu install smoke test after the latest installer/domain changes. (passed 2026-08-14 on a fresh Ubuntu VPS using `SOHWE_VERSION=dev` images: install → unlock → owner setup → app deployed and served at the base domain through Traefik; runtime Logs and Metrics tabs live. Encrypted-env decryption was proven via the Phase 7 datastore binding — the injected `DATABASE_URL` decrypted and reached Postgres — rather than the manual add-an-env-var step; the optional crash-webhook check was skipped.)
+- [x] Confirm `sohwe update` on a real VPS after the latest installer/domain changes. (passed 2026-08-14: images pulled, migrations applied, services returned healthy, existing apps and data intact)
+- [x] Confirm rollback after the latest installer/domain changes. (passed 2026-08-14 on the VPS: prior deployment promoted without a rebuild, app healthy, current marker moved)
 
 Evidence: `docker/api.Dockerfile`, `docker/worker.Dockerfile`, `docker/dashboard.Dockerfile`, `docker/dashboard.nginx.conf`, `docker-compose.prod.yml`, `docker-compose.https.yml`, `scripts/install.sh`, `scripts/sohwe`, `.github/workflows/release.yml`, `CHANGELOG.md`.
 
 ## Staged For v0.6.0
 
-Implemented on `main`, not yet tagged. See *Cutting v0.6.0* at the end of this
-file for the release gate.
+Implemented on `main` and since tagged as v0.6.0 — though the images that tag
+published were broken; see *Cutting v0.6.0* at the end of this file.
 
 ### Configurable Apps Base Domain
 
@@ -135,7 +136,7 @@ observability, bundles, and push deploys all landed on top of it.)
 - [x] Run `pnpm typecheck`.
 - [x] Run `pnpm lint`.
 - [x] Run `pnpm build`.
-- [ ] Smoke-test dashboard URL display against a real/custom base domain. (manual — needs a host)
+- [x] Smoke-test dashboard URL display against a real/custom base domain. (passed 2026-08-14 — deployed app served at `<slug>.<SOHWE_BASE_DOMAIN>` on a real VPS)
 - [x] Update docs if the installer prompt text or env behavior changed.
       (`SOHWE_CERT_RESOLVER` threaded through `scripts/install.sh` and
       `docker-compose.prod.yml`; it and `SOHWE_HTTPS_ENABLED` documented in
@@ -218,10 +219,10 @@ Implementation notes:
 - [x] Enqueue deploys on tracked branch pushes. (`enqueuePushDeploys` in `apps/api/src/routes/github-webhook.ts`)
 - [x] Report deploy status back to GitHub. (`reportCommitStatus` in `apps/worker/src/github.ts`)
 
-Remaining manual verification:
+Manual verification (passed 2026-08-14 on a real host):
 
-- [ ] End-to-end on a real host: create the app via the manifest flow, install it, push to a tracked branch, and confirm the deploy runs and the commit status appears.
-- [ ] Confirm a private repository clones with an installation token.
+- [x] End-to-end on a real host: create the app via the manifest flow, install it, push to a tracked branch, and confirm the deploy runs and the commit status appears.
+- [x] Confirm a private repository clones with an installation token.
 
 Known follow-ups (not blockers):
 
@@ -312,9 +313,9 @@ Deferred — known gaps vs Railway, to be added later:
 
 Deliberate differences, not planned as work: datastore visibility is admin-and-above even for the list (consistent with the "secret-adjacent surfaces are admin+" rule, stricter than Railway), and datastores are single-host by nature — no HA/failover story on a one-VPS platform.
 
-Remaining manual verification:
+Manual verification (passed 2026-08-14 on a real host):
 
-- [ ] End-to-end on a real host: create a Postgres datastore, bind it to an app, deploy, and confirm the app reaches it over the internal network; enable public access and connect externally; rotate and confirm bound apps pick up the new URL on redeploy.
+- [x] End-to-end on a real host: create a Postgres datastore, bind it to an app, deploy, and confirm the app reaches it over the internal network; enable public access and connect externally; rotate and confirm bound apps pick up the new URL on redeploy.
 
 Evidence: `packages/db/prisma/schema.prisma`,
 `packages/db/prisma/migrations/20260813082152_add_datastores/`,
@@ -326,6 +327,65 @@ Evidence: `packages/db/prisma/schema.prisma`,
 `apps/dashboard/src/routes/datastore.$datastoreId.tsx`,
 `apps/dashboard/src/components/datastores/`,
 `apps/worker/src/datastore-spec.test.ts`, `packages/bundler/src/index.test.ts`,
+`apps/api/src/routes.test.ts`.
+
+## Staged For v0.9.0
+
+### Phase 8 - Custom Domain DNS Assist
+
+Status: **first slice complete** (detection + verification + Cloudflare apply)
+
+When a user sets a custom domain, Sohwe detects where the domain's DNS zone is
+hosted (NS lookup mapped against a curated provider registry), shows live
+verification of the required record, deep-links to the provider's DNS console
+with copy-paste values, and — for Cloudflare, via an org-level encrypted API
+token — creates or updates the record with one click.
+
+- [x] NS-based provider detection: server-side zone walk + curated registry
+      (Cloudflare incl. Foundation DNS, Namecheap, GoDaddy, Route 53, Google
+      Cloud DNS, DigitalOcean, Vercel, Porkbun, Linode, OVH, Gandi, Name.com,
+      IONOS, Hetzner); unknown providers fall back to showing the raw
+      nameservers. (`apps/api/src/dns/providers.ts`)
+- [x] Live DNS verification: expected A record (resolved from
+      `SOHWE_BASE_DOMAIN` or a wildcard label under it) vs the domain's current
+      resolution, with `verified` / `mismatch` / `unresolved` / `unknown`
+      states. (`GET /api/dns/inspect`, member-and-above — exposes nothing
+      secret)
+- [x] App settings panel: provider badge, verification status, required record
+      with copy buttons, re-check, and a deep link to the provider's DNS
+      console. (`apps/dashboard/src/components/apps/DomainDnsPanel.tsx`)
+- [x] Org-level Cloudflare API token, encrypted with `SOHWE_ENCRYPTION_KEY`,
+      admin-managed, verified against the Cloudflare API on save, never
+      returned by any endpoint. (`DnsProviderCredential` model, additive
+      migration `20260814082405_dns_provider_credentials`)
+- [x] One-click record apply through the Cloudflare API: zone discovery
+      (longest dot-boundary match), create-or-update of the A record (created
+      records are DNS-only, not proxied; updates keep the existing proxied
+      flag), CNAME-conflict refusal. (`apps/api/src/dns/cloudflare.ts`,
+      `POST /api/applications/:id/dns/apply`, admin-and-above)
+- [x] Audit events for credential set/remove and record apply
+      (`dns.credentials.set` / `dns.credentials.delete` / `dns.record.apply`);
+      no token material in audit rows, logs, or error messages.
+- [x] Tests: provider matching, zone walking, Cloudflare client against a fake
+      fetch, and HTTP route coverage including role floors and
+      encrypted-at-rest/never-returned assertions.
+- [ ] Manual verification on a real host: point a real Cloudflare-managed
+      domain at a VPS install, save a scoped token, apply the record, and
+      confirm the panel reaches `verified` and Traefik issues the cert.
+- [ ] Later: Domain Connect flow (provider-page approval, no credentials) for
+      registrars that support it — requires registering a Sohwe service
+      template with each provider, so it is a separate effort.
+- [ ] Later: more provider API integrations behind the same credential model
+      (deliberately not Namecheap's `setHosts`, which replaces the domain's
+      entire record set in one call).
+
+Evidence: `apps/api/src/dns/providers.ts`, `apps/api/src/dns/cloudflare.ts`,
+`apps/api/src/routes/dns.ts`, `apps/api/src/audit.ts`,
+`packages/types/src/index.ts`, `packages/db/prisma/schema.prisma`,
+`packages/db/prisma/migrations/20260814082405_dns_provider_credentials/`,
+`apps/dashboard/src/components/apps/DomainDnsPanel.tsx`,
+`apps/dashboard/src/routes/app.$appId.settings.tsx`,
+`apps/api/src/dns/providers.test.ts`, `apps/api/src/dns/cloudflare.test.ts`,
 `apps/api/src/routes.test.ts`.
 
 ## Release Sequence
@@ -346,7 +406,7 @@ that tag contains; the release gate itself is under *Cutting v0.6.0* at the end.
 - [x] Run `pnpm typecheck`.
 - [x] Run `pnpm lint`.
 - [x] Run `pnpm build`.
-- [ ] Verify on a real install or staging instance. (manual — needs a host)
+- [x] Verify on a real install or staging instance. (passed 2026-08-14 on a real VPS)
 
 #### Runtime Logs (was v0.4.0)
 
@@ -406,7 +466,7 @@ that tag contains; the release gate itself is under *Cutting v0.6.0* at the end.
 - [x] Verify push webhooks.
 - [x] Add auto-deploy toggle.
 - [x] Report deploy status back to GitHub.
-- [ ] Verify end-to-end on a real host (push deploy + private clone + commit status). (manual)
+- [x] Verify end-to-end on a real host (push deploy + private clone + commit status). (passed 2026-08-14)
 
 ### Next: v0.7.0 - Multi-User And Audit
 
@@ -428,14 +488,16 @@ that tag contains; the release gate itself is under *Cutting v0.6.0* at the end.
 - [x] Basic datastore health and status display.
 - [x] Opt-in public host port per datastore (Railway-style), off by default.
 - [x] Datastore config in portable bundles (format v2).
-- [ ] Manual end-to-end verification on a real host. (see Phase 7 above)
+- [x] Manual end-to-end verification on a real host. (passed 2026-08-14 — see Phase 7 above)
 - [ ] Later: public-endpoint TLS, datastore metrics/logs, data backups, DB browser/SQL console, more engines. (see the Phase 7 deferred list)
 
 ## Cutting v0.6.0
 
-Phases 4, 4.5, and 5 sit untagged on `main` behind `v0.3.8`, so the published
-install is far behind the code. Everything that can be done off-host is done;
-what remains needs a real Ubuntu host.
+**Since cut:** the v0.6.0 tag was pushed, but the images it published were
+broken (workspace manifests missing from the production Dockerfiles, no buildx
+in the worker image). The fixes are on `main`; the follow-up tag from `main` is
+still to be decided. The host checks below ran on a real Ubuntu VPS on
+2026-08-14 using `SOHWE_VERSION=dev` images.
 
 Version number: **v0.6.0**, settled. The release sequence above originally spread
 this work over v0.3.9, v0.4.0-v0.4.3, v0.5.0, and v0.6.0; none of those tags were
@@ -456,10 +518,10 @@ Ready:
 
 Blocked on a host:
 
-- [ ] Work through `docs/vps-smoke-test.md` to close the three open Phase 3.5 items.
-- [ ] Verify Phase 5 end-to-end (push deploy + private clone + commit status).
+- [x] Work through `docs/vps-smoke-test.md` to close the three open Phase 3.5 items. (all three sections passed 2026-08-14)
+- [x] Verify Phase 5 end-to-end (push deploy + private clone + commit status). (passed 2026-08-14)
 - [ ] Confirm the `[0.6.0]` date in `CHANGELOG.md` still matches the day of the tag.
-- [ ] `git tag v0.6.0 && git push --tags`, then confirm the three images publish.
+- [ ] `git tag v0.6.0 && git push --tags`, then confirm the three images publish. (the tag was pushed, but the published images were broken; Dockerfile fixes have since landed on `main` and the follow-up tag is still to be decided)
 
 ### Migration pipeline — done
 
@@ -527,6 +589,9 @@ Test coverage:
 - [ ] Remaining untested surface: the backup export/restore orchestration
       (`packages/backups/src/export.ts`), which still needs a Docker double or
       a live daemon. Accepted gap — not a tag blocker.
-- [ ] Manual VPS smoke test (`docs/vps-smoke-test.md`): prove `sohwe update` and
-      the pre-v0.3.8 auto-baseline on a real Ubuntu host. Requires a VPS. **This
-      is the tag blocker.**
+- [x] Manual VPS smoke test (`docs/vps-smoke-test.md`): `sohwe update` proven on
+      a real Ubuntu host (2026-08-14).
+- [ ] The pre-v0.3.8 auto-baseline is still unproven on a real host — the VPS
+      run started from a fresh install, so the `P3005` baseline path never
+      fired. CI's migrations job replays the same path against a seeded
+      v0.3.8 database.

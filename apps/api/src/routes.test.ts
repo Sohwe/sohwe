@@ -58,6 +58,7 @@ let loadApiConfig: typeof import("./env").loadApiConfig;
 
 /** Tables truncated between tests, children before parents. */
 const TABLES = [
+  "dns_provider_credentials",
   "datastore_bindings",
   "datastores",
   "audit_logs",
@@ -1974,6 +1975,375 @@ describe("API routes", { skip }, () => {
         await gated.close();
         await rm(root, { recursive: true, force: true });
         await rm(outside, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe("custom domain DNS assist", () => {
+    const EXPECTED_IP = "203.0.113.10";
+    const CF_TOKEN = "cf-test-token-abc123xyz-00000000";
+
+    /** NS fake: example.com is a Cloudflare-hosted zone; everything else fails. */
+    const fakeResolveNs = async (host: string): Promise<string[]> => {
+      if (host === "example.com") {
+        return ["dee.ns.cloudflare.com", "gail.ns.cloudflare.com"];
+      }
+      throw Object.assign(new Error("ENODATA"), { code: "ENODATA" });
+    };
+
+    const fakeResolve4 =
+      (answers: Record<string, string[]>) =>
+      async (host: string): Promise<string[]> => {
+        const a = answers[host];
+        if (!a) throw Object.assign(new Error("ENOTFOUND"), { code: "ENOTFOUND" });
+        return a;
+      };
+
+    /** Answers for a healthy setup: base domain and app domain point here. */
+    function healthyAnswers() {
+      const baseDomain = loadApiConfig().baseDomain;
+      return {
+        [baseDomain]: [EXPECTED_IP],
+        "app.example.com": [EXPECTED_IP]
+      };
+    }
+
+    /**
+     * Fake Cloudflare API: token verifies, one zone (example.com), no existing
+     * records, create succeeds. Calls are recorded for assertions. Route order
+     * matters — the dns_records paths must match before the bare /zones prefix.
+     */
+    function cfFetch() {
+      const calls: { url: string; method: string; body: unknown }[] = [];
+      const json = (payload: unknown) =>
+        new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      const fetchImpl = (async (input: unknown, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        calls.push({
+          url,
+          method,
+          body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined
+        });
+        const path = url.replace("https://api.cloudflare.com/client/v4", "");
+        if (method === "GET" && path.startsWith("/user/tokens/verify")) {
+          return json({ success: true, errors: [], result: { status: "active" } });
+        }
+        if (method === "GET" && path.startsWith("/zones/z1/dns_records")) {
+          return json({ success: true, errors: [], result: [] });
+        }
+        if (method === "POST" && path.startsWith("/zones/z1/dns_records")) {
+          return json({ success: true, errors: [], result: { id: "r1" } });
+        }
+        if (method === "GET" && path.startsWith("/zones")) {
+          return json({
+            success: true,
+            errors: [],
+            result: [{ id: "z1", name: "example.com" }],
+            result_info: { page: 1, total_pages: 1 }
+          });
+        }
+        return json({
+          success: false,
+          errors: [{ message: `no fake for ${method} ${path}` }]
+        });
+      }) as typeof fetch;
+      return { fetchImpl, calls };
+    }
+
+    it("inspects a domain: provider, required record, and status", async () => {
+      await signIn();
+      const memberCookie = await signInAs("member");
+      const dnsApp = await buildServer(loadApiConfig(), {
+        logger: false,
+        dns: { resolveNs: fakeResolveNs, resolve4: fakeResolve4(healthyAnswers()) }
+      });
+      try {
+        // Inspection is member-level: it exposes nothing secret.
+        const res = await dnsApp.inject({
+          method: "GET",
+          url: "/api/dns/inspect?domain=app.example.com",
+          headers: { cookie: memberCookie }
+        });
+        assert.equal(res.statusCode, 200, res.body);
+        const body = res.json() as {
+          zone: string;
+          provider: { id: string; apiSupported: boolean };
+          status: string;
+          record: { type: string; name: string; value: string };
+          expectedIp: string;
+        };
+        assert.equal(body.zone, "example.com");
+        assert.equal(body.provider.id, "cloudflare");
+        assert.equal(body.provider.apiSupported, true);
+        assert.equal(body.status, "verified");
+        assert.deepEqual(body.record, {
+          type: "A",
+          name: "app.example.com",
+          value: EXPECTED_IP
+        });
+
+        const unauth = await dnsApp.inject({
+          method: "GET",
+          url: "/api/dns/inspect?domain=app.example.com"
+        });
+        assert.equal(unauth.statusCode, 401);
+      } finally {
+        await dnsApp.close();
+      }
+    });
+
+    it("reports unresolved and mismatch states", async () => {
+      const cookie = await signIn();
+      const baseDomain = loadApiConfig().baseDomain;
+
+      const unresolvedApp = await buildServer(loadApiConfig(), {
+        logger: false,
+        dns: {
+          resolveNs: fakeResolveNs,
+          resolve4: fakeResolve4({ [baseDomain]: [EXPECTED_IP] })
+        }
+      });
+      try {
+        const res = await unresolvedApp.inject({
+          method: "GET",
+          url: "/api/dns/inspect?domain=app.example.com",
+          headers: { cookie }
+        });
+        assert.equal(res.statusCode, 200, res.body);
+        assert.equal(res.json().status, "unresolved");
+      } finally {
+        await unresolvedApp.close();
+      }
+
+      const mismatchApp = await buildServer(loadApiConfig(), {
+        logger: false,
+        dns: {
+          resolveNs: fakeResolveNs,
+          resolve4: fakeResolve4({
+            [baseDomain]: [EXPECTED_IP],
+            "app.example.com": ["198.51.100.7"]
+          })
+        }
+      });
+      try {
+        const res = await mismatchApp.inject({
+          method: "GET",
+          url: "/api/dns/inspect?domain=app.example.com",
+          headers: { cookie }
+        });
+        assert.equal(res.statusCode, 200, res.body);
+        const body = res.json() as { status: string; resolvedIps: string[] };
+        assert.equal(body.status, "mismatch");
+        assert.deepEqual(body.resolvedIps, ["198.51.100.7"]);
+      } finally {
+        await mismatchApp.close();
+      }
+    });
+
+    it("stores the provider token encrypted, admin-and-above, never returned", async () => {
+      const cookie = await signIn();
+      const memberCookie = await signInAs("member");
+      const { fetchImpl } = cfFetch();
+      const dnsApp = await buildServer(loadApiConfig(), {
+        logger: false,
+        dns: {
+          resolveNs: fakeResolveNs,
+          resolve4: fakeResolve4(healthyAnswers()),
+          fetchImpl
+        }
+      });
+      try {
+        // The credential surface is admin-and-above, reads included.
+        for (const [method, url] of [
+          ["PUT", "/api/dns/credentials/cloudflare"],
+          ["GET", "/api/dns/credentials"],
+          ["DELETE", "/api/dns/credentials/cloudflare"]
+        ] as const) {
+          const res = await dnsApp.inject({
+            method,
+            url,
+            headers: { cookie: memberCookie },
+            ...(method === "PUT" ? { payload: { token: CF_TOKEN } } : {})
+          });
+          assert.equal(res.statusCode, 403, `${method} ${url} should be admin-only`);
+        }
+
+        const put = await dnsApp.inject({
+          method: "PUT",
+          url: "/api/dns/credentials/cloudflare",
+          headers: { cookie },
+          payload: { token: CF_TOKEN }
+        });
+        assert.equal(put.statusCode, 200, put.body);
+        assert.ok(!put.body.includes(CF_TOKEN), "token must not be echoed back");
+
+        const list = await dnsApp.inject({
+          method: "GET",
+          url: "/api/dns/credentials",
+          headers: { cookie }
+        });
+        assert.equal(list.statusCode, 200);
+        const creds = list.json() as { credentials: { provider: string }[] };
+        assert.deepEqual(
+          creds.credentials.map((c) => c.provider),
+          ["cloudflare"]
+        );
+        assert.ok(!list.body.includes(CF_TOKEN), "token must never be listed");
+
+        // Encrypted at rest: the plaintext token is not in the stored bytes.
+        const row = await prisma.dnsProviderCredential.findFirstOrThrow();
+        assert.ok(
+          !Buffer.from(row.tokenEncrypted).toString("latin1").includes(CF_TOKEN)
+        );
+
+        // Audited without the secret.
+        const audit = await prisma.auditLog.findFirst({
+          where: { action: "dns.credentials.set" }
+        });
+        assert.ok(audit, "expected a dns.credentials.set audit row");
+        assert.ok(!JSON.stringify(audit).includes(CF_TOKEN));
+
+        const del = await dnsApp.inject({
+          method: "DELETE",
+          url: "/api/dns/credentials/cloudflare",
+          headers: { cookie }
+        });
+        assert.equal(del.statusCode, 200);
+        const again = await dnsApp.inject({
+          method: "DELETE",
+          url: "/api/dns/credentials/cloudflare",
+          headers: { cookie }
+        });
+        assert.equal(again.statusCode, 404);
+      } finally {
+        await dnsApp.close();
+      }
+    });
+
+    it("rejects a token Cloudflare does not verify", async () => {
+      const cookie = await signIn();
+      const badVerify = (async () =>
+        new Response(
+          JSON.stringify({
+            success: false,
+            errors: [{ code: 1000, message: "Invalid API Token" }]
+          }),
+          { status: 401, headers: { "content-type": "application/json" } }
+        )) as typeof fetch;
+      const dnsApp = await buildServer(loadApiConfig(), {
+        logger: false,
+        dns: {
+          resolveNs: fakeResolveNs,
+          resolve4: fakeResolve4(healthyAnswers()),
+          fetchImpl: badVerify
+        }
+      });
+      try {
+        const res = await dnsApp.inject({
+          method: "PUT",
+          url: "/api/dns/credentials/cloudflare",
+          headers: { cookie },
+          payload: { token: CF_TOKEN }
+        });
+        assert.equal(res.statusCode, 400, res.body);
+        assert.match(res.body, /Invalid API Token/);
+        assert.equal(await prisma.dnsProviderCredential.count(), 0);
+      } finally {
+        await dnsApp.close();
+      }
+    });
+
+    it("applies the record through Cloudflare and audits it", async () => {
+      const cookie = await signIn();
+      const withDomain = await createApp(cookie, { domain: "app.example.com" });
+      const bare = await createApp(cookie, { name: "Bare", slug: "bare" });
+      const memberCookie = await signInAs("member");
+      const { fetchImpl, calls } = cfFetch();
+      const dnsApp = await buildServer(loadApiConfig(), {
+        logger: false,
+        dns: {
+          resolveNs: fakeResolveNs,
+          resolve4: fakeResolve4(healthyAnswers()),
+          fetchImpl
+        }
+      });
+      try {
+        // No credential configured yet.
+        const early = await dnsApp.inject({
+          method: "POST",
+          url: `/api/applications/${withDomain.id}/dns/apply`,
+          headers: { cookie }
+        });
+        assert.equal(early.statusCode, 400);
+        assert.match(early.body, /No Cloudflare API token/);
+
+        const put = await dnsApp.inject({
+          method: "PUT",
+          url: "/api/dns/credentials/cloudflare",
+          headers: { cookie },
+          payload: { token: CF_TOKEN }
+        });
+        assert.equal(put.statusCode, 200, put.body);
+
+        // Writing to someone's DNS zone is admin territory.
+        const asMember = await dnsApp.inject({
+          method: "POST",
+          url: `/api/applications/${withDomain.id}/dns/apply`,
+          headers: { cookie: memberCookie }
+        });
+        assert.equal(asMember.statusCode, 403);
+
+        // An app without a custom domain has nothing to apply.
+        const noDomain = await dnsApp.inject({
+          method: "POST",
+          url: `/api/applications/${bare.id}/dns/apply`,
+          headers: { cookie }
+        });
+        assert.equal(noDomain.statusCode, 400);
+
+        const res = await dnsApp.inject({
+          method: "POST",
+          url: `/api/applications/${withDomain.id}/dns/apply`,
+          headers: { cookie }
+        });
+        assert.equal(res.statusCode, 200, res.body);
+        const body = res.json() as {
+          action: string;
+          zone: string;
+          record: { type: string; name: string; value: string };
+          proxied: boolean;
+        };
+        assert.equal(body.action, "created");
+        assert.equal(body.zone, "example.com");
+        assert.deepEqual(body.record, {
+          type: "A",
+          name: "app.example.com",
+          value: EXPECTED_IP
+        });
+        assert.equal(body.proxied, false);
+
+        // Cloudflare received exactly the record the response reported.
+        const create = calls.find((c) => c.method === "POST");
+        assert.deepEqual(create?.body, {
+          type: "A",
+          name: "app.example.com",
+          content: EXPECTED_IP,
+          ttl: 1,
+          proxied: false
+        });
+
+        const audit = await prisma.auditLog.findFirst({
+          where: { action: "dns.record.apply" }
+        });
+        assert.ok(audit, "expected a dns.record.apply audit row");
+        assert.equal(audit.targetLabel, "app.example.com");
+        assert.ok(!JSON.stringify(audit).includes(CF_TOKEN));
+      } finally {
+        await dnsApp.close();
       }
     });
   });

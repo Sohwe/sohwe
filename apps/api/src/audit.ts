@@ -21,6 +21,7 @@ export type AuditTargetType =
   | "backup"
   | "github"
   | "datastore"
+  | "dns"
   | "host_fs"
   | "organization";
 
@@ -56,6 +57,9 @@ export type AuditAction =
   | "datastore.reveal"
   | "datastore.bind"
   | "datastore.unbind"
+  | "dns.credentials.set"
+  | "dns.credentials.delete"
+  | "dns.record.apply"
   | "github.connect"
   | "github.disconnect"
   | "host_fs.list"
@@ -94,6 +98,9 @@ export const AUDIT_ACTIONS: readonly AuditAction[] = [
   "datastore.reveal",
   "datastore.bind",
   "datastore.unbind",
+  "dns.credentials.set",
+  "dns.credentials.delete",
+  "dns.record.apply",
   "github.connect",
   "github.disconnect",
   "host_fs.list",

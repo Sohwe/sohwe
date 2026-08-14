@@ -28,6 +28,7 @@ import { registerAuditRoutes } from "./routes/audit";
 import { registerBackupRoutes } from "./routes/backups";
 import { registerApplicationRoutes } from "./routes/applications";
 import { registerDatastoreRoutes } from "./routes/datastores";
+import { registerDnsRoutes, type DnsRouteDeps } from "./routes/dns";
 import { registerGitHubRoutes } from "./routes/github";
 import { registerGitHubWebhookRoutes } from "./routes/github-webhook";
 import { registerHostFsRoutes } from "./routes/host-fs";
@@ -45,7 +46,7 @@ import type { ApiConfig } from "./env";
 
 export async function buildServer(
   config: ApiConfig,
-  opts: { logger?: boolean } = {}
+  opts: { logger?: boolean; dns?: DnsRouteDeps } = {}
 ): Promise<FastifyInstance> {
   const app = Fastify({
     logger: opts.logger ?? true,
@@ -201,6 +202,7 @@ export async function buildServer(
   await registerHostFsRoutes(app, config);
   await registerBackupRoutes(app);
   await registerDatastoreRoutes(app, config);
+  await registerDnsRoutes(app, config, opts.dns);
   await registerGitHubRoutes(app, config);
   await registerGitHubWebhookRoutes(app);
   await registerMemberRoutes(app, config);

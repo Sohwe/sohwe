@@ -20,10 +20,11 @@ This document describes how Sohwe is built and why. For what to run, see [`READM
 8. [As Built: Git-Push Deploys](#as-built-git-push-deploys)
 9. [As Built: Multi-User](#phase-6--multi-user)
 10. [Phase 7 — Managed Datastores](#phase-7--managed-datastores)
-11. [Cross-Cutting Concerns](#cross-cutting-concerns)
-12. [Development Workflow](#development-workflow)
-13. [Troubleshooting](#troubleshooting)
-14. [Resources](#resources)
+11. [Phase 8 — Custom Domain DNS Assist](#phase-8--custom-domain-dns-assist)
+12. [Cross-Cutting Concerns](#cross-cutting-concerns)
+13. [Development Workflow](#development-workflow)
+14. [Troubleshooting](#troubleshooting)
+15. [Resources](#resources)
 
 ---
 
@@ -332,6 +333,22 @@ Click **Create Postgres** or **Create Redis**, get a private service on the host
 **Bundles.** Datastore config (kind, name, slug, engine version, limits, public port, bindings by app slug) ships in portable bundles as of bundle format **v2** — never credentials or data. Restore generates fresh credentials, rewrites bound apps' injected keys to match, and lands datastores in `idle`; `overwrite` updates only name and limits, never the engine version of a live instance. v1 bundles still parse.
 
 **Constraints kept.** No public exposure without the explicit toggle. Passwords encrypted at rest, absent from logs, error messages, audit metadata, and list/detail responses; `GET /api/datastores/:id/connection` is the single deliberate, audited reveal. Deleting a datastore destroys its volume behind an explicit confirmation. The whole surface is admin-and-above.
+
+---
+
+## Phase 8 — Custom Domain DNS Assist
+
+*As built (first slice; Domain Connect deferred).*
+
+Setting a custom domain used to end with "and DNS to this host" — the user was on their own to figure out where their DNS lives and what record to create. Now the settings page answers both, and for Cloudflare can do the work itself.
+
+**Detection.** `GET /api/dns/inspect` (member-and-above; nothing secret) walks the domain's labels toward the root with server-side NS lookups until a zone answers — `app.example.com` → `example.com` — then maps the nameservers against a curated registry (`apps/api/src/dns/providers.ts`): Cloudflare (including its Foundation DNS enterprise nameservers), Namecheap, GoDaddy, Route 53, Google Cloud DNS, DigitalOcean, Vercel, Porkbun, Linode, OVH, Gandi, Name.com, IONOS, Hetzner. This identifies the **DNS host**, not the registrar — a Namecheap-registered domain on Cloudflare nameservers reports Cloudflare, which is where the record has to go. Unknown nameservers are shown raw rather than guessed at.
+
+**Verification.** The expected address is resolved from `SOHWE_BASE_DOMAIN` (falling back to a wildcard probe label, since hosts commonly publish only `*.<base-domain>`), compared against the domain's current A records: `verified`, `mismatch` (with a note that a Cloudflare-proxied record may still be routed correctly — the origin behind the proxy is unknowable from outside), `unresolved`, or `unknown` when the instance's own IP cannot be determined. The panel shows the exact record with copy buttons and a deep link into the provider's DNS console.
+
+**Cloudflare apply.** An admin stores one org-level API token (scoped: Zone → DNS → Edit), verified against Cloudflare's token endpoint on save, encrypted with the instance key in the `DnsProviderCredential` table, and never returned by any endpoint — the list route reports existence only. `POST /api/applications/:id/dns/apply` (admin-and-above) finds the zone among those the token can see by longest dot-boundary suffix match, then creates or updates the A record. Created records are DNS-only (`proxied: false`) so verification and ACME work immediately; updates keep the record's existing proxied flag — switching off someone's deliberate orange cloud is not this feature's call; an existing CNAME on the name is refused, never overwritten. Everything is audited (`dns.credentials.set` / `dns.credentials.delete` / `dns.record.apply`) with no token material anywhere.
+
+**Deliberately not done:** Namecheap's API (its `setHosts` replaces the domain's entire record set in one call — one bug away from deleting someone's MX records), and the Domain Connect flow, which needs a Sohwe service template registered with each participating provider and so is a separate effort. The DNS and Cloudflare modules take injected resolver/fetch dependencies, so the whole surface is unit- and route-tested without touching the network.
 
 ---
 

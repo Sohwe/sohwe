@@ -22,6 +22,7 @@ model Organization {
   invitations        Invitation[]
   auditLogs          AuditLog[]
   datastores         Datastore[]
+  dnsProviderCredentials DnsProviderCredential[]
 
   @@map("organizations")
 }
@@ -379,4 +380,23 @@ model DatastoreBinding {
   @@unique([datastoreId, applicationId])
   @@index([applicationId])
   @@map("datastore_bindings")
+}
+
+// --- Phase 8: Custom domain DNS assist ---------------------------------------
+
+// An org-level DNS provider API credential (currently only "cloudflare"), used
+// to create or update the record a custom domain needs. The token is encrypted
+// with the instance key (SOHWE_ENCRYPTION_KEY) and is never returned by any
+// endpoint — the list route reports only that a credential exists.
+model DnsProviderCredential {
+  id             String       @id @default(uuid())
+  organizationId String       @map("organization_id")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  provider       String       // cloudflare
+  tokenEncrypted Bytes        @map("token_encrypted")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+
+  @@unique([organizationId, provider])
+  @@map("dns_provider_credentials")
 }
