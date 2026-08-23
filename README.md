@@ -76,11 +76,11 @@ Three roles, enforced by the API on every request:
 | Role | Can do |
 | --- | --- |
 | `owner` | Everything, including changing roles and managing other owners. |
-| `admin` | Everything operational: apps, env vars, build variables, volumes, backups, Git, invitations, removing members. |
+| `admin` | Everything operational: apps, variables, volumes, backups, Git, invitations, removing members. |
 | `member` | Read-only, plus deploying and rolling back existing apps. |
 
 Anything that can expose an app's secrets is admin-and-above **including read
-access**: environment variables and build variables (even the masked lists), the
+access**: variables (even the masked list), the
 container file browser, alert destination webhook URLs, backups, and the GitHub
 connection.
 
@@ -89,20 +89,22 @@ role or delete their own account, and removing someone signs out every session
 they hold. Every mutating action lands in the **Audit log** — with variable *key
 names* and counts, never values.
 
-### Runtime vs. build variables
+### Variables and their scope
 
-An app's **Variables** page has two editors, both encrypted at rest and both
-admin-and-above:
+An app's **Variables** page is one list, encrypted at rest and admin-and-above.
+Every variable carries a scope that says where it applies:
 
-- **Environment variables** are injected into the running container at deploy
-  time. Nothing in the build sees them.
-- **Build variables** are passed to the image build — `nixpacks build --env
-  KEY=value`, or `docker build --build-arg KEY` for a Dockerfile (the name-only
-  form, so values never reach the command line). This is the only lever on the
-  build itself.
+- **Runtime only** — decrypted into the container's environment at deploy time.
+  Nothing in the build sees it. Credentials belong here.
+- **Build only** — passed to the image build: `nixpacks build --env KEY=value`,
+  or `docker build --build-arg KEY` for a Dockerfile (the name-only form, so
+  values never reach the command line).
+- **Build + runtime** — the default, for a value that is inlined at build time
+  *and* read by the running process. Set it once instead of twice.
 
-Reach for a build variable when the build needs to know something before the
-container exists:
+The scope of an existing variable can be changed from the list without
+revealing its value. Reach for build scope when the build needs to know
+something before the container exists:
 
 | Need | Set |
 | --- | --- |
@@ -118,10 +120,10 @@ fall back to its built-in default of Node 18, which is end-of-life and which
 current Next.js, Vite, and Tailwind refuse to build on. The build log says when
 this happens. Set `NIXPACKS_NODE_VERSION` to override, or pin it in the repo.
 
-Build variables end up in the built image and are readable with `docker
-history`, so keep runtime secrets in environment variables instead. A Dockerfile
-build only sees a variable it declares with a matching `ARG`. Either way,
-redeploy to apply.
+Anything scoped to the build ends up in the built image and is readable with
+`docker history`, so keep credentials on **Runtime only** — the editor flags a
+key that looks like a secret. A Dockerfile build additionally only sees a
+variable it declares with a matching `ARG`. Either way, redeploy to apply.
 
 ### Managed datastores
 

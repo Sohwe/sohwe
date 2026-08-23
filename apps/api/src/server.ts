@@ -35,6 +35,7 @@ import { registerGitHubWebhookRoutes } from "./routes/github-webhook";
 import { registerHostFsRoutes } from "./routes/host-fs";
 import { registerEnvVarRoutes } from "./routes/env-vars";
 import { registerMemberRoutes } from "./routes/members";
+import { registerVariableRoutes } from "./routes/variables";
 import { registerVolumeRoutes } from "./routes/volumes";
 import { mapPrismaError } from "./prisma-errors";
 import { AUTH_RATE_LIMIT } from "./rate-limit";
@@ -199,6 +200,7 @@ export async function buildServer(
   await registerApplicationRoutes(app);
   await registerEnvVarRoutes(app);
   await registerBuildArgRoutes(app);
+  await registerVariableRoutes(app);
   await registerVolumeRoutes(app);
   await registerAlertDestinationRoutes(app);
   await registerAppFilesystemRoutes(app);

@@ -143,6 +143,54 @@ export const BuildArgsPatchSchema = z.object({
 export type BuildArgsPatch = z.infer<typeof BuildArgsPatchSchema>;
 
 /**
+ * Where a variable is injected. Railway-style: one list, and each entry says
+ * which side of the lifecycle sees it.
+ *
+ * - `runtime` — decrypted into the container's `Env` at create time. Secrets
+ *   belong here: nothing about them reaches the image.
+ * - `build` — passed to `nixpacks build --env` / `docker build --build-arg`.
+ *   Toolchain pins (`NIXPACKS_NODE_VERSION`) and registry credentials.
+ * - `both` — the default, for values a framework inlines at build *and* the
+ *   process reads at runtime (`NEXT_PUBLIC_*`, `NODE_ENV`).
+ *
+ * The scope is not stored as a field: it is derived from which of the app's two
+ * encrypted maps hold the key, so this vocabulary is a wire concern only.
+ */
+export const VariableScopeSchema = z.enum(["runtime", "build", "both"]);
+export type VariableScope = z.infer<typeof VariableScopeSchema>;
+
+export const VariableEntrySchema = z.object({
+  key: EnvKeySchema,
+  value: z.string().max(MAX_ENV_VALUE_LEN),
+  scope: VariableScopeSchema.default("both")
+});
+export type VariableEntry = z.infer<typeof VariableEntrySchema>;
+
+/** Replaces every variable on the app — both maps are rewritten. */
+export const VariablesReplaceSchema = z.object({
+  vars: z.array(VariableEntrySchema).max(500)
+});
+export type VariablesReplace = z.infer<typeof VariablesReplaceSchema>;
+
+/**
+ * Change a variable's scope without resending its value — the masked list has
+ * no plaintext to resend, and forcing a reveal to move a key between build and
+ * runtime would mean decrypting every secret to adjust one.
+ */
+export const VariableRescopeSchema = z.object({
+  key: EnvKeySchema,
+  scope: VariableScopeSchema
+});
+export type VariableRescope = z.infer<typeof VariableRescopeSchema>;
+
+export const VariablesPatchSchema = z.object({
+  set: z.array(VariableEntrySchema).max(500).optional(),
+  rescope: z.array(VariableRescopeSchema).max(500).optional(),
+  unset: z.array(EnvKeySchema).max(500).optional()
+});
+export type VariablesPatch = z.infer<typeof VariablesPatchSchema>;
+
+/**
  * Absolute path under which a named volume is mounted; must be non-root with no `..`.
  */
 export const VolumeCreateSchema = z.object({

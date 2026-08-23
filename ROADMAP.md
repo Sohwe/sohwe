@@ -75,7 +75,7 @@ Evidence: `apps/api/src/routes/applications.ts`, `apps/api/src/routes/app-filesy
 - [x] Commit subject recorded for deployments.
 - [x] Rollback reuses a previous successful image.
 
-Evidence: `packages/builder/src/index.ts`, `packages/builder/src/node-version.ts`, `packages/types/src/index.ts`, `apps/api/src/routes/applications.ts`, `apps/api/src/routes/build-args.ts`, `apps/worker/src/index.ts`, `apps/dashboard/src/components/apps/AppSettingsForm.tsx`, `apps/dashboard/src/components/apps/BuildArgsManager.tsx`, `apps/dashboard/src/components/apps/CreateAppDialog.tsx`, `apps/dashboard/src/components/apps/DeploymentsTable.tsx`.
+Evidence: `packages/builder/src/index.ts`, `packages/builder/src/node-version.ts`, `packages/types/src/index.ts`, `apps/api/src/routes/applications.ts`, `apps/api/src/routes/build-args.ts`, `apps/api/src/routes/variables.ts`, `apps/worker/src/index.ts`, `apps/dashboard/src/components/apps/AppSettingsForm.tsx`, `apps/dashboard/src/components/apps/VariablesManager.tsx`, `apps/dashboard/src/components/apps/CreateAppDialog.tsx`, `apps/dashboard/src/components/apps/DeploymentsTable.tsx`.
 
 ### Phase 3 - Stateful Apps
 

@@ -355,6 +355,8 @@ describe("API routes", { skip }, () => {
         ["PUT", `/api/applications/${id}/env`, { vars: { A: "1" } }],
         ["GET", `/api/applications/${id}/build-args`, undefined],
         ["PUT", `/api/applications/${id}/build-args`, { vars: { A: "1" } }],
+        ["GET", `/api/applications/${id}/variables`, undefined],
+        ["PUT", `/api/applications/${id}/variables`, { vars: [] }],
         ["GET", `/api/applications/${id}/stats`, undefined],
         ["GET", `/api/applications/${id}/volumes`, undefined]
       ] as const) {
@@ -648,6 +650,144 @@ describe("API routes", { skip }, () => {
       assert.equal(res.statusCode, 400);
     });
 
+    it("presents both maps as one scoped variable list", async () => {
+      const cookie = await signIn();
+      const created = await createApp(cookie);
+      const url = `/api/applications/${created.id}/variables`;
+
+      const put = await app.inject({
+        method: "PUT",
+        url,
+        headers: { cookie },
+        payload: {
+          vars: [
+            { key: "DATABASE_URL", value: "postgres://secret", scope: "runtime" },
+            { key: "NIXPACKS_NODE_VERSION", value: "22", scope: "build" },
+            { key: "NEXT_PUBLIC_API_URL", value: "https://api.example.test", scope: "both" }
+          ]
+        }
+      });
+      assert.equal(put.statusCode, 200, put.body);
+
+      // The scope is derived from the two columns, so this is also a check
+      // that the write landed in the right ones.
+      const row = await prisma.application.findUniqueOrThrow({
+        where: { id: created.id },
+        select: { envVarsEncrypted: true, buildArgsEncrypted: true }
+      });
+      assert.deepEqual(
+        Object.keys(decryptJson(row.envVarsEncrypted!) as Record<string, string>).sort(),
+        ["DATABASE_URL", "NEXT_PUBLIC_API_URL"]
+      );
+      assert.deepEqual(
+        Object.keys(decryptJson(row.buildArgsEncrypted!) as Record<string, string>).sort(),
+        ["NEXT_PUBLIC_API_URL", "NIXPACKS_NODE_VERSION"]
+      );
+
+      const listed = await app.inject({ method: "GET", url, headers: { cookie } });
+      assert.equal(listed.statusCode, 200);
+      assert.deepEqual(
+        (listed.json() as { items: { key: string; scope: string }[] }).items.map((i) => [i.key, i.scope]),
+        [
+          ["DATABASE_URL", "runtime"],
+          ["NEXT_PUBLIC_API_URL", "both"],
+          ["NIXPACKS_NODE_VERSION", "build"]
+        ]
+      );
+      assert.ok(!listed.body.includes("postgres://secret"), "masked listing leaked a value");
+
+      // The older per-map routes still see their own half.
+      const env = await app.inject({
+        method: "GET",
+        url: `/api/applications/${created.id}/env`,
+        headers: { cookie }
+      });
+      assert.deepEqual((env.json() as { keys: string[] }).keys, ["DATABASE_URL", "NEXT_PUBLIC_API_URL"]);
+    });
+
+    it("moves a variable between build and runtime without resending its value", async () => {
+      const cookie = await signIn();
+      const created = await createApp(cookie);
+      const url = `/api/applications/${created.id}/variables`;
+      await app.inject({
+        method: "PUT",
+        url,
+        headers: { cookie },
+        payload: { vars: [{ key: "SHARED", value: "v", scope: "both" }] }
+      });
+
+      const rescoped = await app.inject({
+        method: "PATCH",
+        url,
+        headers: { cookie },
+        payload: { rescope: [{ key: "SHARED", scope: "runtime" }] }
+      });
+      assert.equal(rescoped.statusCode, 200, rescoped.body);
+
+      // Narrowing the scope must actually stop the value reaching the image.
+      const row = await prisma.application.findUniqueOrThrow({
+        where: { id: created.id },
+        select: { envVarsEncrypted: true, buildArgsEncrypted: true }
+      });
+      assert.equal(row.buildArgsEncrypted, null);
+      assert.deepEqual(decryptJson(row.envVarsEncrypted!), { SHARED: "v" });
+
+      const missing = await app.inject({
+        method: "PATCH",
+        url,
+        headers: { cookie },
+        payload: { rescope: [{ key: "NOPE", scope: "build" }] }
+      });
+      assert.equal(missing.statusCode, 400, missing.body);
+    });
+
+    it("reveals scoped values only on request, and audits each map it exposed", async () => {
+      const cookie = await signIn();
+      const created = await createApp(cookie);
+      const url = `/api/applications/${created.id}/variables`;
+      await app.inject({
+        method: "PUT",
+        url,
+        headers: { cookie },
+        payload: {
+          vars: [
+            { key: "SECRET_TOKEN", value: "runtime-secret", scope: "runtime" },
+            { key: "TOOLCHAIN", value: "22", scope: "build" }
+          ]
+        }
+      });
+
+      const revealed = await app.inject({ method: "GET", url: `${url}?reveal=true`, headers: { cookie } });
+      assert.equal(revealed.statusCode, 200);
+      assert.ok(revealed.body.includes("runtime-secret"));
+
+      const actions = await prisma.auditLog.findMany({ select: { action: true } });
+      const names = actions.map((a) => a.action);
+      assert.ok(names.includes("env.reveal"), "expected an env reveal to be audited");
+      assert.ok(names.includes("build_args.reveal"), "expected a build variable reveal to be audited");
+    });
+
+    it("rejects an empty variables patch and a duplicated key", async () => {
+      const cookie = await signIn();
+      const created = await createApp(cookie);
+      const url = `/api/applications/${created.id}/variables`;
+      const empty = await app.inject({ method: "PATCH", url, headers: { cookie }, payload: {} });
+      assert.equal(empty.statusCode, 400);
+
+      const dupe = await app.inject({
+        method: "PUT",
+        url,
+        headers: { cookie },
+        payload: {
+          vars: [
+            { key: "A", value: "1", scope: "both" },
+            { key: "A", value: "2", scope: "runtime" }
+          ]
+        }
+      });
+      assert.equal(dupe.statusCode, 400, dupe.body);
+    });
+
     it("deletes an application and its rows", async () => {
       const cookie = await signIn();
       const created = await createApp(cookie);
@@ -712,7 +852,9 @@ describe("API routes", { skip }, () => {
         ["PUT", `/api/applications/${foreignId}/env`, { vars: { A: "1" } }],
         ["GET", `/api/applications/${foreignId}/env`, undefined],
         ["PUT", `/api/applications/${foreignId}/build-args`, { vars: { A: "1" } }],
-        ["GET", `/api/applications/${foreignId}/build-args`, undefined]
+        ["GET", `/api/applications/${foreignId}/build-args`, undefined],
+        ["GET", `/api/applications/${foreignId}/variables`, undefined],
+        ["PUT", `/api/applications/${foreignId}/variables`, { vars: [] }]
       ] as const) {
         const res = await app.inject({ method, url, headers: { cookie }, payload });
         assert.equal(res.statusCode, 404, `${method} ${url} returned ${String(res.statusCode)}`);
@@ -967,6 +1109,13 @@ describe("API routes", { skip }, () => {
         ["GET", `/api/applications/${created.id}/build-args`, undefined],
         ["PUT", `/api/applications/${created.id}/build-args`, { vars: { A: "1" } }],
         ["PATCH", `/api/applications/${created.id}/build-args`, { set: { A: "1" } }],
+        ["GET", `/api/applications/${created.id}/variables`, undefined],
+        ["PUT", `/api/applications/${created.id}/variables`, { vars: [] }],
+        [
+          "PATCH",
+          `/api/applications/${created.id}/variables`,
+          { set: [{ key: "A", value: "1", scope: "both" }] }
+        ],
         // The container filesystem reaches config files and /proc/self/environ.
         ["GET", `/api/applications/${created.id}/fs/list`, undefined],
         // Alert destination URLs are bearer credentials for a chat channel.

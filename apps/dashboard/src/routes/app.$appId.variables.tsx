@@ -2,8 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
 import { api } from "@/lib/api";
 import type { AppRow } from "@/lib/types";
-import { BuildArgsManager } from "@/components/apps/BuildArgsManager";
-import { EnvManager } from "@/components/apps/EnvManager";
+import { VariablesManager } from "@/components/apps/VariablesManager";
 import { PageHeader } from "@/components/common/PageHeader";
 
 export function AppVariablesPage() {
@@ -19,10 +18,9 @@ export function AppVariablesPage() {
     <div className="space-y-6">
       <PageHeader
         title="Variables"
-        description="Encrypted at rest. Redeploy to apply — runtime variables reach the container, build variables reach the image build."
+        description="Encrypted at rest. One list — each variable applies to the build, the running container, or both. Redeploy to apply."
       />
-      <EnvManager appId={appId} onChanged={invalidate} />
-      <BuildArgsManager appId={appId} onChanged={invalidate} />
+      <VariablesManager appId={appId} onChanged={invalidate} />
     </div>
   );
 }
