@@ -28,7 +28,7 @@ const APP: SpecApp = {
   id: "11111111-2222-3333-4444-555555555555",
   slug: "web",
   port: 3000,
-  domain: null,
+  domains: [],
   memoryLimitMb: null,
   cpuLimit: null
 };
@@ -164,22 +164,37 @@ describe("containerNameFor", () => {
 
 describe("resolveHosts", () => {
   it("always includes the generated subdomain", () => {
-    assert.deepEqual(resolveHosts({ slug: "web", domain: null }, "apps.example.com"), [
+    assert.deepEqual(resolveHosts({ slug: "web", domains: [] }, "apps.example.com"), [
       "web.apps.example.com"
     ]);
   });
 
-  it("adds a custom domain alongside it", () => {
+  it("adds every custom domain alongside it, in order", () => {
     assert.deepEqual(
-      resolveHosts({ slug: "web", domain: "www.acme.com" }, "apps.example.com"),
-      ["web.apps.example.com", "www.acme.com"]
+      resolveHosts(
+        { slug: "web", domains: ["acme.com", "www.acme.com"] },
+        "apps.example.com"
+      ),
+      ["web.apps.example.com", "acme.com", "www.acme.com"]
     );
   });
 
   it("does not duplicate a custom domain equal to the generated one", () => {
     assert.deepEqual(
-      resolveHosts({ slug: "web", domain: "web.apps.example.com" }, "apps.example.com"),
+      resolveHosts({ slug: "web", domains: ["web.apps.example.com"] }, "apps.example.com"),
       ["web.apps.example.com"]
+    );
+  });
+
+  it("drops repeats and normalizes case", () => {
+    // A repeated Host() term is not fatal to Traefik, but it is noise in the
+    // rule and hints the caller passed the same domain twice.
+    assert.deepEqual(
+      resolveHosts(
+        { slug: "web", domains: ["Acme.COM", "acme.com", " acme.com "] },
+        "apps.example.com"
+      ),
+      ["web.apps.example.com", "acme.com"]
     );
   });
 });
@@ -258,7 +273,7 @@ describe("buildTraefikLabels", () => {
   });
 
   it("adds a websecure router and an HTTP redirect when TLS applies", () => {
-    const l = labels({ domain: "acme.com" }, { httpsEnabled: true });
+    const l = labels({ domains: ["acme.com"] }, { httpsEnabled: true });
     assert.equal(l[`traefik.http.routers.${R}s.entrypoints`], "websecure");
     assert.equal(l[`traefik.http.routers.${R}s.tls`], "true");
     assert.equal(l[`traefik.http.routers.${R}s.tls.certresolver`], "letsencrypt");
@@ -273,14 +288,14 @@ describe("buildTraefikLabels", () => {
 
   it("uses the configured cert resolver", () => {
     const l = labels(
-      { domain: "acme.com" },
+      { domains: ["acme.com"] },
       { httpsEnabled: true, certResolver: "dns-cloudflare" }
     );
     assert.equal(l[`traefik.http.routers.${R}s.tls.certresolver`], "dns-cloudflare");
   });
 
   it("gives both routers the same host rule", () => {
-    const l = labels({ domain: "acme.com" }, { httpsEnabled: true });
+    const l = labels({ domains: ["acme.com"] }, { httpsEnabled: true });
     assert.equal(l[`traefik.http.routers.${R}.rule`], l[`traefik.http.routers.${R}s.rule`]);
     assert.match(l[`traefik.http.routers.${R}.rule`] ?? "", /acme\.com/);
   });

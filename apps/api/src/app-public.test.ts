@@ -57,7 +57,6 @@ describe("defaultApplicationSelect", () => {
       "autoDeploy",
       "buildMode",
       "port",
-      "domain",
       "status",
       "memoryLimitMb",
       "cpuLimit"
@@ -166,7 +165,7 @@ describe("serializeAppListRow", () => {
         }
       ]
     };
-    const out = serializeAppListRow(row);
+    const out = serializeAppListRow({ ...row, domains: [] });
     // The row's non-volume fields are passed through untouched. They are typed
     // as an index signature, so they are read back the same way.
     assert.equal((out as Record<string, unknown>).id, "a1");
@@ -179,9 +178,33 @@ describe("serializeAppListRow", () => {
   });
 
   it("handles an app with no volumes", () => {
-    const out = serializeAppListRow({ id: "a1", volumes: [] });
+    const out = serializeAppListRow({ id: "a1", volumes: [], domains: [] });
     assert.deepEqual(out.volumes, []);
     assert.doesNotThrow(() => JSON.stringify(out));
+  });
+
+  it("derives `domain` from the primary domain", () => {
+    // Every caller of the old `Application.domain` column reads this field.
+    const domain = (hostname: string, isPrimary: boolean) => ({
+      id: hostname,
+      applicationId: "a1",
+      hostname,
+      isPrimary,
+      lastStatus: null,
+      lastCheckedAt: null,
+      verifiedAt: null,
+      createdAt: new Date(0)
+    });
+    const out = serializeAppListRow({
+      id: "a1",
+      volumes: [],
+      domains: [domain("acme.com", false), domain("www.acme.com", true)]
+    });
+    assert.equal(out.domain, "www.acme.com");
+  });
+
+  it("reports no domain when none is primary", () => {
+    assert.equal(serializeAppListRow({ id: "a1", volumes: [], domains: [] }).domain, null);
   });
 });
 

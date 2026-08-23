@@ -29,7 +29,9 @@ import { registerBackupRoutes } from "./routes/backups";
 import { registerBuildArgRoutes } from "./routes/build-args";
 import { registerApplicationRoutes } from "./routes/applications";
 import { registerDatastoreRoutes } from "./routes/datastores";
-import { registerDnsRoutes, type DnsRouteDeps } from "./routes/dns";
+import { registerDnsRoutes } from "./routes/dns";
+import { registerDomainRoutes } from "./routes/domains";
+import { createDnsLookups, type DnsRouteDeps } from "./dns/inspect";
 import { registerGitHubRoutes } from "./routes/github";
 import { registerGitHubWebhookRoutes } from "./routes/github-webhook";
 import { registerHostFsRoutes } from "./routes/host-fs";
@@ -85,7 +87,10 @@ export async function buildServer(
   // and on the deploy form. Plumbed through from sohwe.env via compose so
   // operators can change the domain without rebuilding the dashboard image.
   app.get("/api/config", async () => ({
-    baseDomain: config.baseDomain
+    baseDomain: config.baseDomain,
+    // The dashboard needs this to say whether a custom domain will actually
+    // get a certificate, rather than showing an https:// link that times out.
+    httpsEnabled: config.httpsEnabled
   }));
 
   app.get("/api/setup/status", async (req) => buildSetupStatus(req));
@@ -207,7 +212,12 @@ export async function buildServer(
   await registerHostFsRoutes(app, config);
   await registerBackupRoutes(app);
   await registerDatastoreRoutes(app, config);
-  await registerDnsRoutes(app, config, opts.dns);
+  // One set of resolvers for the whole instance, shared by the instance-level
+  // DNS routes and the per-app domain routes so both answer identically.
+  const dnsLookups = createDnsLookups(opts.dns);
+  const dnsFetch = opts.dns?.fetchImpl ?? fetch;
+  await registerDnsRoutes(app, config, dnsLookups, dnsFetch);
+  await registerDomainRoutes(app, config, dnsLookups, dnsFetch);
   await registerGitHubRoutes(app, config);
   await registerGitHubWebhookRoutes(app);
   await registerMemberRoutes(app, config);

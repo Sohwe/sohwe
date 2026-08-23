@@ -36,7 +36,12 @@ export type AppRow = {
   buildMode: string;
   buildCmd: string | null;
   startCmd: string | null;
+  /**
+   * The app's primary custom domain, or null. Derived by the API from
+   * `domains` — the full list is the source of truth.
+   */
   domain: string | null;
+  domains?: AppDomain[];
   memoryLimitMb: number | null;
   cpuLimit: number | null;
   createdAt: string;
@@ -399,9 +404,38 @@ export type DnsCredentialInfo = {
 
 export type DnsApplyResult = {
   action: "created" | "updated";
+  provider: string;
   zone: string;
   record: { type: "A"; name: string; value: string };
-  proxied: boolean;
+  /** Cloudflare only — absent for providers with no proxy in front of records. */
+  proxied?: boolean;
+};
+
+/** A provider Sohwe can write records through, and where to get a token. */
+export type DnsProviderOption = {
+  id: string;
+  label: string;
+  tokenUrl: string;
+  tokenScope: string;
+};
+
+/** A hostname an application answers on, beyond its generated subdomain. */
+export type AppDomain = {
+  id: string;
+  applicationId: string;
+  hostname: string;
+  isPrimary: boolean;
+  /** Cached result of the last DNS check; null before the first one. */
+  lastStatus: DnsInspection["status"] | null;
+  lastCheckedAt: string | null;
+  verifiedAt: string | null;
+  createdAt: string;
+};
+
+/** Response of adding a domain, and of re-verifying one. */
+export type DomainVerifyResult = {
+  domain: AppDomain;
+  dns: DnsInspection;
 };
 
 /** Response of the deliberate, audited connection-info reveal. */

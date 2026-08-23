@@ -47,6 +47,7 @@ export async function gatherBundleApps(
     where: { organizationId },
     include: {
       volumes: { orderBy: { createdAt: "asc" } },
+      domains: { orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }] },
       alertDestinations: { orderBy: { createdAt: "asc" } }
     },
     orderBy: { createdAt: "asc" }
@@ -61,7 +62,10 @@ export async function gatherBundleApps(
     buildCmd: a.buildCmd,
     startCmd: a.startCmd,
     port: a.port,
-    domain: a.domain,
+    // `domain` is the primary one, carried for bundles written before custom
+    // domains became a list; `domains` is the complete set.
+    domain: a.domains.find((d) => d.isPrimary)?.hostname ?? null,
+    domains: a.domains.map((d) => d.hostname),
     memoryLimitMb: a.memoryLimitMb,
     cpuLimit: a.cpuLimit == null ? null : Number(a.cpuLimit),
     volumes: a.volumes.map((v) => ({

@@ -278,7 +278,15 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
   // the deployment row only records the sha on success.
   let commitSha: string | null = null;
   const app = await prisma.application.findFirst({
-    where: { id: applicationId }
+    where: { id: applicationId },
+    // Custom domains all become `Host()` terms on the container's Traefik
+    // router. Primary first so it leads the rule and reads as *the* URL.
+    include: {
+      domains: {
+        orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }],
+        select: { hostname: true }
+      }
+    }
   });
   if (!app) {
     throw new Error(`Application ${applicationId} not found`);
@@ -429,7 +437,8 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
     logTails.stop(app.id);
     await stopAndRemoveAppContainers(docker, app.id);
 
-    const hosts = resolveHosts(app, routing.baseDomain);
+    const specApp = { ...app, domains: app.domains.map((d) => d.hostname) };
+    const hosts = resolveHosts(specApp, routing.baseDomain);
     onLog(
       `[sohwe] Starting container (Traefik: ${buildHostRule(hosts)}, port ${String(app.port)}, tls=${String(shouldUseTls(hosts, routing.httpsEnabled))})...`
     );
@@ -443,7 +452,7 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
 
     const c = await docker.createContainer(
       buildContainerSpec({
-        app,
+        app: specApp,
         deploymentId,
         imageTag,
         volumes: vols,

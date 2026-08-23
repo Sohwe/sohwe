@@ -3,7 +3,7 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { ExternalLink, Rocket } from "lucide-react";
 import { toast } from "sonner";
 import { BuildModeBadge, AppStatusBadge } from "./BuildModeBadge";
-import { useBaseDomain } from "@/lib/config";
+import { useAppConfig } from "@/lib/config";
 import { formatRelativeTime, shortCommitSha, truncMsg } from "@/lib/format";
 import type { AppRow } from "@/lib/types";
 import { getCurrentDeploymentId } from "@/lib/types";
@@ -17,8 +17,9 @@ import { MoreVertical } from "lucide-react";
 export function AppCard({ app }: { app: AppRow }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const baseDomain = useBaseDomain();
-  const appUrl = `http://${app.slug}.${baseDomain}`;
+  const { baseDomain, httpsEnabled } = useAppConfig();
+  const scheme = httpsEnabled ? "https" : "http";
+  const appUrl = `${scheme}://${app.slug}.${baseDomain}`;
   const lastDep = app.deployments?.[0]
     ? [...(app.deployments ?? [])].sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt))[0]
     : undefined;
@@ -80,7 +81,7 @@ export function AppCard({ app }: { app: AppRow }) {
                 </DropdownMenuItem>
                 {app.domain ? (
                   <DropdownMenuItem asChild>
-                    <a href={`https://${app.domain}`} target="_blank" rel="noreferrer" className="flex items-center gap-2">
+                    <a href={`${scheme}://${app.domain}`} target="_blank" rel="noreferrer" className="flex items-center gap-2">
                       <ExternalLink className="h-3.5 w-3.5" /> Open {app.domain}
                     </a>
                   </DropdownMenuItem>
@@ -110,7 +111,7 @@ export function AppCard({ app }: { app: AppRow }) {
           </a>
         </div>
         {app.domain ? (
-          <a href={`https://${app.domain}`} className="mt-1 block text-xs text-emerald-600 hover:underline dark:text-emerald-400" target="_blank" rel="noreferrer">
+          <a href={`${scheme}://${app.domain}`} className="mt-1 block text-xs text-emerald-600 hover:underline dark:text-emerald-400" target="_blank" rel="noreferrer">
             {app.domain}
           </a>
         ) : null}

@@ -643,6 +643,9 @@ export async function registerBackupRoutes(app: FastifyInstance) {
         let overwritten = 0;
         let skipped = 0;
         let renamed = 0;
+        // Domains in the bundle that another app on this instance already
+        // holds, and so could not be restored.
+        let domainsSkipped = 0;
         /** Bundle app slug -> restored/overwritten app id, for datastore bindings. */
         const appIdByBundleSlug = new Map<string, string>();
 
@@ -662,6 +665,26 @@ export async function registerBackupRoutes(app: FastifyInstance) {
             url: d.url,
             enabled: d.enabled
           }));
+          // Hostnames are unique across the whole instance, so a bundle can
+          // name a domain some *other* app already answers on. Those are
+          // dropped and counted rather than failing the restore: the rest of
+          // the app's configuration is still worth restoring, and the operator
+          // is told how many were left out.
+          const taken = await tx.domain.findMany({
+            where: {
+              hostname: { in: a.domains },
+              ...(collides ? { NOT: { applicationId: idBySlug.get(a.slug) } } : {})
+            },
+            select: { hostname: true }
+          });
+          const takenSet = new Set(taken.map((d) => d.hostname));
+          const domainCreate = a.domains
+            .filter((h) => !takenSet.has(h))
+            .map((hostname) => ({
+              hostname,
+              isPrimary: hostname === (a.domain ?? a.domains[0])
+            }));
+          domainsSkipped += a.domains.length - domainCreate.length;
           const restoredRef = parseGitHubRepoUrl(a.gitRepo);
           const scalars = {
             name: a.name,
@@ -675,7 +698,6 @@ export async function registerBackupRoutes(app: FastifyInstance) {
             buildCmd: a.buildCmd,
             startCmd: a.startCmd,
             port: a.port,
-            domain: a.domain,
             memoryLimitMb: a.memoryLimitMb,
             cpuLimit: a.cpuLimit,
             envVarsEncrypted: envEncrypted,
@@ -695,7 +717,13 @@ export async function registerBackupRoutes(app: FastifyInstance) {
               data: { ...scalars, status: "idle" }
             });
             await tx.volume.deleteMany({ where: { applicationId: appId } });
+            await tx.domain.deleteMany({ where: { applicationId: appId } });
             await tx.alertDestination.deleteMany({ where: { applicationId: appId } });
+            if (domainCreate.length > 0) {
+              await tx.domain.createMany({
+                data: domainCreate.map((d) => ({ ...d, applicationId: appId }))
+              });
+            }
             if (volumeCreate.length > 0) {
               await tx.volume.createMany({
                 data: volumeCreate.map((v) => ({ ...v, applicationId: appId }))
@@ -726,6 +754,7 @@ export async function registerBackupRoutes(app: FastifyInstance) {
               status: "idle",
               ...scalars,
               volumes: volumeCreate.length > 0 ? { create: volumeCreate } : undefined,
+              domains: domainCreate.length > 0 ? { create: domainCreate } : undefined,
               alertDestinations:
                 alertCreate.length > 0 ? { create: alertCreate } : undefined
             }
@@ -743,7 +772,14 @@ export async function registerBackupRoutes(app: FastifyInstance) {
           appIdByBundleSlug
         );
 
-        return { created, overwritten, skipped, renamed, ...datastores };
+        return {
+          created,
+          overwritten,
+          skipped,
+          renamed,
+          domainsSkipped,
+          ...datastores
+        };
       });
 
       await recordAudit(req, {

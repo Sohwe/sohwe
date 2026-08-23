@@ -5,11 +5,18 @@
 // The token is a secret. It goes into the Authorization header and nowhere
 // else — never into thrown errors, which surface in API responses and logs.
 
+import {
+  DnsApiError,
+  pickZoneFor,
+  type DnsDriver,
+  type UpsertResult
+} from "./driver";
+
 const CF_API = "https://api.cloudflare.com/client/v4";
 
-export class CloudflareApiError extends Error {
+export class CloudflareApiError extends DnsApiError {
   constructor(message: string) {
-    super(message);
+    super(message, "cloudflare");
     this.name = "CloudflareApiError";
   }
 }
@@ -109,14 +116,7 @@ export async function findCloudflareZone(
     const totalPages = body.result_info?.total_pages ?? 1;
     if (page >= totalPages) break;
   }
-  let best: CloudflareZone | null = null;
-  for (const zone of zones) {
-    const matches = domain === zone.name || domain.endsWith(`.${zone.name}`);
-    if (matches && (!best || zone.name.length > best.name.length)) {
-      best = zone;
-    }
-  }
-  return best;
+  return pickZoneFor(domain, zones);
 }
 
 type CfRecord = {
@@ -191,3 +191,17 @@ export async function upsertCloudflareARecord(
   });
   return { action: "created", proxied: false };
 }
+
+export const cloudflareDriver: DnsDriver = {
+  id: "cloudflare",
+  label: "Cloudflare",
+  tokenHelp: {
+    url: "https://dash.cloudflare.com/profile/api-tokens",
+    scope: "an API token scoped to this zone (Zone → DNS → Edit)"
+  },
+  verifyToken: (token, fetchImpl) => verifyCloudflareToken(token, fetchImpl),
+  findZone: (token, domain, fetchImpl) =>
+    findCloudflareZone(token, domain, fetchImpl),
+  upsertARecord: (token, zone, name, ip, fetchImpl): Promise<UpsertResult> =>
+    upsertCloudflareARecord(token, zone, name, ip, fetchImpl)
+};

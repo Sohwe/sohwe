@@ -18,7 +18,6 @@ export function AppSettingsForm({ app, onDelete }: { app: AppRow; onDelete?: () 
   const [buildMode, setBuildMode] = useState<BuildMode>((app.buildMode as BuildMode) ?? "auto");
   const [buildCmd, setBuildCmd] = useState(app.buildCmd ?? "");
   const [startCmd, setStartCmd] = useState(app.startCmd ?? "");
-  const [domain, setDomain] = useState(app.domain ?? "");
   const [port, setPort] = useState(app.port);
   const [branch, setBranch] = useState(app.gitBranch);
   const [memMb, setMemMb] = useState(app.memoryLimitMb != null ? String(app.memoryLimitMb) : "");
@@ -31,7 +30,6 @@ export function AppSettingsForm({ app, onDelete }: { app: AppRow; onDelete?: () 
         buildMode,
         buildCmd: buildCmd ? buildCmd : null,
         startCmd: startCmd ? startCmd : null,
-        domain: domain ? domain : null,
         port,
         gitBranch: branch,
         memoryLimitMb: memMb.trim() === "" ? null : Number(memMb),
@@ -102,13 +100,6 @@ export function AppSettingsForm({ app, onDelete }: { app: AppRow; onDelete?: () 
               </Field>
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Custom domain (optional)">
-                <Input
-                  value={domain}
-                  onChange={(e) => setDomain(e.target.value.toLowerCase())}
-                  placeholder="app.example.com"
-                />
-              </Field>
               <Field label="Container port">
                 <Input
                   type="number"
@@ -142,11 +133,6 @@ export function AppSettingsForm({ app, onDelete }: { app: AppRow; onDelete?: () 
                 />
               </Field>
             </div>
-            <p className="text-xs text-muted-foreground">
-              Custom domain + HTTPS needs{" "}
-              <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">SOHWE_HTTPS_ENABLED=true</code> and
-              DNS to this host.
-            </p>
             <div className="pt-1">
               <Button type="submit" disabled={update.isPending}>
                 {update.isPending ? "Saving…" : "Save all settings"}

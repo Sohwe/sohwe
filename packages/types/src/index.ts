@@ -40,6 +40,30 @@ const OptionalDomain = z
   .transform((v) => (v === "" ? undefined : v))
   .pipe(DomainSchema.optional());
 
+/**
+ * Turn what people actually paste into a bare hostname: a copied address bar
+ * ("https://app.example.com/pricing"), a trailing root dot, stray whitespace,
+ * or mixed case. Anything left over still has to satisfy `DomainSchema`, so
+ * this widens what is *accepted*, never what is *valid*.
+ */
+export function normalizeHostname(input: string): string {
+  return input
+    .trim()
+    .toLowerCase()
+    .replace(/^[a-z][a-z0-9+.-]*:\/\//, "")
+    .replace(/[/?#].*$/, "")
+    .replace(/:\d+$/, "")
+    .replace(/\.$/, "");
+}
+
+/** Body for `POST /api/applications/:id/domains`. */
+export const CreateDomainSchema = z.object({
+  hostname: z.string().transform(normalizeHostname).pipe(DomainSchema),
+  /** Make this the app's primary domain, demoting any current one. */
+  primary: z.boolean().default(false)
+});
+export type CreateDomainInput = z.infer<typeof CreateDomainSchema>;
+
 export const CreateApplicationSchema = z.object({
   name: z.string().min(1),
   slug: z.string().regex(/^[a-z0-9-]+$/),
@@ -58,6 +82,11 @@ export type CreateApplicationInput = z.infer<typeof CreateApplicationSchema>;
 /**
  * Partial update for application settings (Phase 2). Everything is optional;
  * the server only touches keys that are actually present.
+ *
+ * Custom domains are deliberately absent: an app can carry several, and they
+ * are managed through `/api/applications/:id/domains` so that adding one can
+ * also check DNS and claim the hostname exclusively. `CreateApplicationSchema`
+ * still takes a `domain` purely as a shortcut for the first one.
  */
 export const UpdateApplicationSchema = z
   .object({
@@ -67,7 +96,6 @@ export const UpdateApplicationSchema = z
     buildMode: z.enum(["auto", "dockerfile", "nixpacks"]).optional(),
     buildCmd: z.string().nullable().optional(),
     startCmd: z.string().nullable().optional(),
-    domain: OptionalDomain.or(z.null()),
     memoryLimitMb: z
       .union([
         z.null(),
@@ -586,7 +614,11 @@ export function buildDatastoreConnectionUrl(
  * providers (see the registry in `apps/api/src/dns/providers.ts`); this enum is
  * only the subset with an API integration and a stored credential.
  */
-export const DNS_API_PROVIDERS = ["cloudflare"] as const;
+export const DNS_API_PROVIDERS = [
+  "cloudflare",
+  "digitalocean",
+  "hetzner"
+] as const;
 export const DnsApiProviderSchema = z.enum(DNS_API_PROVIDERS);
 export type DnsApiProvider = z.infer<typeof DnsApiProviderSchema>;
 
@@ -652,11 +684,42 @@ export type DnsInspection = {
   record: DnsRecordSuggestion | null;
 };
 
-/** Response of `POST /api/applications/:id/dns/apply`. */
+/** Response of `POST /api/applications/:id/domains/:domainId/dns/apply`. */
 export type DnsApplyResult = {
   action: "created" | "updated";
+  provider: DnsApiProvider;
   zone: string;
   record: DnsRecordSuggestion;
-  /** Whether the record is proxied (Cloudflare orange cloud) after the write. */
-  proxied: boolean;
+  /**
+   * Whether the record sits behind the provider's proxy/CDN after the write.
+   * Only Cloudflare has the concept; absent everywhere else.
+   */
+  proxied?: boolean;
+};
+
+// --- Custom domains -----------------------------------------------------------
+
+/**
+ * A hostname an application answers on. `lastStatus` is the cached result of
+ * the last DNS check so a list of domains renders without one lookup per row;
+ * it is a `DnsInspectionStatus`, or null before the first check.
+ */
+export type DomainRow = {
+  id: string;
+  applicationId: string;
+  hostname: string;
+  isPrimary: boolean;
+  lastStatus: DnsInspectionStatus | null;
+  lastCheckedAt: string | null;
+  verifiedAt: string | null;
+  createdAt: string;
+};
+
+/**
+ * Response of `POST /api/applications/:id/domains/:domainId/verify`: the
+ * freshly re-checked domain row plus the full inspection behind it.
+ */
+export type DomainVerifyResult = {
+  domain: DomainRow;
+  dns: DnsInspection;
 };

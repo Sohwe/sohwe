@@ -19,7 +19,7 @@ This file is a working checklist. It is based on `README.md`, `CHANGELOG.md`, `s
 - [x] **Phase 5 - Git-Push Deploys**
 - [x] **Phase 6 - Multi-User** (incl. the optional host file browser)
 - [x] **Phase 7 - Managed Datastores**
-- [x] **Phase 8 - Custom Domain DNS Assist** (first slice: detection + verification + Cloudflare apply; Domain Connect deferred)
+- [x] **Phase 8 - Custom Domains** (multi-domain tab, verification, record apply for Cloudflare / DigitalOcean / Hetzner; Domain Connect deferred)
 
 ## Completed
 
@@ -333,61 +333,94 @@ Evidence: `packages/db/prisma/schema.prisma`,
 
 ## Staged For v0.9.0
 
-### Phase 8 - Custom Domain DNS Assist
+### Phase 8 - Custom Domains
 
-Status: **first slice complete** (detection + verification + Cloudflare apply)
+Status: **complete** (multi-domain management + verification + record apply for
+Cloudflare / DigitalOcean / Hetzner; Domain Connect deferred)
 
-When a user sets a custom domain, Sohwe detects where the domain's DNS zone is
-hosted (NS lookup mapped against a curated provider registry), shows live
-verification of the required record, deep-links to the provider's DNS console
-with copy-paste values, and — for Cloudflare, via an org-level encrypted API
-token — creates or updates the record with one click.
+Custom domains have their own tab per app and are a list rather than a single
+field. Each hostname is validated on entry, checked against DNS on the spot, and
+re-checkable from its row; Sohwe detects where the zone is hosted, shows the
+record to create, deep-links to that provider's console, and — for the providers
+with an API driver and an org-level encrypted token — writes the record itself.
 
+- [x] `Domain` model replacing the `applications.domain` column: many hostnames
+      per app, one primary, hostnames unique instance-wide so two apps cannot
+      claim the same `Host()` rule. Migration copies existing domains across as
+      primary before dropping the column and resolves the duplicates the old
+      column allowed. (`packages/db/prisma/schema.prisma`,
+      `packages/db/prisma/migrations/20260823101254_app_domains/`)
+- [x] Domain CRUD with hostname normalization (a pasted URL, port, trailing
+      dot, or mixed case reduces to the bare hostname), duplicate refusal, and
+      refusal of another app's generated `<slug>.<base-domain>` address.
+      Primary moves on request and is promoted automatically when the current
+      primary is deleted. (`apps/api/src/routes/domains.ts`,
+      `CreateDomainSchema` in `packages/types/src/index.ts`)
+- [x] Traefik routing over the whole list: every domain becomes a `Host()`
+      term, primary first, deduplicated against the generated subdomain.
+      (`apps/worker/src/container-spec.ts`)
 - [x] NS-based provider detection: server-side zone walk + curated registry
       (Cloudflare incl. Foundation DNS, Namecheap, GoDaddy, Route 53, Google
       Cloud DNS, DigitalOcean, Vercel, Porkbun, Linode, OVH, Gandi, Name.com,
       IONOS, Hetzner); unknown providers fall back to showing the raw
       nameservers. (`apps/api/src/dns/providers.ts`)
-- [x] Live DNS verification: expected A record (resolved from
+- [x] Live DNS verification per domain: expected A record (resolved from
       `SOHWE_BASE_DOMAIN` or a wildcard label under it) vs the domain's current
       resolution, with `verified` / `mismatch` / `unresolved` / `unknown`
-      states. (`GET /api/dns/inspect`, member-and-above — exposes nothing
-      secret)
-- [x] App settings panel: provider badge, verification status, required record
-      with copy buttons, re-check, and a deep link to the provider's DNS
-      console. (`apps/dashboard/src/components/apps/DomainDnsPanel.tsx`)
-- [x] Org-level Cloudflare API token, encrypted with `SOHWE_ENCRYPTION_KEY`,
-      admin-managed, verified against the Cloudflare API on save, never
+      states cached on the row so the list needs no lookup per row.
+      (`apps/api/src/dns/inspect.ts`, `POST .../domains/:domainId/verify` and
+      `GET /api/dns/inspect`, member-and-above — exposes nothing secret)
+- [x] Dedicated Domains tab: add form with live validation, per-row status
+      badge, primary/remove/open actions, and an expandable DNS panel with the
+      required record, copy buttons, and a deep link to the provider's console.
+      (`apps/dashboard/src/components/apps/DomainsManager.tsx`,
+      `apps/dashboard/src/components/apps/DomainDnsPanel.tsx`,
+      `apps/dashboard/src/routes/app.$appId.domains.tsx`)
+- [x] Org-level provider API tokens, encrypted with `SOHWE_ENCRYPTION_KEY`,
+      admin-managed, verified against the provider's API on save, never
       returned by any endpoint. (`DnsProviderCredential` model, additive
       migration `20260814082405_dns_provider_credentials`)
-- [x] One-click record apply through the Cloudflare API: zone discovery
-      (longest dot-boundary match), create-or-update of the A record (created
-      records are DNS-only, not proxied; updates keep the existing proxied
-      flag), CNAME-conflict refusal. (`apps/api/src/dns/cloudflare.ts`,
-      `POST /api/applications/:id/dns/apply`, admin-and-above)
-- [x] Audit events for credential set/remove and record apply
-      (`dns.credentials.set` / `dns.credentials.delete` / `dns.record.apply`);
+- [x] One-click record apply behind a provider-agnostic driver contract: zone
+      discovery (longest dot-boundary match), create-or-update of the A record,
+      CNAME-conflict refusal, and the token confined to a request header.
+      Drivers: Cloudflare (created records DNS-only, updates keep the existing
+      proxied flag), DigitalOcean, Hetzner. (`apps/api/src/dns/driver.ts`,
+      `cloudflare.ts`, `digitalocean.ts`, `hetzner.ts`, `drivers.ts`,
+      `POST /api/applications/:id/domains/:domainId/dns/apply`,
+      admin-and-above)
+- [x] Domains in portable bundles (format v4, additive: pre-v4 bundles widen
+      their single `domain` into a one-element list); restore drops hostnames
+      the target instance already answers on and reports the count.
+      (`packages/bundler/src/index.ts`, `packages/backups/src/export.ts`,
+      `apps/api/src/routes/backups.ts`)
+- [x] Audit events for domain add/remove/re-point and for credential set/remove
+      and record apply (`domain.create` / `domain.delete` / `domain.primary` /
+      `dns.credentials.set` / `dns.credentials.delete` / `dns.record.apply`);
       no token material in audit rows, logs, or error messages.
-- [x] Tests: provider matching, zone walking, Cloudflare client against a fake
-      fetch, and HTTP route coverage including role floors and
-      encrypted-at-rest/never-returned assertions.
+- [x] Tests: provider matching, zone walking, driver helpers, all three
+      provider clients against a fake fetch, multi-host Traefik rules, and HTTP
+      route coverage including role floors, duplicate/built-in-address refusal,
+      primary promotion, and encrypted-at-rest/never-returned assertions.
 - [ ] Manual verification on a real host: point a real Cloudflare-managed
       domain at a VPS install, save a scoped token, apply the record, and
-      confirm the panel reaches `verified` and Traefik issues the cert.
+      confirm the row reaches `verified` and Traefik issues the cert.
 - [ ] Later: Domain Connect flow (provider-page approval, no credentials) for
       registrars that support it — requires registering a Sohwe service
       template with each provider, so it is a separate effort.
-- [ ] Later: more provider API integrations behind the same credential model
+- [ ] Later: more provider API drivers behind the same credential model
       (deliberately not Namecheap's `setHosts`, which replaces the domain's
       entire record set in one call).
 
-Evidence: `apps/api/src/dns/providers.ts`, `apps/api/src/dns/cloudflare.ts`,
-`apps/api/src/routes/dns.ts`, `apps/api/src/audit.ts`,
-`packages/types/src/index.ts`, `packages/db/prisma/schema.prisma`,
-`packages/db/prisma/migrations/20260814082405_dns_provider_credentials/`,
-`apps/dashboard/src/components/apps/DomainDnsPanel.tsx`,
-`apps/dashboard/src/routes/app.$appId.settings.tsx`,
-`apps/api/src/dns/providers.test.ts`, `apps/api/src/dns/cloudflare.test.ts`,
+Evidence: `apps/api/src/dns/`, `apps/api/src/routes/domains.ts`,
+`apps/api/src/routes/dns.ts`, `apps/api/src/app-public.ts`,
+`apps/api/src/audit.ts`, `apps/worker/src/container-spec.ts`,
+`packages/types/src/index.ts`, `packages/bundler/src/index.ts`,
+`packages/db/prisma/schema.prisma`,
+`packages/db/prisma/migrations/20260823101254_app_domains/`,
+`apps/dashboard/src/components/apps/DomainsManager.tsx`,
+`apps/dashboard/src/routes/app.$appId.domains.tsx`,
+`apps/api/src/dns/drivers.test.ts`, `apps/api/src/dns/cloudflare.test.ts`,
+`apps/api/src/dns/providers.test.ts`, `apps/worker/src/container-spec.test.ts`,
 `apps/api/src/routes.test.ts`.
 
 ## Release Sequence

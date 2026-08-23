@@ -14,6 +14,17 @@ export const deploymentListSelect = {
   finishedAt: true
 } satisfies Prisma.DeploymentSelect;
 
+export const domainListSelect = {
+  id: true,
+  applicationId: true,
+  hostname: true,
+  isPrimary: true,
+  lastStatus: true,
+  lastCheckedAt: true,
+  verifiedAt: true,
+  createdAt: true
+} satisfies Prisma.DomainSelect;
+
 export const volumeListSelect = {
   id: true,
   mountPath: true,
@@ -34,7 +45,6 @@ const applicationScalarSelect = {
   buildCmd: true,
   startCmd: true,
   port: true,
-  domain: true,
   memoryLimitMb: true,
   cpuLimit: true,
   status: true,
@@ -59,6 +69,10 @@ export function defaultApplicationSelect(
     volumes: {
       orderBy: { createdAt: "asc" },
       select: volumeListSelect
+    },
+    domains: {
+      orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }],
+      select: domainListSelect
     }
   };
 }
@@ -80,13 +94,29 @@ export function serializeVolume<T extends VolumeRow>(v: T) {
   };
 }
 
+type DomainRow = {
+  id: string;
+  applicationId: string;
+  hostname: string;
+  isPrimary: boolean;
+  lastStatus: string | null;
+  lastCheckedAt: Date | null;
+  verifiedAt: Date | null;
+  createdAt: Date;
+};
+
 type AppListRow = {
   volumes: VolumeRow[];
+  domains: DomainRow[];
 } & Record<string, unknown>;
 
 export function serializeAppListRow(a: AppListRow) {
   return {
     ...a,
-    volumes: a.volumes.map(serializeVolume)
+    volumes: a.volumes.map(serializeVolume),
+    // A projection of `domains`, not a second place domains are stored: the
+    // dashboard shows one headline URL per app, and every existing caller of
+    // the old `Application.domain` column reads it here unchanged.
+    domain: a.domains.find((d) => d.isPrimary)?.hostname ?? null
   };
 }

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CreateApplicationSchema } from "@sohwe/types";
+import { CreateApplicationSchema, normalizeHostname } from "@sohwe/types";
 import { Lock } from "lucide-react";
 import { toast } from "sonner";
 import { Field } from "@/components/common/Field";
@@ -84,7 +84,9 @@ export function CreateAppDialog({
         buildMode: cBuildMode,
         buildCmd: cBuildCmd || undefined,
         startCmd: cStartCmd || undefined,
-        domain: cDomain || undefined,
+        // Normalized the same way the Domains tab does, so a pasted URL works
+        // here too rather than being rejected as a malformed hostname.
+        domain: cDomain.trim() ? normalizeHostname(cDomain) : undefined,
         autoDeploy: cAutoDeploy
       });
       return api<AppRow>("/api/applications", { method: "POST", body: JSON.stringify(body) });
@@ -204,8 +206,10 @@ export function CreateAppDialog({
             <Field label="Custom domain (optional)">
               <Input
                 value={cDomain}
-                onChange={(e) => setCDomain(e.target.value.toLowerCase())}
+                onChange={(e) => setCDomain(e.target.value)}
                 placeholder="app.example.com"
+                autoComplete="off"
+                spellCheck={false}
               />
             </Field>
           </div>

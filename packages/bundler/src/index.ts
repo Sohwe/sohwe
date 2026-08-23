@@ -21,8 +21,12 @@ export const BUNDLE_FORMAT = "sohwe-backup" as const;
  *   version bump: an older reader strips the unknown key before checking the
  *   signature, so it would report a v2-shaped bundle as corrupt. Rejecting it
  *   as an unsupported version says what actually happened.
+ * - v4: adds an optional per-app `domains` array — every custom hostname the
+ *   app answers on, not just the primary one. `domain` stays as the primary so
+ *   a v4 bundle still carries the field older readers expect; the bump is for
+ *   the same signature reason as v3.
  */
-export const BUNDLE_VERSION = 3 as const;
+export const BUNDLE_VERSION = 4 as const;
 
 // --- Input shapes (plaintext, supplied by the API) -------------------------
 
@@ -48,7 +52,10 @@ export type BundleAppInput = {
   buildCmd: string | null;
   startCmd: string | null;
   port: number;
+  /** Primary custom domain, or null when the app has none. */
   domain: string | null;
+  /** Every custom domain, primary first. */
+  domains: string[];
   memoryLimitMb: number | null;
   cpuLimit: number | null;
   volumes: BundleVolumeInput[];
@@ -130,7 +137,13 @@ const AppEntrySchema = z.object({
   buildCmd: z.string().nullable(),
   startCmd: z.string().nullable(),
   port: z.number(),
+  /** The primary custom domain, or null. Present in every version. */
   domain: z.string().nullable(),
+  /**
+   * v4+. Every custom domain, primary first. Absent in v1-v3 bundles, where
+   * `domain` was the only one an app could have.
+   */
+  domains: z.array(z.string()).optional(),
   memoryLimitMb: z.number().nullable(),
   cpuLimit: z.number().nullable(),
   volumes: z.array(VolumeSchema),
@@ -187,24 +200,40 @@ export const BundleManifestV3Schema = z.object({
   datastores: z.array(DatastoreEntrySchema)
 });
 
+/** v4 is v3 plus the optional per-app `domains` array on `AppEntrySchema`. */
+export const BundleManifestV4Schema = z.object({
+  ...ManifestBase,
+  version: z.literal(4),
+  datastores: z.array(DatastoreEntrySchema)
+});
+
 export const BundleManifestSchema = z.discriminatedUnion("version", [
   BundleManifestV1Schema,
   BundleManifestV2Schema,
-  BundleManifestV3Schema
+  BundleManifestV3Schema,
+  BundleManifestV4Schema
 ]);
 
 /** The manifest `buildBundle` emits (always the current version). */
-export type BundleManifest = z.infer<typeof BundleManifestV3Schema>;
+export type BundleManifest = z.infer<typeof BundleManifestV4Schema>;
 /** Any version `parseBundle` accepts. */
 export type AnyBundleManifest = z.infer<typeof BundleManifestSchema>;
 export type BundleAppEntry = z.infer<typeof AppEntrySchema>;
 export type BundleDatastoreEntry = z.infer<typeof DatastoreEntrySchema>;
 
 /** App config with env vars and build variables decrypted by `parseBundle`. */
-export type ParsedBundleApp = Omit<BundleAppEntry, "env" | "buildArgs"> & {
+export type ParsedBundleApp = Omit<
+  BundleAppEntry,
+  "env" | "buildArgs" | "domains"
+> & {
   envVars: Record<string, string>;
   /** Empty for pre-v3 bundles and for exports made without secrets. */
   buildArgs: Record<string, string>;
+  /**
+   * Always present, so restore has one field to read: a pre-v4 bundle's single
+   * `domain` is widened into a one-element list here.
+   */
+  domains: string[];
 };
 
 export type ParsedBundle = {
@@ -259,6 +288,7 @@ export function buildBundle(
       startCmd: a.startCmd,
       port: a.port,
       domain: a.domain,
+      domains: a.domains,
       memoryLimitMb: a.memoryLimitMb,
       cpuLimit: a.cpuLimit,
       volumes: a.volumes.map((v) => ({
@@ -362,11 +392,12 @@ export function parseBundle(raw: unknown, passphrase: string): ParsedBundle {
   };
 
   const apps: ParsedBundleApp[] = manifest.apps.map((a) => {
-    const { env, buildArgs, ...rest } = a;
+    const { env, buildArgs, domains, ...rest } = a;
     return {
       ...rest,
       envVars: decryptBlock(env),
-      buildArgs: decryptBlock(buildArgs)
+      buildArgs: decryptBlock(buildArgs),
+      domains: domains ?? (rest.domain ? [rest.domain] : [])
     };
   });
 

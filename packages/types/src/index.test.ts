@@ -8,6 +8,7 @@ import {
   buildDatastoreConnectionUrl,
   CreateApplicationSchema,
   CreateDatastoreBindingSchema,
+  CreateDomainSchema,
   CreateDatastoreSchema,
   datastoreContainerName,
   datastoreDefaultEnvKey,
@@ -119,13 +120,16 @@ describe("UpdateApplicationSchema", () => {
     const out = UpdateApplicationSchema.parse({
       buildCmd: null,
       startCmd: null,
-      domain: null,
       memoryLimitMb: null,
       cpuLimit: null
     });
     assert.equal(out.buildCmd, null);
-    assert.equal(out.domain, null);
     assert.equal(out.memoryLimitMb, null);
+  });
+
+  it("ignores a domain patch — domains have their own routes now", () => {
+    const out = UpdateApplicationSchema.parse({ domain: "app.example.com" });
+    assert.deepEqual(out, {});
   });
 
   it("bounds the resource limits", () => {
@@ -491,5 +495,49 @@ describe("CreateDatastoreBindingSchema", () => {
       }).success,
       false
     );
+  });
+});
+
+describe("CreateDomainSchema", () => {
+  it("accepts a plain hostname and defaults to non-primary", () => {
+    const parsed = CreateDomainSchema.parse({ hostname: "app.example.com" });
+    assert.equal(parsed.hostname, "app.example.com");
+    assert.equal(parsed.primary, false);
+  });
+
+  it("normalizes what people actually paste", () => {
+    // Each of these is a real thing to copy out of a browser or a registrar.
+    const cases: [string, string][] = [
+      ["  App.Example.COM  ", "app.example.com"],
+      ["https://app.example.com", "app.example.com"],
+      ["http://app.example.com/pricing?ref=x", "app.example.com"],
+      ["app.example.com.", "app.example.com"],
+      ["app.example.com:8080", "app.example.com"],
+      ["https://app.example.com:443/", "app.example.com"]
+    ];
+    for (const [input, expected] of cases) {
+      assert.equal(
+        CreateDomainSchema.parse({ hostname: input }).hostname,
+        expected,
+        `normalizing ${JSON.stringify(input)}`
+      );
+    }
+  });
+
+  it("still rejects what is not a hostname after normalizing", () => {
+    for (const hostname of [
+      "",
+      "example",
+      "-bad.example.com",
+      "example..com",
+      "https://",
+      "192.168.0.1"
+    ]) {
+      assert.equal(
+        CreateDomainSchema.safeParse({ hostname }).success,
+        false,
+        `expected ${JSON.stringify(hostname)} to be rejected`
+      );
+    }
   });
 });

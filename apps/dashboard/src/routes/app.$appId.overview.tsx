@@ -4,7 +4,7 @@ import { ExternalLink } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
-import { useBaseDomain } from "@/lib/config";
+import { useAppConfig } from "@/lib/config";
 import { formatRelativeTime, shortCommitSha, truncMsg } from "@/lib/format";
 import type { AppRow } from "@/lib/types";
 import { getCurrentDeploymentId } from "@/lib/types";
@@ -13,11 +13,13 @@ import { CopyButton } from "@/components/common/CopyButton";
 export function AppOverviewPage() {
   const { appId } = useParams({ strict: false });
   const q = useQuery({ queryKey: ["applications"], queryFn: () => api<AppRow[]>("/api/applications") });
-  const baseDomain = useBaseDomain();
+  const { baseDomain, httpsEnabled } = useAppConfig();
   const app = q.data?.find((a) => a.id === appId);
   if (!appId || !q.data || !app) return null;
 
-  const appUrl = `http://${app.slug}.${baseDomain}`;
+  const scheme = httpsEnabled ? "https" : "http";
+  const appUrl = `${scheme}://${app.slug}.${baseDomain}`;
+  const appDomainUrl = app.domain ? `${scheme}://${app.domain}` : null;
   const lastDep = app.deployments?.length
     ? [...(app.deployments ?? [])].sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt))[0]
     : undefined;
@@ -37,10 +39,10 @@ export function AppOverviewPage() {
             </a>
             <CopyButton text={appUrl} label="Copy" className="h-7 w-7" />
           </div>
-          {app.domain ? (
+          {appDomainUrl ? (
             <p>
-              <a className="text-emerald-600 hover:underline dark:text-emerald-400" href={`https://${app.domain}`} target="_blank" rel="noreferrer">
-                https://{app.domain}
+              <a className="text-emerald-600 hover:underline dark:text-emerald-400" href={appDomainUrl} target="_blank" rel="noreferrer">
+                {appDomainUrl}
                 <ExternalLink className="ml-1 inline h-3 w-3" />
               </a>
             </p>

@@ -236,14 +236,26 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
           buildMode: body.buildMode,
           buildCmd: body.buildCmd ?? null,
           startCmd: body.startCmd ?? null,
-          domain: body.domain ?? null,
-          organizationId: u.organizationId
+          organizationId: u.organizationId,
+          // A domain given at creation becomes the app's primary one. It is
+          // created in the same statement so a hostname another app already
+          // holds fails the whole create rather than leaving a domainless app
+          // behind. Everything after this goes through `/domains`.
+          ...(body.domain
+            ? { domains: { create: { hostname: body.domain, isPrimary: true } } }
+            : {})
         },
         select: sel20
       }).catch((err: unknown) => {
         if (isUniqueViolation(err, "slug")) return null;
+        if (isUniqueViolation(err, "hostname")) return "hostname" as const;
         throw err;
       });
+      if (created === "hostname") {
+        return reply.conflict(
+          `${body.domain ?? "That domain"} is already attached to an application on this instance.`
+        );
+      }
       if (!created) return reply.conflict(slugInUseMessage(body.slug));
       // `sel20` is a widened Prisma.ApplicationSelect, so the row's fields are
       // not statically known here; the id is read back through a narrow view.
@@ -290,9 +302,6 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
       }
       if (body.startCmd !== undefined) {
         data.startCmd = body.startCmd ? body.startCmd : null;
-      }
-      if (body.domain !== undefined) {
-        data.domain = body.domain ? body.domain : null;
       }
       if (body.memoryLimitMb !== undefined) {
         data.memoryLimitMb = body.memoryLimitMb;

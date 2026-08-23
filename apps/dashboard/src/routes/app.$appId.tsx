@@ -7,14 +7,23 @@ import { AppStatusBadge, BuildModeBadge } from "@/components/apps/BuildModeBadge
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { api, fetchMe } from "@/lib/api";
-import { useBaseDomain } from "@/lib/config";
+import { useAppConfig } from "@/lib/config";
 import { isAdmin } from "@/lib/roles";
 import type { AppRow, Me } from "@/lib/types";
 import { CopyButton } from "@/components/common/CopyButton";
 import { Skeleton } from "@/components/ui/skeleton";
 
 type TabDef = {
-  path: "overview" | "deployments" | "logs" | "metrics" | "variables" | "volumes" | "files" | "settings";
+  path:
+    | "overview"
+    | "deployments"
+    | "logs"
+    | "metrics"
+    | "variables"
+    | "volumes"
+    | "domains"
+    | "files"
+    | "settings";
   label: string;
   route:
     | "/apps/$appId/overview"
@@ -23,6 +32,7 @@ type TabDef = {
     | "/apps/$appId/metrics"
     | "/apps/$appId/variables"
     | "/apps/$appId/volumes"
+    | "/apps/$appId/domains"
     | "/apps/$appId/files"
     | "/apps/$appId/settings";
 };
@@ -34,6 +44,7 @@ const tabs: TabDef[] = [
   { path: "metrics", label: "Metrics", route: "/apps/$appId/metrics" },
   { path: "variables", label: "Variables", route: "/apps/$appId/variables" },
   { path: "volumes", label: "Volumes", route: "/apps/$appId/volumes" },
+  { path: "domains", label: "Domains", route: "/apps/$appId/domains" },
   { path: "files", label: "Files", route: "/apps/$appId/files" },
   { path: "settings", label: "Settings", route: "/apps/$appId/settings" }
 ];
@@ -47,7 +58,7 @@ export function AppLayout() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
-  const baseDomain = useBaseDomain();
+  const { baseDomain, httpsEnabled } = useAppConfig();
   const { data: me } = useQuery({ queryKey: ["me"], queryFn: () => fetchMe<Me | null>() });
   const visibleTabs = isAdmin(me) ? tabs : tabs.filter((t) => !ADMIN_TABS.has(t.path));
 
@@ -109,7 +120,8 @@ export function AppLayout() {
     );
   }
 
-  const appUrl = `http://${app.slug}.${baseDomain}`;
+  const scheme = httpsEnabled ? "https" : "http";
+  const appUrl = `${scheme}://${app.slug}.${baseDomain}`;
 
   return (
     <div>
@@ -129,7 +141,7 @@ export function AppLayout() {
             {app.domain ? (
               <a
                 className="text-emerald-600 hover:underline dark:text-emerald-400"
-                href={`https://${app.domain}`}
+                href={`${scheme}://${app.domain}`}
                 target="_blank"
                 rel="noreferrer"
               >

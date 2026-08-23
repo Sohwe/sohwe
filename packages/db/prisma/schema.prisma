@@ -73,7 +73,6 @@ model Application {
   buildCmd          String?      @map("build_command")
   startCmd          String?      @map("start_command")
   port              Int          @default(3000)
-  domain            String?
   envVarsEncrypted  Bytes?       @map("env_vars_encrypted")
   // Variables exposed to the *build* (nixpacks `--env`, docker `--build-arg`),
   // e.g. NIXPACKS_NODE_VERSION or NEXT_PUBLIC_* values Next.js inlines at build
@@ -87,6 +86,7 @@ model Application {
   updatedAt         DateTime     @updatedAt @map("updated_at")
   deployments       Deployment[]
   volumes           Volume[]
+  domains           Domain[]
   alertDestinations AlertDestination[]
   datastoreBindings DatastoreBinding[]
 
@@ -126,6 +126,37 @@ model Volume {
 
   @@unique([applicationId, mountPath])
   @@map("volumes")
+}
+
+// A hostname an application answers on, beyond its generated
+// `<slug>.<base-domain>` subdomain. Replaces the old single
+// `applications.domain` column: an app can carry several (apex + www, a
+// vanity domain, a migration cutover) and every one of them becomes a
+// `Host()` rule on the container's Traefik router.
+model Domain {
+  id            String      @id @default(uuid())
+  applicationId String      @map("application_id")
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  // Globally unique, not per-app: Traefik routes by host across the whole
+  // instance, so two apps claiming one hostname would cross-route traffic.
+  hostname      String      @unique
+  // The domain shown as *the* URL for the app in the dashboard, and the one
+  // links point at. At most one per app; enforced in the API, not in SQL —
+  // a partial unique index would read as drift to `prisma migrate diff`.
+  isPrimary     Boolean     @default(false) @map("is_primary")
+  // Cached result of the last DNS check (`verified` | `mismatch` |
+  // `unresolved` | `unknown`), so the domain list renders without a lookup
+  // per row. Null until the domain has been checked once.
+  lastStatus    String?     @map("last_status")
+  lastCheckedAt DateTime?   @map("last_checked_at")
+  // First time the domain was observed pointing here. Kept separate from
+  // `lastCheckedAt` so a transient DNS failure does not erase the fact that
+  // it verified at some point.
+  verifiedAt    DateTime?   @map("verified_at")
+  createdAt     DateTime    @default(now()) @map("created_at")
+
+  @@index([applicationId])
+  @@map("domains")
 }
 
 model AlertDestination {

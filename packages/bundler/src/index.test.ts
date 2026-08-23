@@ -23,6 +23,7 @@ function sampleApp(overrides: Partial<BundleAppInput> = {}): BundleAppInput {
     startCmd: "node server.js",
     port: 3000,
     domain: "web.example.com",
+    domains: ["web.example.com"],
     memoryLimitMb: 512,
     cpuLimit: 1.5,
     volumes: [{ mountPath: "/data", sizeBytes: "1048576" }],
@@ -426,8 +427,15 @@ const GOLDEN_BUNDLE_V3 = {
 describe("golden bundle v3 (format compatibility)", () => {
   it("matches the current schema and constants", () => {
     assert.equal(GOLDEN_BUNDLE_V3.format, BUNDLE_FORMAT);
-    assert.equal(GOLDEN_BUNDLE_V3.version, BUNDLE_VERSION);
+    // Frozen at v3 forever; BUNDLE_VERSION has moved on (see the v4 golden).
+    assert.equal(GOLDEN_BUNDLE_V3.version, 3);
     assert.equal(BundleManifestSchema.safeParse(GOLDEN_BUNDLE_V3).success, true);
+  });
+
+  it("widens the single pre-v4 domain into a one-element list", () => {
+    const parsed = parseBundle(GOLDEN_BUNDLE_V3, GOLDEN_PASSPHRASE);
+    assert.equal(parsed.apps[0]!.domain, "web.example.com");
+    assert.deepEqual(parsed.apps[0]!.domains, ["web.example.com"]);
   });
 
   it("still parses and decrypts both variable blocks", () => {
@@ -446,6 +454,123 @@ describe("golden bundle v3 (format compatibility)", () => {
   it("signs the buildArgs block (tampering breaks the signature)", () => {
     const tampered = structuredClone(GOLDEN_BUNDLE_V3);
     tampered.apps[0]!.buildArgs.keys = ["NIXPACKS_NODE_VERSION"];
+    assert.throws(
+      () => parseBundle(tampered, GOLDEN_PASSPHRASE),
+      /Invalid passphrase or corrupted bundle/
+    );
+  });
+});
+
+// The v4 golden: produced by a real buildBundle() with an app carrying two
+// custom domains, and frozen here like the goldens above. Same rules — if this
+// breaks, bump BUNDLE_VERSION again and add a migration path.
+const GOLDEN_BUNDLE_V4 = {
+  "format": "sohwe-backup",
+  "version": 4,
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "source": {
+    "orgName": "Acme",
+    "sohweVersion": "0.4.0"
+  },
+  "kdf": {
+    "algo": "scrypt",
+    "salt": "LRQd4P8qzSEEIs84YIJx4Q==",
+    "N": 16384,
+    "r": 8,
+    "p": 1
+  },
+  "includesSecrets": true,
+  "apps": [
+    {
+      "name": "Web",
+      "slug": "web",
+      "gitRepo": "https://github.com/acme/web",
+      "gitBranch": "main",
+      "buildMode": "auto",
+      "buildCmd": null,
+      "startCmd": "node server.js",
+      "port": 3000,
+      "domain": "web.example.com",
+      "domains": [
+        "web.example.com",
+        "www.example.com"
+      ],
+      "memoryLimitMb": 512,
+      "cpuLimit": 1.5,
+      "volumes": [
+        {
+          "mountPath": "/data",
+          "sizeBytes": "1048576"
+        }
+      ],
+      "alertDestinations": [
+        {
+          "type": "discord",
+          "name": "ops",
+          "url": "https://discord.example/hook",
+          "enabled": true
+        }
+      ],
+      "env": {
+        "keys": [
+          "API_KEY",
+          "DATABASE_URL"
+        ],
+        "ciphertext": "LGsS44WBUfPhHL7AFQY6/ACPYcnR+KHDGM4XSLTmdSv+B1rVqrGK8AaSz5/BVRnCZX6CF5Q3OQwHq52GWYIUJI+3Y9jGiHyrsLurU7N8AkEltWodlivR6XILLsT5auVcJSFCucbTEFHnt664ohLBijtbLoVnbZ5mBk/0OEwCmq86"
+      },
+      "buildArgs": {
+        "keys": [
+          "NEXT_PUBLIC_SITE_URL",
+          "NIXPACKS_NODE_VERSION"
+        ],
+        "ciphertext": "9FIubAWsJd7YqsH1/LWu6Pji1JkDlPiUyF3Jdn7o7tqTl2JBmdjajCwnyR4eB2ghvwbGq9eVRUDqBo73Ne0Dr11/dvDfqDYJ1fHk0sTTDAhMTQMDWrBnd5F7DivzXhHbxiRk9pKPbussLZo="
+      }
+    }
+  ],
+  "datastores": [
+    {
+      "kind": "postgres",
+      "name": "Main DB",
+      "slug": "main-db",
+      "engineVersion": "16",
+      "memoryLimitMb": null,
+      "cpuLimit": null,
+      "publicPort": null,
+      "bindings": [
+        {
+          "appSlug": "web",
+          "envKeys": [
+            "DATABASE_URL"
+          ]
+        }
+      ]
+    }
+  ],
+  "signature": "G8mjHxR6zYO0wKVM0L++RhzZrUncdYSF6J9UG/hL1Y4="
+};
+
+describe("golden bundle v4 (current format)", () => {
+  it("matches the current schema and constants", () => {
+    assert.equal(GOLDEN_BUNDLE_V4.format, BUNDLE_FORMAT);
+    assert.equal(GOLDEN_BUNDLE_V4.version, BUNDLE_VERSION);
+    assert.equal(BundleManifestSchema.safeParse(GOLDEN_BUNDLE_V4).success, true);
+  });
+
+  it("still parses and carries every custom domain", () => {
+    const parsed = parseBundle(GOLDEN_BUNDLE_V4, GOLDEN_PASSPHRASE);
+    assert.equal(parsed.version, 4);
+    assert.equal(parsed.apps[0]!.domain, "web.example.com");
+    assert.deepEqual(parsed.apps[0]!.domains, [
+      "web.example.com",
+      "www.example.com"
+    ]);
+  });
+
+  it("signs the domains list (tampering breaks the signature)", () => {
+    // The whole point of a domain list is which hosts Traefik will answer on.
+    // A bundle whose domains can be edited in transit is a routing hijack.
+    const tampered = structuredClone(GOLDEN_BUNDLE_V4);
+    tampered.apps[0]!.domains.push("evil.example.com");
     assert.throws(
       () => parseBundle(tampered, GOLDEN_PASSPHRASE),
       /Invalid passphrase or corrupted bundle/

@@ -30,7 +30,8 @@ export type SpecApp = {
   id: string;
   slug: string;
   port: number;
-  domain: string | null;
+  /** Custom hostnames, in the order they should appear in the Traefik rule. */
+  domains: string[];
   memoryLimitMb: number | null;
   cpuLimit: number | null;
 };
@@ -79,16 +80,25 @@ export function containerNameFor(slug: string): string {
 }
 
 /**
- * Hosts this app answers on: always the generated subdomain, plus the custom
- * domain when one is set and differs.
+ * Hosts this app answers on: always the generated subdomain, plus every custom
+ * domain attached to it.
+ *
+ * The generated host stays first and duplicates are dropped — a custom domain
+ * equal to the generated one, or listed twice, would otherwise emit a repeated
+ * `Host()` term in the router rule.
  */
 export function resolveHosts(
-  app: { slug: string; domain: string | null },
+  app: { slug: string; domains: string[] },
   baseDomain: string
 ): string[] {
-  const defaultHost = `${app.slug}.${baseDomain}`;
-  const hosts = [defaultHost];
-  if (app.domain && app.domain !== defaultHost) hosts.push(app.domain);
+  const seen = new Set<string>();
+  const hosts: string[] = [];
+  for (const host of [`${app.slug}.${baseDomain}`, ...app.domains]) {
+    const normalized = host.trim().toLowerCase();
+    if (normalized === "" || seen.has(normalized)) continue;
+    seen.add(normalized);
+    hosts.push(normalized);
+  }
   return hosts;
 }
 

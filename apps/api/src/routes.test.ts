@@ -1980,6 +1980,7 @@ describe("API routes", { skip }, () => {
             startCmd: null,
             port: 3000,
             domain: null,
+            domains: [],
             memoryLimitMb: null,
             cpuLimit: null,
             volumes: [],
@@ -2097,6 +2098,7 @@ describe("API routes", { skip }, () => {
             startCmd: null,
             port: 3000,
             domain: null,
+            domains: [],
             memoryLimitMb: null,
             cpuLimit: null,
             volumes: [],
@@ -2373,6 +2375,23 @@ describe("API routes", { skip }, () => {
       return { fetchImpl, calls };
     }
 
+    /** Id of the one domain an app created with `{ domain: ... }` now holds. */
+    async function onlyDomainId(
+      server: Awaited<ReturnType<typeof buildServer>>,
+      cookie: string,
+      appId: string
+    ): Promise<string> {
+      const res = await server.inject({
+        method: "GET",
+        url: `/api/applications/${appId}/domains`,
+        headers: { cookie }
+      });
+      assert.equal(res.statusCode, 200, res.body);
+      const { domains } = res.json() as { domains: { id: string }[] };
+      assert.equal(domains.length, 1, res.body);
+      return domains[0]!.id;
+    }
+
     it("inspects a domain: provider, required record, and status", async () => {
       await signIn();
       const memberCookie = await signInAs("member");
@@ -2591,10 +2610,13 @@ describe("API routes", { skip }, () => {
         }
       });
       try {
+        const domainId = await onlyDomainId(dnsApp, cookie, withDomain.id);
+        const applyUrl = `/api/applications/${withDomain.id}/domains/${domainId}/dns/apply`;
+
         // No credential configured yet.
         const early = await dnsApp.inject({
           method: "POST",
-          url: `/api/applications/${withDomain.id}/dns/apply`,
+          url: applyUrl,
           headers: { cookie }
         });
         assert.equal(early.statusCode, 400);
@@ -2611,32 +2633,34 @@ describe("API routes", { skip }, () => {
         // Writing to someone's DNS zone is admin territory.
         const asMember = await dnsApp.inject({
           method: "POST",
-          url: `/api/applications/${withDomain.id}/dns/apply`,
+          url: applyUrl,
           headers: { cookie: memberCookie }
         });
         assert.equal(asMember.statusCode, 403);
 
-        // An app without a custom domain has nothing to apply.
-        const noDomain = await dnsApp.inject({
+        // A domain id that belongs to a different app is not reachable here.
+        const crossApp = await dnsApp.inject({
           method: "POST",
-          url: `/api/applications/${bare.id}/dns/apply`,
+          url: `/api/applications/${bare.id}/domains/${domainId}/dns/apply`,
           headers: { cookie }
         });
-        assert.equal(noDomain.statusCode, 400);
+        assert.equal(crossApp.statusCode, 404);
 
         const res = await dnsApp.inject({
           method: "POST",
-          url: `/api/applications/${withDomain.id}/dns/apply`,
+          url: applyUrl,
           headers: { cookie }
         });
         assert.equal(res.statusCode, 200, res.body);
         const body = res.json() as {
           action: string;
+          provider: string;
           zone: string;
           record: { type: string; name: string; value: string };
           proxied: boolean;
         };
         assert.equal(body.action, "created");
+        assert.equal(body.provider, "cloudflare");
         assert.equal(body.zone, "example.com");
         assert.deepEqual(body.record, {
           type: "A",
@@ -2665,5 +2689,309 @@ describe("API routes", { skip }, () => {
         await dnsApp.close();
       }
     });
+
+    it("refuses to auto-apply at a provider with no API integration", async () => {
+      const cookie = await signIn();
+      // GoDaddy is detected but has no driver, so there is nothing to apply.
+      const godaddyNs = async (host: string): Promise<string[]> => {
+        if (host === "example.com") {
+          return ["ns01.domaincontrol.com", "ns02.domaincontrol.com"];
+        }
+        throw Object.assign(new Error("ENODATA"), { code: "ENODATA" });
+      };
+      const dnsApp = await buildServer(loadApiConfig(), {
+        logger: false,
+        dns: {
+          resolveNs: godaddyNs,
+          resolve4: fakeResolve4(healthyAnswers()),
+          fetchImpl: cfFetch().fetchImpl
+        }
+      });
+      try {
+        const created = await createApp(cookie, { domain: "app.example.com" });
+        const domainId = await onlyDomainId(dnsApp, cookie, created.id);
+        const res = await dnsApp.inject({
+          method: "POST",
+          url: `/api/applications/${created.id}/domains/${domainId}/dns/apply`,
+          headers: { cookie }
+        });
+        assert.equal(res.statusCode, 400, res.body);
+        assert.match(res.body, /cannot write records at GoDaddy/);
+      } finally {
+        await dnsApp.close();
+      }
+    });
   });
+
+  describe("custom domains", () => {
+    const EXPECTED_IP = "203.0.113.10";
+
+    const fakeResolveNs = async (host: string): Promise<string[]> => {
+      if (host === "example.com") {
+        return ["dee.ns.cloudflare.com", "gail.ns.cloudflare.com"];
+      }
+      throw Object.assign(new Error("ENODATA"), { code: "ENODATA" });
+    };
+
+    const fakeResolve4 =
+      (answers: Record<string, string[]>) =>
+      async (host: string): Promise<string[]> => {
+        const a = answers[host];
+        if (!a) throw Object.assign(new Error("ENOTFOUND"), { code: "ENOTFOUND" });
+        return a;
+      };
+
+    /** Base domain and `app.example.com` both point at this instance. */
+    function answers() {
+      return {
+        [loadApiConfig().baseDomain]: [EXPECTED_IP],
+        "app.example.com": [EXPECTED_IP]
+      };
+    }
+
+    async function domainServer() {
+      return buildServer(loadApiConfig(), {
+        logger: false,
+        dns: { resolveNs: fakeResolveNs, resolve4: fakeResolve4(answers()) }
+      });
+    }
+
+    type DomainBody = {
+      id: string;
+      hostname: string;
+      isPrimary: boolean;
+      lastStatus: string | null;
+      verifiedAt: string | null;
+    };
+
+    async function listDomains(
+      server: Awaited<ReturnType<typeof buildServer>>,
+      cookie: string,
+      appId: string
+    ): Promise<DomainBody[]> {
+      const res = await server.inject({
+        method: "GET",
+        url: `/api/applications/${appId}/domains`,
+        headers: { cookie }
+      });
+      assert.equal(res.statusCode, 200, res.body);
+      return (res.json() as { domains: DomainBody[] }).domains;
+    }
+
+    it("adds a domain, normalizes it, and checks DNS in the same request", async () => {
+      const cookie = await signIn();
+      const server = await domainServer();
+      try {
+        const created = await createApp(cookie);
+        const res = await server.inject({
+          method: "POST",
+          url: `/api/applications/${created.id}/domains`,
+          headers: { cookie },
+          // What someone pastes out of a browser address bar.
+          payload: { hostname: "https://App.Example.com/pricing" }
+        });
+        assert.equal(res.statusCode, 200, res.body);
+        const body = res.json() as {
+          domain: DomainBody;
+          dns: { status: string; provider: { id: string }; record: unknown };
+        };
+        assert.equal(body.domain.hostname, "app.example.com");
+        // The first domain an app gets is its primary; nothing to choose yet.
+        assert.equal(body.domain.isPrimary, true);
+        assert.equal(body.domain.lastStatus, "verified");
+        assert.ok(body.domain.verifiedAt, "expected verifiedAt to be stamped");
+        assert.equal(body.dns.status, "verified");
+        assert.equal(body.dns.provider.id, "cloudflare");
+        assert.deepEqual(body.dns.record, {
+          type: "A",
+          name: "app.example.com",
+          value: EXPECTED_IP
+        });
+
+        // The app row's headline URL is the primary domain.
+        const apps = await server.inject({
+          method: "GET",
+          url: "/api/applications",
+          headers: { cookie }
+        });
+        const row = (apps.json() as { id: string; domain: string | null }[]).find(
+          (a) => a.id === created.id
+        );
+        assert.equal(row?.domain, "app.example.com");
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("refuses a hostname another application already answers on", async () => {
+      const cookie = await signIn();
+      const server = await domainServer();
+      try {
+        const first = await createApp(cookie, { domain: "app.example.com" });
+        const second = await createApp(cookie, { name: "Two", slug: "two" });
+        const res = await server.inject({
+          method: "POST",
+          url: `/api/applications/${second.id}/domains`,
+          headers: { cookie },
+          payload: { hostname: "app.example.com" }
+        });
+        // Two apps holding one hostname means Traefik cross-routes traffic.
+        assert.equal(res.statusCode, 409, res.body);
+        assert.equal(await prisma.domain.count(), 1);
+        assert.equal(
+          (await listDomains(server, cookie, first.id))[0]?.hostname,
+          "app.example.com"
+        );
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("refuses a hostname that is an app's built-in address", async () => {
+      const cookie = await signIn();
+      const baseDomain = loadApiConfig().baseDomain;
+      const server = await domainServer();
+      try {
+        const created = await createApp(cookie);
+        const own = await server.inject({
+          method: "POST",
+          url: `/api/applications/${created.id}/domains`,
+          headers: { cookie },
+          payload: { hostname: `${created.slug}.${baseDomain}` }
+        });
+        assert.equal(own.statusCode, 400, own.body);
+        assert.match(own.body, /served automatically/);
+
+        const other = await createApp(cookie, { name: "Two", slug: "two" });
+        const stealing = await server.inject({
+          method: "POST",
+          url: `/api/applications/${created.id}/domains`,
+          headers: { cookie },
+          payload: { hostname: `${other.slug}.${baseDomain}` }
+        });
+        assert.equal(stealing.statusCode, 400, stealing.body);
+        assert.match(stealing.body, /built-in address of the app/);
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("moves the primary flag and promotes a survivor on delete", async () => {
+      const cookie = await signIn();
+      const server = await domainServer();
+      try {
+        const created = await createApp(cookie, { domain: "app.example.com" });
+        const add = await server.inject({
+          method: "POST",
+          url: `/api/applications/${created.id}/domains`,
+          headers: { cookie },
+          payload: { hostname: "www.example.com" }
+        });
+        assert.equal(add.statusCode, 200, add.body);
+        const second = (add.json() as { domain: DomainBody }).domain;
+        assert.equal(second.isPrimary, false);
+
+        const promote = await server.inject({
+          method: "POST",
+          url: `/api/applications/${created.id}/domains/${second.id}/primary`,
+          headers: { cookie }
+        });
+        assert.equal(promote.statusCode, 200, promote.body);
+        const promoted = (promote.json() as { domains: DomainBody[] }).domains;
+        assert.deepEqual(
+          promoted.filter((d) => d.isPrimary).map((d) => d.hostname),
+          ["www.example.com"]
+        );
+
+        // Deleting the primary must leave the app with a headline URL.
+        const del = await server.inject({
+          method: "DELETE",
+          url: `/api/applications/${created.id}/domains/${second.id}`,
+          headers: { cookie }
+        });
+        assert.equal(del.statusCode, 200, del.body);
+        const left = (del.json() as { domains: DomainBody[] }).domains;
+        assert.deepEqual(
+          left.map((d) => [d.hostname, d.isPrimary]),
+          [["app.example.com", true]]
+        );
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("lets members read and verify but not change domains", async () => {
+      const cookie = await signIn();
+      const memberCookie = await signInAs("member");
+      const server = await domainServer();
+      try {
+        const created = await createApp(cookie, { domain: "app.example.com" });
+        const domains = await listDomains(server, memberCookie, created.id);
+        assert.equal(domains.length, 1);
+        const domainId = domains[0]!.id;
+
+        // Re-checking DNS exposes nothing a member cannot already see.
+        const verify = await server.inject({
+          method: "POST",
+          url: `/api/applications/${created.id}/domains/${domainId}/verify`,
+          headers: { cookie: memberCookie }
+        });
+        assert.equal(verify.statusCode, 200, verify.body);
+        assert.equal(
+          (verify.json() as { domain: DomainBody }).domain.lastStatus,
+          "verified"
+        );
+
+        for (const [method, url, payload] of [
+          ["POST", `/api/applications/${created.id}/domains`, { hostname: "b.example.com" }],
+          ["POST", `/api/applications/${created.id}/domains/${domainId}/primary`, undefined],
+          ["DELETE", `/api/applications/${created.id}/domains/${domainId}`, undefined]
+        ] as const) {
+          const res = await server.inject({
+            method,
+            url,
+            headers: { cookie: memberCookie },
+            payload
+          });
+          assert.equal(res.statusCode, 403, `${method} ${url} should be admin-only`);
+        }
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("records domain changes in the audit log", async () => {
+      const cookie = await signIn();
+      const server = await domainServer();
+      try {
+        const created = await createApp(cookie);
+        const add = await server.inject({
+          method: "POST",
+          url: `/api/applications/${created.id}/domains`,
+          headers: { cookie },
+          payload: { hostname: "app.example.com" }
+        });
+        assert.equal(add.statusCode, 200, add.body);
+        const domainId = (add.json() as { domain: DomainBody }).domain.id;
+
+        await server.inject({
+          method: "DELETE",
+          url: `/api/applications/${created.id}/domains/${domainId}`,
+          headers: { cookie }
+        });
+
+        const rows = await prisma.auditLog.findMany({
+          where: { targetType: "domain" },
+          orderBy: { createdAt: "asc" }
+        });
+        assert.deepEqual(
+          rows.map((r) => r.action),
+          ["domain.create", "domain.delete"]
+        );
+        assert.equal(rows[0]?.targetLabel, "app.example.com");
+      } finally {
+        await server.close();
+      }
+    });
+    });
 });

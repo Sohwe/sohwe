@@ -27,7 +27,10 @@ const PROVIDERS: readonly ProviderDef[] = [
     // Standard assigned nameservers, plus the Foundation DNS ("advanced"
     // nameserver) domains Cloudflare uses for enterprise zones.
     nsPattern: /\.ns\.cloudflare\.com$|\.foundationdns\.(?:com|net|org)$/,
-    dnsUrl: () => "https://dash.cloudflare.com/?to=/:account/:zone/dns",
+    // `:account` is Cloudflare's own placeholder — the dashboard fills in
+    // whichever account the signed-in user has. Substituting the real zone
+    // lands on that zone's DNS tab instead of the zone picker.
+    dnsUrl: (zone) => `https://dash.cloudflare.com/?to=/:account/${zone}/dns`,
     apiSupported: true
   },
   {
@@ -64,7 +67,7 @@ const PROVIDERS: readonly ProviderDef[] = [
     name: "DigitalOcean",
     nsPattern: /^ns\d\.digitalocean\.com$/,
     dnsUrl: (zone) => `https://cloud.digitalocean.com/networking/domains/${zone}`,
-    apiSupported: false
+    apiSupported: true
   },
   {
     id: "vercel",
@@ -119,8 +122,10 @@ const PROVIDERS: readonly ProviderDef[] = [
     id: "hetzner",
     name: "Hetzner",
     nsPattern: /\.ns\.hetzner\.(?:com|de)$|^ns\d\.first-ns\.de$|^robotns\d\.second-ns\.(?:de|com)$/,
+    // Hetzner addresses zones by opaque id, which is not known before an API
+    // call, so this can only reach the zone list.
     dnsUrl: () => "https://dns.hetzner.com/",
-    apiSupported: false
+    apiSupported: true
   }
 ];
 

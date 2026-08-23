@@ -24,6 +24,7 @@ export type AuditTargetType =
   | "github"
   | "datastore"
   | "dns"
+  | "domain"
   | "host_fs"
   | "organization";
 
@@ -64,6 +65,9 @@ export type AuditAction =
   | "dns.credentials.set"
   | "dns.credentials.delete"
   | "dns.record.apply"
+  | "domain.create"
+  | "domain.delete"
+  | "domain.primary"
   | "github.connect"
   | "github.disconnect"
   | "host_fs.list"
@@ -107,6 +111,9 @@ export const AUDIT_ACTIONS: readonly AuditAction[] = [
   "dns.credentials.set",
   "dns.credentials.delete",
   "dns.record.apply",
+  "domain.create",
+  "domain.delete",
+  "domain.primary",
   "github.connect",
   "github.disconnect",
   "host_fs.list",
