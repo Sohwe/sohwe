@@ -190,6 +190,7 @@ describe("serializeAppListRow", () => {
       applicationId: "a1",
       hostname,
       isPrimary,
+      redirectTo: null,
       lastStatus: null,
       lastCheckedAt: null,
       verifiedAt: null,

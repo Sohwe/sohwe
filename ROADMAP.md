@@ -359,6 +359,17 @@ with an API driver and an org-level encrypted token — writes the record itself
 - [x] Traefik routing over the whole list: every domain becomes a `Host()`
       term, primary first, deduplicated against the generated subdomain.
       (`apps/worker/src/container-spec.ts`)
+- [x] www ↔ apex pairing with a served redirect: adding an apex offers its
+      `www.` variant (and vice versa, never for real subdomains), the
+      companion is stored with `redirect_to` and answered by Traefik as a
+      one-hop permanent redirect with its own certificate under HTTPS.
+      Redirects cannot chain, cannot target a hostname the app does not hold,
+      never sit in the primary seat, and are cleared when their target is
+      deleted. (`wwwCompanion` in `packages/types/src/index.ts`,
+      `POST .../domains/:domainId/redirect` in
+      `apps/api/src/routes/domains.ts`, `planHosts` in
+      `apps/worker/src/container-spec.ts`, additive migration
+      `20260823175436_domain_redirect_to`; not yet carried in bundles)
 - [x] NS-based provider detection: server-side zone walk + curated registry
       (Cloudflare incl. Foundation DNS, Namecheap, GoDaddy, Route 53, Google
       Cloud DNS, DigitalOcean, Vercel, Porkbun, Linode, OVH, Gandi, Name.com,

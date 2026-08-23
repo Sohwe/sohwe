@@ -9,6 +9,7 @@ import {
   buildTraefikLabels,
   containerNameFor,
   isPublicDomain,
+  planHosts,
   resolveHosts,
   resolveRoutingConfig,
   shouldUseTls,
@@ -34,6 +35,12 @@ const APP: SpecApp = {
 };
 
 const DEPLOYMENT_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+
+/** A custom domain entry; served directly unless a redirect target is given. */
+const d = (hostname: string, redirectTo: string | null = null) => ({
+  hostname,
+  redirectTo
+});
 
 /** Router name for the fixture app, derived rather than hardcoded. */
 const R = traefikRouterName(APP.slug);
@@ -172,7 +179,17 @@ describe("resolveHosts", () => {
   it("adds every custom domain alongside it, in order", () => {
     assert.deepEqual(
       resolveHosts(
-        { slug: "web", domains: ["acme.com", "www.acme.com"] },
+        { slug: "web", domains: [d("acme.com"), d("www.acme.com")] },
+        "apps.example.com"
+      ),
+      ["web.apps.example.com", "acme.com", "www.acme.com"]
+    );
+  });
+
+  it("includes redirecting hosts — they still need routing and a cert", () => {
+    assert.deepEqual(
+      resolveHosts(
+        { slug: "web", domains: [d("acme.com"), d("www.acme.com", "acme.com")] },
         "apps.example.com"
       ),
       ["web.apps.example.com", "acme.com", "www.acme.com"]
@@ -181,7 +198,10 @@ describe("resolveHosts", () => {
 
   it("does not duplicate a custom domain equal to the generated one", () => {
     assert.deepEqual(
-      resolveHosts({ slug: "web", domains: ["web.apps.example.com"] }, "apps.example.com"),
+      resolveHosts(
+        { slug: "web", domains: [d("web.apps.example.com")] },
+        "apps.example.com"
+      ),
       ["web.apps.example.com"]
     );
   });
@@ -191,11 +211,44 @@ describe("resolveHosts", () => {
     // rule and hints the caller passed the same domain twice.
     assert.deepEqual(
       resolveHosts(
-        { slug: "web", domains: ["Acme.COM", "acme.com", " acme.com "] },
+        { slug: "web", domains: [d("Acme.COM"), d("acme.com"), d(" acme.com ")] },
         "apps.example.com"
       ),
       ["web.apps.example.com", "acme.com"]
     );
+  });
+});
+
+describe("planHosts", () => {
+  it("separates served hosts from redirecting ones", () => {
+    assert.deepEqual(
+      planHosts(
+        { slug: "web", domains: [d("acme.com"), d("www.acme.com", "acme.com")] },
+        "apps.example.com"
+      ),
+      {
+        served: ["web.apps.example.com", "acme.com"],
+        redirects: [{ from: "www.acme.com", to: "acme.com" }]
+      }
+    );
+  });
+
+  it("demotes a self-redirect to serving", () => {
+    assert.deepEqual(
+      planHosts(
+        { slug: "web", domains: [d("acme.com", "acme.com")] },
+        "apps.example.com"
+      ),
+      { served: ["web.apps.example.com", "acme.com"], redirects: [] }
+    );
+  });
+
+  it("normalizes the redirect target's case", () => {
+    const plan = planHosts(
+      { slug: "web", domains: [d("acme.com"), d("www.acme.com", "Acme.COM")] },
+      "apps.example.com"
+    );
+    assert.deepEqual(plan.redirects, [{ from: "www.acme.com", to: "acme.com" }]);
   });
 });
 
@@ -273,7 +326,7 @@ describe("buildTraefikLabels", () => {
   });
 
   it("adds a websecure router and an HTTP redirect when TLS applies", () => {
-    const l = labels({ domains: ["acme.com"] }, { httpsEnabled: true });
+    const l = labels({ domains: [d("acme.com")] }, { httpsEnabled: true });
     assert.equal(l[`traefik.http.routers.${R}s.entrypoints`], "websecure");
     assert.equal(l[`traefik.http.routers.${R}s.tls`], "true");
     assert.equal(l[`traefik.http.routers.${R}s.tls.certresolver`], "letsencrypt");
@@ -288,14 +341,14 @@ describe("buildTraefikLabels", () => {
 
   it("uses the configured cert resolver", () => {
     const l = labels(
-      { domains: ["acme.com"] },
+      { domains: [d("acme.com")] },
       { httpsEnabled: true, certResolver: "dns-cloudflare" }
     );
     assert.equal(l[`traefik.http.routers.${R}s.tls.certresolver`], "dns-cloudflare");
   });
 
   it("gives both routers the same host rule", () => {
-    const l = labels({ domains: ["acme.com"] }, { httpsEnabled: true });
+    const l = labels({ domains: [d("acme.com")] }, { httpsEnabled: true });
     assert.equal(l[`traefik.http.routers.${R}.rule`], l[`traefik.http.routers.${R}s.rule`]);
     assert.match(l[`traefik.http.routers.${R}.rule`] ?? "", /acme\.com/);
   });
@@ -314,6 +367,65 @@ describe("buildTraefikLabels", () => {
   it("does not request a certificate for a localhost-only app", () => {
     const l = labels({}, { baseDomain: "sohwe.localhost", httpsEnabled: true });
     assert.ok(!Object.keys(l).some((k) => k.includes("certresolver")));
+  });
+
+  /** Router names of the redirect routers in a label set (no TLS suffix). */
+  const redirectRouters = (l: Record<string, string>) => {
+    const re = new RegExp(`^traefik\\.http\\.routers\\.(${R}rd[0-9a-f]{8})\\.rule$`);
+    return Object.keys(l)
+      .map((k) => re.exec(k)?.[1])
+      .filter((n): n is string => n !== undefined);
+  };
+
+  it("answers a redirecting host with a redirect router, not the app rule", () => {
+    const l = labels({
+      domains: [d("acme.com"), d("www.acme.com", "acme.com")]
+    });
+    // The served rule must not claim the redirecting host, or the two routers
+    // would race for it.
+    assert.equal(
+      l[`traefik.http.routers.${R}.rule`],
+      "Host(`web.apps.example.com`) || Host(`acme.com`)"
+    );
+
+    const [name, ...rest] = redirectRouters(l);
+    assert.ok(name, "expected a redirect router");
+    assert.deepEqual(rest, []);
+    assert.equal(l[`traefik.http.routers.${name}.rule`], "Host(`www.acme.com`)");
+    assert.equal(l[`traefik.http.routers.${name}.entrypoints`], "web");
+    assert.equal(l[`traefik.http.routers.${name}.middlewares`], `${name}-to`);
+    assert.equal(
+      l[`traefik.http.middlewares.${name}-to.redirectregex.regex`],
+      "^https?://www\\.acme\\.com/(.*)"
+    );
+    // HTTPS is off on this instance, so the redirect lands on plain http.
+    assert.equal(
+      l[`traefik.http.middlewares.${name}-to.redirectregex.replacement`],
+      "http://acme.com/${1}"
+    );
+    assert.equal(
+      l[`traefik.http.middlewares.${name}-to.redirectregex.permanent`],
+      "true"
+    );
+  });
+
+  it("gives a redirecting host a certificate and an https target under TLS", () => {
+    const l = labels(
+      { domains: [d("acme.com"), d("www.acme.com", "acme.com")] },
+      { httpsEnabled: true }
+    );
+    const [name] = redirectRouters(l);
+    assert.ok(name, "expected a redirect router");
+    // `https://www.acme.com` must present a valid cert before redirecting.
+    assert.equal(l[`traefik.http.routers.${name}s.entrypoints`], "websecure");
+    assert.equal(l[`traefik.http.routers.${name}s.tls`], "true");
+    assert.equal(l[`traefik.http.routers.${name}s.tls.certresolver`], "letsencrypt");
+    assert.equal(l[`traefik.http.routers.${name}s.middlewares`], `${name}-to`);
+    // One hop: http://www → https://apex directly, not via the scheme upgrade.
+    assert.equal(
+      l[`traefik.http.middlewares.${name}-to.redirectregex.replacement`],
+      "https://acme.com/${1}"
+    );
   });
 });
 

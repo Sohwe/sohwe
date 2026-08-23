@@ -429,6 +429,11 @@ export type AppDomain = {
   applicationId: string;
   hostname: string;
   isPrimary: boolean;
+  /**
+   * Hostname of another domain on this app that this one permanently
+   * redirects to, or null when it serves the app directly.
+   */
+  redirectTo: string | null;
   /** Cached result of the last DNS check; null before the first one. */
   lastStatus: DnsInspection["status"] | null;
   lastCheckedAt: string | null;

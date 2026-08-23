@@ -60,9 +60,80 @@ export function normalizeHostname(input: string): string {
 export const CreateDomainSchema = z.object({
   hostname: z.string().transform(normalizeHostname).pipe(DomainSchema),
   /** Make this the app's primary domain, demoting any current one. */
-  primary: z.boolean().default(false)
+  primary: z.boolean().default(false),
+  /**
+   * Serve this hostname as a permanent redirect to another domain the app
+   * already holds, instead of serving the app on it directly — the
+   * `www.example.com` → `example.com` pairing. Incompatible with `primary`.
+   */
+  redirectTo: z
+    .string()
+    .transform(normalizeHostname)
+    .pipe(DomainSchema)
+    .optional()
 });
 export type CreateDomainInput = z.infer<typeof CreateDomainSchema>;
+
+/** Body for `POST /api/applications/:id/domains/:domainId/redirect`. */
+export const SetDomainRedirectSchema = z.object({
+  /** Hostname to redirect to, or null to serve the domain directly again. */
+  target: z
+    .string()
+    .transform(normalizeHostname)
+    .pipe(DomainSchema)
+    .nullable()
+});
+export type SetDomainRedirectInput = z.infer<typeof SetDomainRedirectSchema>;
+
+/**
+ * Multi-label public suffixes common enough that treating `example.<suffix>`
+ * as a subdomain would make `wwwCompanion` miss obvious apexes. Deliberately
+ * not the full Public Suffix List: an unlisted compound TLD only means the
+ * www pairing is not *offered*, never that a hostname is rejected.
+ */
+const MULTI_LABEL_TLDS = new Set([
+  "co.uk", "org.uk", "ac.uk", "gov.uk", "me.uk", "net.uk",
+  "com.au", "net.au", "org.au",
+  "co.nz", "net.nz", "org.nz",
+  "co.za", "org.za", "web.za",
+  "com.br", "net.br", "org.br",
+  "com.mx", "com.ar", "com.co", "com.pe",
+  "co.in", "net.in", "org.in",
+  "co.jp", "ne.jp", "or.jp",
+  "com.sg", "com.my", "com.hk", "com.tw",
+  "com.cn", "net.cn", "org.cn",
+  "co.kr", "or.kr",
+  "com.tr", "com.ph", "com.vn",
+  "com.gh", "org.gh", "edu.gh",
+  "com.ng", "org.ng", "co.ke", "or.ke", "com.eg",
+  "co.il", "org.il", "com.sa", "com.pk", "com.bd"
+]);
+
+/**
+ * Whether a (normalized, valid) hostname looks like a zone apex —
+ * `example.com`, `example.co.uk` — rather than a subdomain. Heuristic by
+ * design; see `MULTI_LABEL_TLDS` for why erring toward "not an apex" is fine.
+ */
+export function isApexHostname(hostname: string): boolean {
+  const labels = hostname.split(".");
+  if (labels.length === 2) return true;
+  if (labels.length === 3) return MULTI_LABEL_TLDS.has(labels.slice(1).join("."));
+  return false;
+}
+
+/**
+ * The hostname worth offering alongside a just-entered one, Vercel-style: an
+ * apex pairs with its `www.` variant, `www.<apex>` pairs with the apex, and a
+ * hostname with any other subdomain pairs with nothing. The convention only
+ * exists at the zone apex — nobody expects `www.app.example.com`.
+ */
+export function wwwCompanion(hostname: string): string | null {
+  if (hostname.startsWith("www.")) {
+    const apex = hostname.slice(4);
+    return isApexHostname(apex) ? apex : null;
+  }
+  return isApexHostname(hostname) ? `www.${hostname}` : null;
+}
 
 export const CreateApplicationSchema = z.object({
   name: z.string().min(1),
@@ -732,6 +803,11 @@ export type DomainRow = {
   applicationId: string;
   hostname: string;
   isPrimary: boolean;
+  /**
+   * Hostname of another domain on the same app this one permanently redirects
+   * to, or null when the hostname serves the app directly.
+   */
+  redirectTo: string | null;
   lastStatus: DnsInspectionStatus | null;
   lastCheckedAt: string | null;
   verifiedAt: string | null;

@@ -19,6 +19,7 @@ export const domainListSelect = {
   applicationId: true,
   hostname: true,
   isPrimary: true,
+  redirectTo: true,
   lastStatus: true,
   lastCheckedAt: true,
   verifiedAt: true,
@@ -99,6 +100,7 @@ type DomainRow = {
   applicationId: string;
   hostname: string;
   isPrimary: boolean;
+  redirectTo: string | null;
   lastStatus: string | null;
   lastCheckedAt: Date | null;
   verifiedAt: Date | null;

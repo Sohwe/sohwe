@@ -2760,6 +2760,7 @@ describe("API routes", { skip }, () => {
       id: string;
       hostname: string;
       isPrimary: boolean;
+      redirectTo: string | null;
       lastStatus: string | null;
       verifiedAt: string | null;
     };
@@ -2914,6 +2915,132 @@ describe("API routes", { skip }, () => {
         assert.deepEqual(
           left.map((d) => [d.hostname, d.isPrimary]),
           [["app.example.com", true]]
+        );
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("adds a www companion that redirects, and keeps it out of the primary seat", async () => {
+      const cookie = await signIn();
+      const server = await domainServer();
+      try {
+        const created = await createApp(cookie, { domain: "example.com" });
+        const add = await server.inject({
+          method: "POST",
+          url: `/api/applications/${created.id}/domains`,
+          headers: { cookie },
+          payload: { hostname: "www.example.com", redirectTo: "example.com" }
+        });
+        assert.equal(add.statusCode, 200, add.body);
+        const www = (add.json() as { domain: DomainBody }).domain;
+        assert.equal(www.redirectTo, "example.com");
+        // A redirecting domain is never auto-promoted; the target is the URL.
+        assert.equal(www.isPrimary, false);
+
+        // Nor can it be promoted by hand while it still redirects.
+        const promote = await server.inject({
+          method: "POST",
+          url: `/api/applications/${created.id}/domains/${www.id}/primary`,
+          headers: { cookie }
+        });
+        assert.equal(promote.statusCode, 400, promote.body);
+        assert.match(promote.body, /redirects to/);
+
+        // Clearing the redirect turns the hostname back into a served one.
+        const clear = await server.inject({
+          method: "POST",
+          url: `/api/applications/${created.id}/domains/${www.id}/redirect`,
+          headers: { cookie },
+          payload: { target: null }
+        });
+        assert.equal(clear.statusCode, 200, clear.body);
+        const cleared = (clear.json() as { domains: DomainBody[] }).domains;
+        assert.deepEqual(
+          cleared.map((x) => [x.hostname, x.redirectTo]),
+          [
+            ["example.com", null],
+            ["www.example.com", null]
+          ]
+        );
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("refuses redirect targets that would dead-end or chain", async () => {
+      const cookie = await signIn();
+      const server = await domainServer();
+      try {
+        const created = await createApp(cookie, { domain: "example.com" });
+        const post = (payload: Record<string, unknown>) =>
+          server.inject({
+            method: "POST",
+            url: `/api/applications/${created.id}/domains`,
+            headers: { cookie },
+            payload
+          });
+
+        // A target the app does not hold is a redirect into a dead name.
+        const unknown = await post({
+          hostname: "www.example.com",
+          redirectTo: "elsewhere.example.com"
+        });
+        assert.equal(unknown.statusCode, 400, unknown.body);
+        assert.match(unknown.body, /not a domain of this app/);
+
+        // `primary` and `redirectTo` contradict each other.
+        const primary = await post({
+          hostname: "www.example.com",
+          redirectTo: "example.com",
+          primary: true
+        });
+        assert.equal(primary.statusCode, 400, primary.body);
+
+        // A redirect into another redirect would chain hops.
+        const www = await post({
+          hostname: "www.example.com",
+          redirectTo: "example.com"
+        });
+        assert.equal(www.statusCode, 200, www.body);
+        const chained = await post({
+          hostname: "old.example.com",
+          redirectTo: "www.example.com"
+        });
+        assert.equal(chained.statusCode, 400, chained.body);
+        assert.match(chained.body, /itself redirects/);
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("clears redirects that pointed at a deleted domain", async () => {
+      const cookie = await signIn();
+      const server = await domainServer();
+      try {
+        const created = await createApp(cookie, { domain: "example.com" });
+        const add = await server.inject({
+          method: "POST",
+          url: `/api/applications/${created.id}/domains`,
+          headers: { cookie },
+          payload: { hostname: "www.example.com", redirectTo: "example.com" }
+        });
+        assert.equal(add.statusCode, 200, add.body);
+
+        const apexId = (await listDomains(server, cookie, created.id)).find(
+          (x) => x.hostname === "example.com"
+        )!.id;
+        const del = await server.inject({
+          method: "DELETE",
+          url: `/api/applications/${created.id}/domains/${apexId}`,
+          headers: { cookie }
+        });
+        assert.equal(del.statusCode, 200, del.body);
+        // The survivor would otherwise bounce visitors into a dead hostname.
+        const left = (del.json() as { domains: DomainBody[] }).domains;
+        assert.deepEqual(
+          left.map((x) => [x.hostname, x.redirectTo, x.isPrimary]),
+          [["www.example.com", null, true]]
         );
       } finally {
         await server.close();

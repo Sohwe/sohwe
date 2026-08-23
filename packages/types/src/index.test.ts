@@ -20,11 +20,14 @@ import {
   EnvVarsPatchSchema,
   EnvVarsReplaceSchema,
   FsPathQuerySchema,
+  isApexHostname,
   RoleSchema,
   RollbackBodySchema,
+  SetDomainRedirectSchema,
   UpdateApplicationSchema,
   UpdateMemberRoleSchema,
-  VolumeCreateSchema
+  VolumeCreateSchema,
+  wwwCompanion
 } from "./index";
 
 /**
@@ -539,5 +542,63 @@ describe("CreateDomainSchema", () => {
         `expected ${JSON.stringify(hostname)} to be rejected`
       );
     }
+  });
+
+  it("normalizes and validates redirectTo like the hostname itself", () => {
+    const parsed = CreateDomainSchema.parse({
+      hostname: "www.example.com",
+      redirectTo: "https://Example.COM/"
+    });
+    assert.equal(parsed.redirectTo, "example.com");
+    assert.equal(
+      CreateDomainSchema.safeParse({
+        hostname: "www.example.com",
+        redirectTo: "not a host"
+      }).success,
+      false
+    );
+  });
+});
+
+describe("SetDomainRedirectSchema", () => {
+  it("normalizes a target and accepts null to clear", () => {
+    assert.equal(
+      SetDomainRedirectSchema.parse({ target: "https://Example.COM" }).target,
+      "example.com"
+    );
+    assert.equal(SetDomainRedirectSchema.parse({ target: null }).target, null);
+  });
+});
+
+describe("wwwCompanion", () => {
+  it("pairs an apex with its www variant", () => {
+    assert.equal(wwwCompanion("example.com"), "www.example.com");
+    // Common compound TLDs still count as apexes.
+    assert.equal(wwwCompanion("example.co.uk"), "www.example.co.uk");
+    assert.equal(wwwCompanion("example.com.gh"), "www.example.com.gh");
+  });
+
+  it("pairs a www hostname back with its apex", () => {
+    assert.equal(wwwCompanion("www.example.com"), "example.com");
+    assert.equal(wwwCompanion("www.example.co.uk"), "example.co.uk");
+  });
+
+  it("offers nothing for a real subdomain", () => {
+    // The www convention lives at the zone apex; `www.app.example.com` is not
+    // a thing anyone expects to exist.
+    assert.equal(wwwCompanion("app.example.com"), null);
+    assert.equal(wwwCompanion("www.app.example.com"), null);
+    assert.equal(wwwCompanion("staging.example.co.uk"), null);
+  });
+});
+
+describe("isApexHostname", () => {
+  it("recognizes two-label hostnames and listed compound TLDs", () => {
+    assert.equal(isApexHostname("example.com"), true);
+    assert.equal(isApexHostname("example.co.uk"), true);
+    assert.equal(isApexHostname("app.example.com"), false);
+    // An unlisted compound TLD errs toward "not an apex" — the cost is only
+    // that no www pairing is offered.
+    assert.equal(isApexHostname("a.b.c.example.com"), false);
   });
 });

@@ -26,12 +26,21 @@ export type RoutingConfig = {
   certResolver: string;
 };
 
+export type SpecDomain = {
+  hostname: string;
+  /**
+   * Hostname this one permanently redirects to instead of serving the app —
+   * the `www.example.com` → `example.com` pairing. Null serves the app.
+   */
+  redirectTo: string | null;
+};
+
 export type SpecApp = {
   id: string;
   slug: string;
   port: number;
   /** Custom hostnames, in the order they should appear in the Traefik rule. */
-  domains: string[];
+  domains: SpecDomain[];
   memoryLimitMb: number | null;
   cpuLimit: number | null;
 };
@@ -79,27 +88,52 @@ export function containerNameFor(slug: string): string {
   return `sohwe-${slug}`.replace(/[^a-z0-9-]/g, "-").slice(0, 63) || "sohwe-app";
 }
 
+export type HostPlan = {
+  /** Hosts served by the app itself, generated subdomain first. */
+  served: string[];
+  /** Hosts answered with a permanent redirect to another host. */
+  redirects: { from: string; to: string }[];
+};
+
 /**
- * Hosts this app answers on: always the generated subdomain, plus every custom
- * domain attached to it.
- *
- * The generated host stays first and duplicates are dropped — a custom domain
- * equal to the generated one, or listed twice, would otherwise emit a repeated
- * `Host()` term in the router rule.
+ * Split the hosts this app answers on into ones that serve it and ones that
+ * only redirect. The generated subdomain always serves and stays first, and
+ * duplicates are dropped — a custom domain equal to the generated one, or
+ * listed twice, would otherwise emit a repeated `Host()` term. A redirect
+ * pointing at the host's own name is meaningless and demotes to serving.
+ */
+export function planHosts(
+  app: { slug: string; domains: SpecDomain[] },
+  baseDomain: string
+): HostPlan {
+  const seen = new Set<string>();
+  const served: string[] = [];
+  const redirects: { from: string; to: string }[] = [];
+  const generated: SpecDomain = {
+    hostname: `${app.slug}.${baseDomain}`,
+    redirectTo: null
+  };
+  for (const d of [generated, ...app.domains]) {
+    const host = d.hostname.trim().toLowerCase();
+    if (host === "" || seen.has(host)) continue;
+    seen.add(host);
+    const to = d.redirectTo?.trim().toLowerCase() ?? "";
+    if (to !== "" && to !== host) redirects.push({ from: host, to });
+    else served.push(host);
+  }
+  return { served, redirects };
+}
+
+/**
+ * Every host this app answers on — served and redirecting alike; both need
+ * routing (and, under HTTPS, a certificate).
  */
 export function resolveHosts(
-  app: { slug: string; domains: string[] },
+  app: { slug: string; domains: SpecDomain[] },
   baseDomain: string
 ): string[] {
-  const seen = new Set<string>();
-  const hosts: string[] = [];
-  for (const host of [`${app.slug}.${baseDomain}`, ...app.domains]) {
-    const normalized = host.trim().toLowerCase();
-    if (normalized === "" || seen.has(normalized)) continue;
-    seen.add(normalized);
-    hosts.push(normalized);
-  }
-  return hosts;
+  const plan = planHosts(app, baseDomain);
+  return [...plan.served, ...plan.redirects.map((r) => r.from)];
 }
 
 /**
@@ -122,12 +156,23 @@ export function buildHostRule(hosts: string[]): string {
   return hosts.map((h) => `Host(\`${h}\`)`).join(" || ");
 }
 
+/** Escape a literal hostname for use inside a redirectregex pattern. */
+function escapeRegex(host: string): string {
+  return host.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 /**
  * Traefik labels for an app container.
  *
- * An HTTP router is always present. When TLS applies, a second router is added
- * on `websecure` and the plain router gains a redirect middleware, so HTTP
- * traffic is upgraded rather than served.
+ * An HTTP router is always present for the served hosts. When TLS applies, a
+ * second router is added on `websecure` and the plain router gains a redirect
+ * middleware, so HTTP traffic is upgraded rather than served.
+ *
+ * Redirecting hosts (`Domain.redirectTo`) each get routers of their own whose
+ * middleware answers with a permanent redirect to the target host instead of
+ * proxying — one hop, straight to the target's canonical scheme. Under TLS
+ * they too get a `websecure` router, because `https://www.example.com` must
+ * present a valid certificate before it can redirect anywhere.
  */
 export function buildTraefikLabels(input: {
   app: SpecApp;
@@ -136,9 +181,11 @@ export function buildTraefikLabels(input: {
 }): Record<string, string> {
   const { app, deploymentId, routing } = input;
   const router = traefikRouterName(app.slug);
-  const hosts = resolveHosts(app, routing.baseDomain);
-  const hostRule = buildHostRule(hosts);
-  const useTls = shouldUseTls(hosts, routing.httpsEnabled);
+  const { served, redirects } = planHosts(app, routing.baseDomain);
+  const allHosts = [...served, ...redirects.map((r) => r.from)];
+  const hostRule = buildHostRule(served);
+  const useTls = shouldUseTls(allHosts, routing.httpsEnabled);
+  const scheme = useTls ? "https" : "http";
 
   const labels: Record<string, string> = {
     "traefik.enable": "true",
@@ -164,6 +211,34 @@ export function buildTraefikLabels(input: {
     labels[`traefik.http.middlewares.${mw}.redirectscheme.scheme`] = "https";
     labels[`traefik.http.middlewares.${mw}.redirectscheme.permanent`] = "true";
     labels[`traefik.http.routers.${router}.middlewares`] = mw;
+  }
+
+  for (const r of redirects) {
+    // Named by a digest of the source host, like the router itself: stable
+    // across deploys and collision-free however the hostnames sanitize.
+    const name = `${router}rd${createHash("sha256").update(r.from).digest("hex").slice(0, ROUTER_DIGEST_LEN)}`;
+    const mw = `${name}-to`;
+    labels[`traefik.http.middlewares.${mw}.redirectregex.regex`] =
+      `^https?://${escapeRegex(r.from)}/(.*)`;
+    labels[`traefik.http.middlewares.${mw}.redirectregex.replacement`] =
+      `${scheme}://${r.to}/` + "${1}";
+    labels[`traefik.http.middlewares.${mw}.redirectregex.permanent`] = "true";
+
+    labels[`traefik.http.routers.${name}.rule`] = buildHostRule([r.from]);
+    labels[`traefik.http.routers.${name}.entrypoints`] = "web";
+    // The middleware answers before anything is proxied; the service is only
+    // here because Traefik requires every router to name one.
+    labels[`traefik.http.routers.${name}.service`] = router;
+    labels[`traefik.http.routers.${name}.middlewares`] = mw;
+
+    if (useTls) {
+      labels[`traefik.http.routers.${name}s.rule`] = buildHostRule([r.from]);
+      labels[`traefik.http.routers.${name}s.entrypoints`] = "websecure";
+      labels[`traefik.http.routers.${name}s.service`] = router;
+      labels[`traefik.http.routers.${name}s.middlewares`] = mw;
+      labels[`traefik.http.routers.${name}s.tls`] = "true";
+      labels[`traefik.http.routers.${name}s.tls.certresolver`] = routing.certResolver;
+    }
   }
 
   return labels;

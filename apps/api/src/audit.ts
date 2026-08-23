@@ -68,6 +68,7 @@ export type AuditAction =
   | "domain.create"
   | "domain.delete"
   | "domain.primary"
+  | "domain.redirect"
   | "github.connect"
   | "github.disconnect"
   | "host_fs.list"
@@ -114,6 +115,7 @@ export const AUDIT_ACTIONS: readonly AuditAction[] = [
   "domain.create",
   "domain.delete",
   "domain.primary",
+  "domain.redirect",
   "github.connect",
   "github.disconnect",
   "host_fs.list",

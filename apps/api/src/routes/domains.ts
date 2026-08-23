@@ -3,6 +3,7 @@ import { prisma, type Prisma } from "@sohwe/db";
 import { decryptToUtf8 } from "@sohwe/crypto";
 import {
   CreateDomainSchema,
+  SetDomainRedirectSchema,
   DNS_API_PROVIDERS,
   type DnsApiProvider,
   type DnsApplyResult,
@@ -43,6 +44,7 @@ type DomainRecord = {
   applicationId: string;
   hostname: string;
   isPrimary: boolean;
+  redirectTo: string | null;
   lastStatus: string | null;
   lastCheckedAt: Date | null;
   verifiedAt: Date | null;
@@ -54,6 +56,7 @@ const domainSelect = {
   applicationId: true,
   hostname: true,
   isPrimary: true,
+  redirectTo: true,
   lastStatus: true,
   lastCheckedAt: true,
   verifiedAt: true,
@@ -72,6 +75,7 @@ function serializeDomain(d: DomainRecord): DomainRow {
     applicationId: d.applicationId,
     hostname: d.hostname,
     isPrimary: d.isPrimary,
+    redirectTo: d.redirectTo,
     // Written only by this module, always from a `DnsInspectionStatus`.
     lastStatus: d.lastStatus as DomainRow["lastStatus"],
     lastCheckedAt: d.lastCheckedAt?.toISOString() ?? null,
@@ -146,10 +150,20 @@ export async function registerDomainRoutes(
     async (req, reply): Promise<DomainVerifyResult | void> => {
       const u = req.user!;
       const { id } = req.params as z.infer<typeof IdParam>;
-      const { hostname, primary } = CreateDomainSchema.parse(req.body);
+      const { hostname, primary, redirectTo } = CreateDomainSchema.parse(req.body);
 
       const a = await loadApp(u.organizationId, id);
       if (!a) return reply.notFound();
+
+      if (redirectTo !== undefined) {
+        if (primary) {
+          return reply.badRequest(
+            "A redirecting domain cannot be the primary — the primary is the URL the redirect should land on."
+          );
+        }
+        const err = await redirectTargetError(a.id, hostname, redirectTo);
+        if (err) return reply.badRequest(err);
+      }
 
       // A hostname under the apps base domain that matches some app's slug is
       // already generated for that app; claiming it by hand would put two
@@ -172,8 +186,10 @@ export async function registerDomainRoutes(
       });
       // The first domain an app gets is its primary; there is nothing to choose
       // between yet, and an app whose only domain was non-primary would show no
-      // custom URL anywhere in the dashboard.
-      const makePrimary = primary || existingCount === 0;
+      // custom URL anywhere in the dashboard. A redirecting domain is never
+      // auto-promoted — its target is the URL that deserves the badge.
+      const makePrimary =
+        redirectTo === undefined && (primary || existingCount === 0);
 
       let created: DomainRecord;
       try {
@@ -185,7 +201,12 @@ export async function registerDomainRoutes(
             });
           }
           return tx.domain.create({
-            data: { applicationId: a.id, hostname, isPrimary: makePrimary },
+            data: {
+              applicationId: a.id,
+              hostname,
+              isPrimary: makePrimary,
+              redirectTo: redirectTo ?? null
+            },
             select: domainSelect
           });
         });
@@ -205,7 +226,12 @@ export async function registerDomainRoutes(
         targetType: "domain",
         targetId: created.id,
         targetLabel: hostname,
-        metadata: { applicationId: a.id, appSlug: a.slug, primary: makePrimary }
+        metadata: {
+          applicationId: a.id,
+          appSlug: a.slug,
+          primary: makePrimary,
+          ...(redirectTo === undefined ? {} : { redirectTo })
+        }
       });
 
       // Check immediately: the whole point of adding a domain here is to be
@@ -264,6 +290,14 @@ export async function registerDomainRoutes(
       });
       if (!existing) return reply.notFound();
 
+      // The primary is the app's headline URL; a hostname that answers with a
+      // redirect has no business being it.
+      if (existing.redirectTo) {
+        return reply.badRequest(
+          `${existing.hostname} redirects to ${existing.redirectTo} — stop the redirect before making it primary.`
+        );
+      }
+
       const rows = await prisma.$transaction(async (tx) => {
         await tx.domain.updateMany({
           where: { applicationId: existing.applicationId, isPrimary: true },
@@ -291,6 +325,69 @@ export async function registerDomainRoutes(
     }
   );
 
+  app.post(
+    "/api/applications/:id/domains/:domainId/redirect",
+    {
+      preHandler: [requireRole("admin")],
+      schema: { params: DomainParams, body: SetDomainRedirectSchema }
+    },
+    async (req, reply): Promise<{ domains: DomainRow[] } | void> => {
+      const u = req.user!;
+      const { id, domainId } = req.params as z.infer<typeof DomainParams>;
+      const { target } = SetDomainRedirectSchema.parse(req.body);
+
+      const existing = await prisma.domain.findFirst({
+        where: { id: domainId, application: { id, organizationId: u.organizationId } },
+        select: domainSelect
+      });
+      if (!existing) return reply.notFound();
+
+      if (target !== null) {
+        if (existing.isPrimary) {
+          return reply.badRequest(
+            `${existing.hostname} is the primary domain — make another domain primary before redirecting this one.`
+          );
+        }
+        // No chains: a hostname other domains land on must itself resolve to
+        // the app, or www → apex → elsewhere strings redirects together.
+        const dependents = await prisma.domain.count({
+          where: { applicationId: existing.applicationId, redirectTo: existing.hostname }
+        });
+        if (dependents > 0) {
+          return reply.badRequest(
+            `Other domains redirect to ${existing.hostname} — point them elsewhere before redirecting it too.`
+          );
+        }
+        const err = await redirectTargetError(
+          existing.applicationId,
+          existing.hostname,
+          target
+        );
+        if (err) return reply.badRequest(err);
+      }
+
+      await prisma.domain.update({
+        where: { id: existing.id },
+        data: { redirectTo: target }
+      });
+      const rows = await prisma.domain.findMany({
+        where: { applicationId: existing.applicationId },
+        orderBy: domainOrder,
+        select: domainSelect
+      });
+
+      await recordAudit(req, {
+        action: "domain.redirect",
+        targetType: "domain",
+        targetId: existing.id,
+        targetLabel: existing.hostname,
+        metadata: { applicationId: existing.applicationId, target }
+      });
+      // Like every routing change, this takes effect on the next deploy.
+      return { domains: rows.map(serializeDomain) };
+    }
+  );
+
   app.delete(
     "/api/applications/:id/domains/:domainId",
     {
@@ -309,6 +406,12 @@ export async function registerDomainRoutes(
 
       const rows = await prisma.$transaction(async (tx) => {
         await tx.domain.delete({ where: { id: existing.id } });
+        // Anything that redirected to the deleted hostname would now bounce
+        // visitors into a dead name; serve those domains directly instead.
+        await tx.domain.updateMany({
+          where: { applicationId: existing.applicationId, redirectTo: existing.hostname },
+          data: { redirectTo: null }
+        });
         const remaining = await tx.domain.findMany({
           where: { applicationId: existing.applicationId },
           orderBy: { createdAt: "asc" },
@@ -461,6 +564,33 @@ export async function registerDomainRoutes(
 
 function isApiProvider(id: string): id is DnsApiProvider {
   return (DNS_API_PROVIDERS as readonly string[]).includes(id);
+}
+
+/**
+ * Why `target` cannot be the redirect destination of `fromHostname`, or null
+ * when it can. A target must be another hostname the same app actually
+ * serves: redirecting to an outside name or to itself dead-ends, and
+ * redirecting into a second redirect makes a chain.
+ */
+async function redirectTargetError(
+  applicationId: string,
+  fromHostname: string,
+  target: string
+): Promise<string | null> {
+  if (target === fromHostname) {
+    return `${fromHostname} cannot redirect to itself.`;
+  }
+  const row = await prisma.domain.findFirst({
+    where: { applicationId, hostname: target },
+    select: { redirectTo: true }
+  });
+  if (!row) {
+    return `${target} is not a domain of this app — add it first, then redirect ${fromHostname} to it.`;
+  }
+  if (row.redirectTo) {
+    return `${target} itself redirects to ${row.redirectTo} — redirect ${fromHostname} straight there instead.`;
+  }
+  return null;
 }
 
 /**

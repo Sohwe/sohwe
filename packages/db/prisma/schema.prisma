@@ -144,6 +144,11 @@ model Domain {
   // links point at. At most one per app; enforced in the API, not in SQL —
   // a partial unique index would read as drift to `prisma migrate diff`.
   isPrimary     Boolean     @default(false) @map("is_primary")
+  // Hostname of another domain on the same app that this one permanently
+  // redirects to (the Vercel-style `www.example.com` → `example.com` pairing).
+  // Null means the hostname serves the app directly. Mutually exclusive with
+  // `isPrimary`; both invariants are enforced in the API, not in SQL.
+  redirectTo    String?     @map("redirect_to")
   // Cached result of the last DNS check (`verified` | `mismatch` |
   // `unresolved` | `unknown`), so the domain list renders without a lookup
   // per row. Null until the domain has been checked once.

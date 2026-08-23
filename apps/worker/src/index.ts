@@ -279,12 +279,13 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
   let commitSha: string | null = null;
   const app = await prisma.application.findFirst({
     where: { id: applicationId },
-    // Custom domains all become `Host()` terms on the container's Traefik
-    // router. Primary first so it leads the rule and reads as *the* URL.
+    // Custom domains become `Host()` terms on the container's Traefik router
+    // — or, when `redirectTo` is set, a redirect router of their own. Primary
+    // first so it leads the rule and reads as *the* URL.
     include: {
       domains: {
         orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }],
-        select: { hostname: true }
+        select: { hostname: true, redirectTo: true }
       }
     }
   });
@@ -437,8 +438,7 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
     logTails.stop(app.id);
     await stopAndRemoveAppContainers(docker, app.id);
 
-    const specApp = { ...app, domains: app.domains.map((d) => d.hostname) };
-    const hosts = resolveHosts(specApp, routing.baseDomain);
+    const hosts = resolveHosts(app, routing.baseDomain);
     onLog(
       `[sohwe] Starting container (Traefik: ${buildHostRule(hosts)}, port ${String(app.port)}, tls=${String(shouldUseTls(hosts, routing.httpsEnabled))})...`
     );
@@ -452,7 +452,7 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
 
     const c = await docker.createContainer(
       buildContainerSpec({
-        app: specApp,
+        app,
         deploymentId,
         imageTag,
         volumes: vols,

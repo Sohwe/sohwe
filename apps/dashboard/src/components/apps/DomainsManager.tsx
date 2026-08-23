@@ -1,14 +1,16 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CreateDomainSchema } from "@sohwe/types";
+import { CreateDomainSchema, wwwCompanion } from "@sohwe/types";
 import {
   ChevronDown,
   ChevronRight,
+  CornerDownRight,
   ExternalLink,
   Plus,
   RefreshCw,
   Star,
-  Trash2
+  Trash2,
+  Undo2
 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -65,6 +67,7 @@ export function DomainsManager({ app }: { app: AppRow }) {
   const admin = isAdmin(me);
 
   const [hostname, setHostname] = useState("");
+  const [withCompanion, setWithCompanion] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [removing, setRemoving] = useState<AppDomain | null>(null);
   /** Fresh inspections keyed by domain id, from an add or a re-check. */
@@ -75,7 +78,10 @@ export function DomainsManager({ app }: { app: AppRow }) {
     queryFn: () =>
       apiGet<{ domains: AppDomain[] }>(`/api/applications/${app.id}/domains`)
   });
-  const domains = domainsQuery.data?.domains ?? [];
+  const domains = useMemo(
+    () => domainsQuery.data?.domains ?? [],
+    [domainsQuery.data]
+  );
 
   /**
    * Validate as the user types, using the same schema the API enforces, so a
@@ -92,6 +98,18 @@ export function DomainsManager({ app }: { app: AppRow }) {
       ? (parsed.error.issues[0]?.message ?? "Not a valid hostname")
       : null;
 
+  /**
+   * The Vercel-style pairing: entering an apex offers its `www.` variant,
+   * entering `www.<apex>` offers the apex — anything with a real subdomain
+   * offers nothing. The companion always redirects to what was typed.
+   */
+  const companion = useMemo(() => {
+    if (!normalized) return null;
+    const c = wwwCompanion(normalized);
+    if (!c || domains.some((d) => d.hostname === c)) return null;
+    return c;
+  }, [normalized, domains]);
+
   /** Refresh the domain list *and* the app row, whose primary URL may change. */
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: ["app-domains", app.id] });
@@ -103,19 +121,49 @@ export function DomainsManager({ app }: { app: AppRow }) {
   };
 
   const addMut = useMutation({
-    mutationFn: (host: string) =>
-      api<DomainVerifyResult>(`/api/applications/${app.id}/domains`, {
-        method: "POST",
-        body: JSON.stringify({ hostname: host })
-      }),
-    onSuccess: (result) => {
+    mutationFn: async (input: { hostname: string; companion: string | null }) => {
+      const main = await api<DomainVerifyResult>(
+        `/api/applications/${app.id}/domains`,
+        { method: "POST", body: JSON.stringify({ hostname: input.hostname }) }
+      );
+      // The companion is added second, redirecting to the typed hostname. Its
+      // failure must not read as the whole add failing — the main domain is
+      // already in — so it is reported separately instead of thrown.
+      let extra: DomainVerifyResult | null = null;
+      let companionError: string | null = null;
+      if (input.companion) {
+        try {
+          extra = await api<DomainVerifyResult>(
+            `/api/applications/${app.id}/domains`,
+            {
+              method: "POST",
+              body: JSON.stringify({
+                hostname: input.companion,
+                redirectTo: input.hostname
+              })
+            }
+          );
+        } catch (e) {
+          companionError =
+            e instanceof Error ? e.message : `Could not add ${input.companion}`;
+        }
+      }
+      return { main, extra, companionError };
+    },
+    onSuccess: ({ main, extra, companionError }) => {
       setHostname("");
-      recordInspection(result);
+      recordInspection(main);
+      if (extra) recordInspection(extra);
       // Open it straight away: the next thing to do is almost always the DNS
       // record, and it is right there in the panel.
-      setExpandedId(result.domain.id);
+      setExpandedId(main.domain.id);
       refresh();
-      toast.success(`${result.domain.hostname} added`);
+      toast.success(
+        extra
+          ? `${main.domain.hostname} added — ${extra.domain.hostname} redirects to it`
+          : `${main.domain.hostname} added`
+      );
+      if (companionError) toast.error(companionError);
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "Could not add domain")
   });
@@ -149,6 +197,23 @@ export function DomainsManager({ app }: { app: AppRow }) {
     onError: (e) => toast.error(e instanceof Error ? e.message : "Could not update")
   });
 
+  const redirectMut = useMutation({
+    mutationFn: (vars: { domainId: string; target: string | null }) =>
+      api<{ domains: AppDomain[] }>(
+        `/api/applications/${app.id}/domains/${vars.domainId}/redirect`,
+        { method: "POST", body: JSON.stringify({ target: vars.target }) }
+      ),
+    onSuccess: (_r, vars) => {
+      refresh();
+      toast.success(
+        vars.target
+          ? `Redirect set — takes effect on the next deploy`
+          : "Redirect removed — takes effect on the next deploy"
+      );
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Could not update")
+  });
+
   const removeMut = useMutation({
     mutationFn: (domainId: string) =>
       api<{ ok: boolean }>(`/api/applications/${app.id}/domains/${domainId}`, {
@@ -162,6 +227,20 @@ export function DomainsManager({ app }: { app: AppRow }) {
   });
 
   const scheme = httpsEnabled ? "https" : "http";
+
+  const primaryDomain = domains.find((x) => x.isPrimary) ?? null;
+  /**
+   * The one-click redirect target to offer for a row: the primary domain,
+   * unless this row *is* the primary, already redirects, is itself a redirect
+   * target, or the primary is in no state to be landed on.
+   */
+  const redirectTargetFor = (dom: AppDomain): string | null => {
+    if (dom.isPrimary || dom.redirectTo) return null;
+    if (!primaryDomain || primaryDomain.id === dom.id || primaryDomain.redirectTo)
+      return null;
+    if (domains.some((x) => x.redirectTo === dom.hostname)) return null;
+    return primaryDomain.hostname;
+  };
 
   return (
     <div className="space-y-4">
@@ -182,7 +261,12 @@ export function DomainsManager({ app }: { app: AppRow }) {
               className="space-y-1.5"
               onSubmit={(e) => {
                 e.preventDefault();
-                if (normalized) addMut.mutate(normalized);
+                if (normalized) {
+                  addMut.mutate({
+                    hostname: normalized,
+                    companion: withCompanion ? companion : null
+                  });
+                }
               }}
             >
               <div className="flex gap-2">
@@ -215,6 +299,20 @@ export function DomainsManager({ app }: { app: AppRow }) {
                 <p className="text-xs text-muted-foreground">
                   A full URL works too — it is trimmed down to the hostname.
                 </p>
+              )}
+              {companion && (
+                <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    className="h-3.5 w-3.5 accent-primary"
+                    checked={withCompanion}
+                    onChange={(e) => setWithCompanion(e.target.checked)}
+                  />
+                  <span>
+                    Also add <span className="font-mono">{companion}</span> and
+                    redirect it to <span className="font-mono">{normalized}</span>
+                  </span>
+                </label>
               )}
             </form>
           )}
@@ -268,6 +366,12 @@ export function DomainsManager({ app }: { app: AppRow }) {
                         {d.hostname}
                       </a>
                       {d.isPrimary && <Badge variant="outline">Primary</Badge>}
+                      {d.redirectTo && (
+                        <Badge variant="secondary" className="gap-1 font-mono font-normal">
+                          <CornerDownRight className="h-3 w-3" />
+                          {d.redirectTo}
+                        </Badge>
+                      )}
                       {status && <Badge variant={status.variant}>{status.label}</Badge>}
 
                       <div className="ml-auto flex items-center gap-1">
@@ -307,7 +411,7 @@ export function DomainsManager({ app }: { app: AppRow }) {
                             <ExternalLink className="h-3.5 w-3.5" />
                           </a>
                         </Button>
-                        {admin && !d.isPrimary && (
+                        {admin && !d.isPrimary && !d.redirectTo && (
                           <Button
                             type="button"
                             variant="ghost"
@@ -318,6 +422,39 @@ export function DomainsManager({ app }: { app: AppRow }) {
                             onClick={() => primaryMut.mutate(d.id)}
                           >
                             <Star className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
+                        {admin && d.redirectTo && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7"
+                            title={`Serve the app directly instead of redirecting to ${d.redirectTo}`}
+                            disabled={redirectMut.isPending}
+                            onClick={() =>
+                              redirectMut.mutate({ domainId: d.id, target: null })
+                            }
+                          >
+                            <Undo2 className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
+                        {admin && redirectTargetFor(d) && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7"
+                            title={`Redirect to ${redirectTargetFor(d)}`}
+                            disabled={redirectMut.isPending}
+                            onClick={() =>
+                              redirectMut.mutate({
+                                domainId: d.id,
+                                target: redirectTargetFor(d)
+                              })
+                            }
+                          >
+                            <CornerDownRight className="h-3.5 w-3.5" />
                           </Button>
                         )}
                         {admin && (
