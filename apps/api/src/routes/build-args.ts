@@ -1,9 +1,9 @@
 import type { FastifyInstance } from "fastify";
 import { prisma } from "@sohwe/db";
 import {
-  EnvQuerySchema,
-  EnvVarsPatchSchema,
-  EnvVarsReplaceSchema
+  BuildArgsPatchSchema,
+  BuildArgsReplaceSchema,
+  EnvQuerySchema
 } from "@sohwe/types";
 import { z } from "zod";
 import { envChangeMetadata, recordAudit } from "../audit";
@@ -18,19 +18,20 @@ import {
 
 const IdParam = z.object({ id: z.string().uuid() });
 
-// Env vars are admin-and-above end to end, including the non-revealing read:
-// `maskedPreview` still exposes the shape and a few characters of every secret,
-// which is more than the read-only member role should see.
+// Build variables reach `nixpacks build --env` / `docker build --build-arg`,
+// which bakes them into image layers. They are still admin-and-above and still
+// masked by default: users put registry tokens here, and "visible to anyone who
+// can pull the image" is not a reason to also show them to the member role.
 
-export async function registerEnvVarRoutes(app: FastifyInstance) {
-  const envOpts = { logLevel: "silent" as const };
+export async function registerBuildArgRoutes(app: FastifyInstance) {
+  const buildArgOpts = { logLevel: "silent" as const };
 
   app.get(
-    "/api/applications/:id/env",
+    "/api/applications/:id/build-args",
     {
       preHandler: [requireRole("admin")],
       schema: { params: IdParam, querystring: EnvQuerySchema },
-      ...envOpts
+      ...buildArgOpts
     },
     async (req, reply) => {
       const u = req.user!;
@@ -39,27 +40,29 @@ export async function registerEnvVarRoutes(app: FastifyInstance) {
 
       const a = await prisma.application.findFirst({
         where: { id, organizationId: u.organizationId },
-        select: { id: true, slug: true, envVarsEncrypted: true }
+        select: { id: true, slug: true, buildArgsEncrypted: true }
       });
       if (!a) return reply.notFound();
 
       let map: Record<string, string>;
       try {
-        map = readVarBlob(a.envVarsEncrypted);
+        map = readVarBlob(a.buildArgsEncrypted);
       } catch {
         return reply
           .status(500)
-          .send({ message: "Failed to read env var configuration" });
+          .send({ message: "Failed to read build variable configuration" });
       }
 
       if (reveal) {
-        // Reading plaintext secrets is itself an auditable act.
         await recordAudit(req, {
-          action: "env.reveal",
-          targetType: "env",
+          action: "build_args.reveal",
+          targetType: "build_args",
           targetId: a.id,
           targetLabel: a.slug,
-          metadata: { keys: Object.keys(map).sort(), totalKeys: Object.keys(map).length }
+          metadata: {
+            keys: Object.keys(map).sort(),
+            totalKeys: Object.keys(map).length
+          }
         });
         return revealedListing(map);
       }
@@ -69,39 +72,39 @@ export async function registerEnvVarRoutes(app: FastifyInstance) {
   );
 
   app.put(
-    "/api/applications/:id/env",
+    "/api/applications/:id/build-args",
     {
       preHandler: [requireRole("admin")],
-      schema: { params: IdParam, body: EnvVarsReplaceSchema },
-      ...envOpts
+      schema: { params: IdParam, body: BuildArgsReplaceSchema },
+      ...buildArgOpts
     },
     async (req, reply) => {
       const u = req.user!;
       const { id } = req.params as z.infer<typeof IdParam>;
-      const { vars } = EnvVarsReplaceSchema.parse(req.body);
+      const { vars } = BuildArgsReplaceSchema.parse(req.body);
 
       const a = await prisma.application.findFirst({
         where: { id, organizationId: u.organizationId },
-        select: { id: true, slug: true, envVarsEncrypted: true }
+        select: { id: true, slug: true, buildArgsEncrypted: true }
       });
       if (!a) return reply.notFound();
 
-      // Read the previous set purely to describe the change in the audit trail;
-      // an unreadable blob is being replaced wholesale either way.
+      // Only to describe the change in the audit trail; the blob is being
+      // replaced wholesale whether or not it can still be read.
       let before: Record<string, string> = {};
       try {
-        before = readVarBlob(a.envVarsEncrypted);
+        before = readVarBlob(a.buildArgsEncrypted);
       } catch {
         before = {};
       }
 
       const updated = await prisma.application.update({
         where: { id },
-        data: { envVarsEncrypted: encodeVarBlob(vars) }
+        data: { buildArgsEncrypted: encodeVarBlob(vars) }
       });
       await recordAudit(req, {
-        action: "env.update",
-        targetType: "env",
+        action: "build_args.update",
+        targetType: "build_args",
         targetId: a.id,
         targetLabel: a.slug,
         metadata: { mode: "replace", ...envChangeMetadata(before, vars) }
@@ -111,16 +114,16 @@ export async function registerEnvVarRoutes(app: FastifyInstance) {
   );
 
   app.patch(
-    "/api/applications/:id/env",
+    "/api/applications/:id/build-args",
     {
       preHandler: [requireRole("admin")],
-      schema: { params: IdParam, body: EnvVarsPatchSchema },
-      ...envOpts
+      schema: { params: IdParam, body: BuildArgsPatchSchema },
+      ...buildArgOpts
     },
     async (req, reply) => {
       const u = req.user!;
       const { id } = req.params as z.infer<typeof IdParam>;
-      const { set, unset } = EnvVarsPatchSchema.parse(req.body);
+      const { set, unset } = BuildArgsPatchSchema.parse(req.body);
 
       if (
         (set == null || Object.keys(set).length === 0) &&
@@ -131,28 +134,28 @@ export async function registerEnvVarRoutes(app: FastifyInstance) {
 
       const a = await prisma.application.findFirst({
         where: { id, organizationId: u.organizationId },
-        select: { id: true, slug: true, envVarsEncrypted: true }
+        select: { id: true, slug: true, buildArgsEncrypted: true }
       });
       if (!a) return reply.notFound();
 
       let before: Record<string, string>;
       try {
-        before = readVarBlob(a.envVarsEncrypted);
+        before = readVarBlob(a.buildArgsEncrypted);
       } catch {
         return reply
           .status(500)
-          .send({ message: "Failed to read env var configuration" });
+          .send({ message: "Failed to read build variable configuration" });
       }
 
       const map = applyVarPatch(before, set, unset);
 
       const updated = await prisma.application.update({
         where: { id },
-        data: { envVarsEncrypted: encodeVarBlob(map) }
+        data: { buildArgsEncrypted: encodeVarBlob(map) }
       });
       await recordAudit(req, {
-        action: "env.update",
-        targetType: "env",
+        action: "build_args.update",
+        targetType: "build_args",
         targetId: a.id,
         targetLabel: a.slug,
         metadata: { mode: "patch", ...envChangeMetadata(before, map) }

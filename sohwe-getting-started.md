@@ -183,9 +183,11 @@ sohwe/
 | **Build engine** | Nixpacks (primary), user Dockerfile (override) | Auto-detects Next.js/Node/Python/Go/Rust/static |
 | **Container control** | dockerode | Direct Docker Engine API access |
 | **Log streaming** | SSE + Redis pub/sub | Simpler than WebSockets for one-way streams |
-| **Secrets** | AES-256-GCM with `SOHWE_ENCRYPTION_KEY` | Env vars encrypted at rest |
+| **Secrets** | AES-256-GCM with `SOHWE_ENCRYPTION_KEY` | Env vars and build variables encrypted at rest |
 
 Nixpacks produces a **container image** from the repo checkout; it does not require a `Dockerfile` in the app's repo unless the user opts into Dockerfile build mode.
+
+**Two variable scopes, deliberately separate.** Runtime env vars are decrypted only for Docker `Env` injection, long after the image exists — nothing in a build can see them. Build variables are a second encrypted map on the application, passed to `nixpacks build --env KEY=value` or `docker build --build-arg KEY` (name-only, so values never land on an argv that `ps` can read). They are the only lever on the build itself, which is what makes `NIXPACKS_NODE_VERSION` and build-time-inlined values like `NEXT_PUBLIC_*` reachable. The split is not cosmetic: build variables are baked into image layers and readable via `docker history`, so conflating them with runtime secrets would quietly widen what a pulled image discloses. `packages/builder` owns the argv construction (`nixpacksArgv` / `dockerBuildArgv`, both pure and unit-tested) and scrubs every build variable value out of forwarded tool output.
 
 ### Rejected options (for the record)
 
@@ -228,10 +230,10 @@ On Windows: `wsl --install -d Ubuntu`, then install Node/pnpm inside Ubuntu and 
 
 **Crypto.**
 - Key derivation: **scrypt** from the user's export passphrase, with the salt stored in the bundle.
-- Env vars: **AES-256-GCM**, re-encrypted under the passphrase-derived key. The instance master key never enters a bundle.
+- Env vars and build variables: **AES-256-GCM**, each re-encrypted in its own block under the passphrase-derived key. The instance master key never enters a bundle.
 - Integrity: **HMAC-SHA256** over the manifest. A wrong passphrase or any tampering is rejected at restore.
 
-**Scope — config only.** App settings, volume *definitions* (mount paths, not data), alert destinations, and optionally re-encrypted env vars. No git mirrors, no volume contents, no images. Full-state backup remains deferred (see below).
+**Scope — config only.** App settings, volume *definitions* (mount paths, not data), alert destinations, and optionally re-encrypted env vars and build variables. No git mirrors, no volume contents, no images. Full-state backup remains deferred (see below).
 
 **Routes** — all org-scoped under `/api/backups`:
 
@@ -251,7 +253,7 @@ DELETE /api/backups/schedules/:scheduleId
 
 **Destinations.** `packages/backups/src/storage.ts` implements local-path and S3-compatible targets (`@aws-sdk/client-s3`; works with AWS, MinIO, R2, Spaces). S3 credentials are encrypted at rest — resolve destinations through the existing helper rather than reading config rows directly.
 
-**Restore safety.** Non-destructive by default: restored apps land in `idle`, so nothing deploys, no Traefik routers appear, and no ACME certs are requested until the user acts. Slug collisions resolve by an explicit `rename` / `overwrite` / `skip` policy chosen after preflight. Preflight reports env var **key counts**, never values.
+**Restore safety.** Non-destructive by default: restored apps land in `idle`, so nothing deploys, no Traefik routers appear, and no ACME certs are requested until the user acts. Slug collisions resolve by an explicit `rename` / `overwrite` / `skip` policy chosen after preflight. Preflight reports env var and build variable **key counts**, never values.
 
 **Scheduling.** Manual export/restore run synchronously in the API. Scheduled exports run on a `backup` queue owned by the worker (`apps/worker/src/backups.ts`): a 60s repeatable tick enqueues due cron schedules; `retentionCount` keeps the newest N bundles per schedule, pruning both the destination file and the history row.
 
@@ -304,7 +306,7 @@ Matching is an indexed lookup on `Application.repoFullName` (`owner/repo`, denor
 
 **Roles.** Three, strictly ordered, so every check is "at least this role" rather than a per-permission matrix: `owner` > `admin` > `member`. `apps/api/src/rbac.ts` exports `requireRole(min)`, a Fastify preHandler that authenticates first when it runs alone — a route can never end up role-checked but unauthenticated. Unknown role strings rank 0, below `member`, so a downgrade or a hand-edited row fails closed rather than open. `apps/dashboard/src/lib/roles.ts` mirrors the ordering to hide controls the caller cannot use; it is cosmetic, and the API re-checks everything.
 
-The dividing line is not read-vs-write, it is **can this surface expose a secret**. Env vars are admin-and-above even for the masked listing, because `maskedPreview` still shows part of every value. So are the container file browser (it reaches config files, mounted volume data, and `/proc/self/environ`), alert destinations (a Discord/Slack webhook URL is a bearer credential for someone's channel), backups (bundles carry re-encrypted env vars), and the GitHub connection. `member` gets the app list, deployments, logs, metrics, volume definitions, the member roster — and deploy/rollback, because operating existing apps is the point of the role.
+The dividing line is not read-vs-write, it is **can this surface expose a secret**. Env vars and build variables are admin-and-above even for the masked listing, because `maskedPreview` still shows part of every value. So are the container file browser (it reaches config files, mounted volume data, and `/proc/self/environ`), alert destinations (a Discord/Slack webhook URL is a bearer credential for someone's channel), backups (bundles carry re-encrypted env vars), and the GitHub connection. `member` gets the app list, deployments, logs, metrics, volume definitions, the member roster — and deploy/rollback, because operating existing apps is the point of the role.
 
 **Invitations.** No email. A self-hosted instance would need an SMTP relay or a third-party API key just to add a second user, so instead an admin mints a link and delivers it themselves. `Invitation` stores only the SHA-256 of a 32-byte token; the raw link exists exactly once, in the create response. That makes a lost link unrecoverable by design — revoke and reissue. Acceptance claims the row with a conditional `updateMany` inside the same transaction that creates the user, so two people opening one link cannot both get an account, and the new member is signed in immediately. Invitations grant `admin` or `member`; `owner` is only ever conferred by an existing owner.
 

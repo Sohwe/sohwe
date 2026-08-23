@@ -22,7 +22,7 @@ function slugifyOrgName(name: string): string {
   );
 }
 
-function readEnv(enc: Buffer | Uint8Array | null | undefined): Record<string, string> {
+function readVars(enc: Buffer | Uint8Array | null | undefined): Record<string, string> {
   if (!enc || enc.length === 0) return {};
   return decryptJson(Buffer.isBuffer(enc) ? enc : Buffer.from(enc));
 }
@@ -34,9 +34,10 @@ export function makeBundleFilename(orgName: string, createdAtIso: string): strin
 }
 
 /**
- * Read every app in an org and shape it for the bundler. Env vars are only
- * decrypted/included when `includeSecrets` is set. Shared by the API's manual
- * export and the worker's scheduled export so both produce identical bundles.
+ * Read every app in an org and shape it for the bundler. Env vars and build
+ * variables are only decrypted/included when `includeSecrets` is set. Shared by
+ * the API's manual export and the worker's scheduled export so both produce
+ * identical bundles.
  */
 export async function gatherBundleApps(
   organizationId: string,
@@ -73,7 +74,8 @@ export async function gatherBundleApps(
       url: d.url,
       enabled: d.enabled
     })),
-    envVars: includeSecrets ? readEnv(a.envVarsEncrypted) : {}
+    envVars: includeSecrets ? readVars(a.envVarsEncrypted) : {},
+    buildArgs: includeSecrets ? readVars(a.buildArgsEncrypted) : {}
   }));
 }
 

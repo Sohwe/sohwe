@@ -3,9 +3,10 @@ import { Prisma, prisma } from "@sohwe/db";
 
 // Append-only activity trail (Phase 6). Two rules govern every call site:
 //
-// 1. Nothing secret goes in. Env var events carry key *names* and counts, never
-//    values; backup events carry destination and app counts, never passphrases;
-//    GitHub events carry the app slug, never the PEM or webhook secret.
+// 1. Nothing secret goes in. Env var and build variable events carry key
+//    *names* and counts, never values; backup events carry destination and app
+//    counts, never passphrases; GitHub events carry the app slug, never the PEM
+//    or webhook secret.
 // 2. Recording is best-effort. An audit write must never turn a successful
 //    action into a failed request, so every helper here swallows its errors and
 //    logs a warning instead.
@@ -15,6 +16,7 @@ export type AuditTargetType =
   | "deployment"
   | "volume"
   | "env"
+  | "build_args"
   | "alert_destination"
   | "member"
   | "invitation"
@@ -37,6 +39,8 @@ export type AuditAction =
   | "deployment.rollback"
   | "env.update"
   | "env.reveal"
+  | "build_args.update"
+  | "build_args.reveal"
   | "volume.create"
   | "volume.delete"
   | "alert_destination.create"
@@ -78,6 +82,8 @@ export const AUDIT_ACTIONS: readonly AuditAction[] = [
   "deployment.rollback",
   "env.update",
   "env.reveal",
+  "build_args.update",
+  "build_args.reveal",
   "volume.create",
   "volume.delete",
   "alert_destination.create",
@@ -181,8 +187,9 @@ export async function recordAudit(
 }
 
 /**
- * Summarize an env var change without leaking values: which keys were added,
- * removed, or had their value changed, plus the resulting total.
+ * Summarize a variable-map change without leaking values: which keys were
+ * added, removed, or had their value changed, plus the resulting total. Used
+ * for both runtime env vars and build variables.
  */
 export function envChangeMetadata(
   before: Record<string, string>,

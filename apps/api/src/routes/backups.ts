@@ -602,7 +602,8 @@ export async function registerBackupRoutes(app: FastifyInstance) {
           collides: existingSlugs.has(a.slug),
           volumeCount: a.volumes.length,
           alertCount: a.alertDestinations.length,
-          envKeyCount: Object.keys(a.envVars).length
+          envKeyCount: Object.keys(a.envVars).length,
+          buildArgKeyCount: Object.keys(a.buildArgs).length
         })),
         datastores: parsed.datastores.map((d) => ({
           name: d.name,
@@ -649,6 +650,8 @@ export async function registerBackupRoutes(app: FastifyInstance) {
           const collides = usedSlugs.has(a.slug);
           const envEncrypted =
             Object.keys(a.envVars).length > 0 ? encryptJson(a.envVars) : null;
+          const buildArgsEncrypted =
+            Object.keys(a.buildArgs).length > 0 ? encryptJson(a.buildArgs) : null;
           const volumeCreate = a.volumes.map((v) => ({
             mountPath: v.mountPath,
             sizeBytes: v.sizeBytes == null ? null : BigInt(v.sizeBytes)
@@ -675,7 +678,8 @@ export async function registerBackupRoutes(app: FastifyInstance) {
             domain: a.domain,
             memoryLimitMb: a.memoryLimitMb,
             cpuLimit: a.cpuLimit,
-            envVarsEncrypted: envEncrypted
+            envVarsEncrypted: envEncrypted,
+            buildArgsEncrypted
           };
 
           if (collides && body.collisionPolicy === "skip") {

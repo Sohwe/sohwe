@@ -32,7 +32,7 @@ const ALL = "__all__";
 
 function actionVariant(action: string): "default" | "destructive" | "warning" | "secondary" {
   if (action.endsWith(".delete") || action === "member.remove") return "destructive";
-  if (action === "env.reveal" || action === "backup.restore") return "warning";
+  if (action.endsWith(".reveal") || action === "backup.restore") return "warning";
   if (action.startsWith("deployment.")) return "default";
   return "secondary";
 }

@@ -26,6 +26,7 @@ import { registerAlertDestinationRoutes } from "./routes/alert-destinations";
 import { registerAppFilesystemRoutes } from "./routes/app-filesystem";
 import { registerAuditRoutes } from "./routes/audit";
 import { registerBackupRoutes } from "./routes/backups";
+import { registerBuildArgRoutes } from "./routes/build-args";
 import { registerApplicationRoutes } from "./routes/applications";
 import { registerDatastoreRoutes } from "./routes/datastores";
 import { registerDnsRoutes, type DnsRouteDeps } from "./routes/dns";
@@ -196,6 +197,7 @@ export async function buildServer(
 
   await registerApplicationRoutes(app);
   await registerEnvVarRoutes(app);
+  await registerBuildArgRoutes(app);
   await registerVolumeRoutes(app);
   await registerAlertDestinationRoutes(app);
   await registerAppFilesystemRoutes(app);

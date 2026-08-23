@@ -52,6 +52,18 @@ config({ path: join(_here, "../../../.env") });
 config({ path: join(_here, "../../api/.env") });
 config();
 
+/**
+ * Decrypt one of an application's `*Encrypted` variable blobs. Prisma hands
+ * back `Bytes` as a Buffer at runtime, but the generated type allows
+ * `Uint8Array`, so normalize before decrypting.
+ */
+function readEncryptedVars(
+  enc: Buffer | Uint8Array | null | undefined
+): Record<string, string> {
+  if (!enc || enc.length === 0) return {};
+  return decryptJson(Buffer.isBuffer(enc) ? enc : Buffer.from(enc));
+}
+
 // Fail fast on a misconfigured environment before opening any connection. The
 // encryption key is the important one: without this it only throws when a
 // deploy job first decrypts env vars, failing the deploy in a confusing place
@@ -407,6 +419,7 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
         mode: (app.buildMode as BuildMode) ?? "auto",
         buildCmd: app.buildCmd,
         startCmd: app.startCmd,
+        buildArgs: readEncryptedVars(app.buildArgsEncrypted),
         onLogLine: onLog
       });
     }
@@ -424,13 +437,9 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
     const vols = await prisma.volume.findMany({ where: { applicationId: app.id } });
     await ensureAppVolumes(docker, app.id, vols);
 
-    let envList: string[] = [];
-    if (app.envVarsEncrypted) {
-      const raw = app.envVarsEncrypted;
-      const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
-      const vars = decryptJson(buf);
-      envList = toDockerEnvList(vars);
-    }
+    const envList: string[] = toDockerEnvList(
+      readEncryptedVars(app.envVarsEncrypted)
+    );
 
     const c = await docker.createContainer(
       buildContainerSpec({

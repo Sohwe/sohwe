@@ -16,8 +16,13 @@ export const BUNDLE_FORMAT = "sohwe-backup" as const;
  * - v2: adds a required top-level `datastores` array (managed datastore
  *   config — never credentials or data). `buildBundle` always emits the
  *   current version; `parseBundle` accepts every version listed here.
+ * - v3: adds an optional per-app `buildArgs` block (build variables, encrypted
+ *   with the same passphrase-derived key as `env`). Additive, but still a
+ *   version bump: an older reader strips the unknown key before checking the
+ *   signature, so it would report a v2-shaped bundle as corrupt. Rejecting it
+ *   as an unsupported version says what actually happened.
  */
-export const BUNDLE_VERSION = 2 as const;
+export const BUNDLE_VERSION = 3 as const;
 
 // --- Input shapes (plaintext, supplied by the API) -------------------------
 
@@ -50,6 +55,13 @@ export type BundleAppInput = {
   alertDestinations: BundleAlertInput[];
   /** Plaintext env vars; only embedded when `includeSecrets` is true. */
   envVars: Record<string, string>;
+  /**
+   * Plaintext build variables; like `envVars`, only embedded when
+   * `includeSecrets` is true. They are encrypted at rest on the source
+   * instance and can hold registry tokens, so they are not exported in a
+   * secret-free bundle even though most of them are plain build config.
+   */
+  buildArgs: Record<string, string>;
 };
 
 export type BundleDatastoreBindingInput = {
@@ -125,6 +137,10 @@ const AppEntrySchema = z.object({
   alertDestinations: z.array(AlertSchema),
   env: z
     .object({ keys: z.array(z.string()), ciphertext: z.string() })
+    .optional(),
+  /** v3+. Absent in v1/v2 bundles and in secret-free exports. */
+  buildArgs: z
+    .object({ keys: z.array(z.string()), ciphertext: z.string() })
     .optional()
 });
 
@@ -164,21 +180,31 @@ export const BundleManifestV2Schema = z.object({
   datastores: z.array(DatastoreEntrySchema)
 });
 
+/** v3 is v2 plus the optional per-app `buildArgs` block on `AppEntrySchema`. */
+export const BundleManifestV3Schema = z.object({
+  ...ManifestBase,
+  version: z.literal(3),
+  datastores: z.array(DatastoreEntrySchema)
+});
+
 export const BundleManifestSchema = z.discriminatedUnion("version", [
   BundleManifestV1Schema,
-  BundleManifestV2Schema
+  BundleManifestV2Schema,
+  BundleManifestV3Schema
 ]);
 
 /** The manifest `buildBundle` emits (always the current version). */
-export type BundleManifest = z.infer<typeof BundleManifestV2Schema>;
+export type BundleManifest = z.infer<typeof BundleManifestV3Schema>;
 /** Any version `parseBundle` accepts. */
 export type AnyBundleManifest = z.infer<typeof BundleManifestSchema>;
 export type BundleAppEntry = z.infer<typeof AppEntrySchema>;
 export type BundleDatastoreEntry = z.infer<typeof DatastoreEntrySchema>;
 
-/** App config with env vars decrypted, returned by `parseBundle`. */
-export type ParsedBundleApp = Omit<BundleAppEntry, "env"> & {
+/** App config with env vars and build variables decrypted by `parseBundle`. */
+export type ParsedBundleApp = Omit<BundleAppEntry, "env" | "buildArgs"> & {
   envVars: Record<string, string>;
+  /** Empty for pre-v3 bundles and for exports made without secrets. */
+  buildArgs: Record<string, string>;
 };
 
 export type ParsedBundle = {
@@ -255,6 +281,14 @@ export function buildBundle(
       entry.env = { keys: Object.keys(a.envVars).sort(), ciphertext };
     }
 
+    if (opts.includeSecrets && Object.keys(a.buildArgs).length > 0) {
+      const ciphertext = encryptUtf8(
+        JSON.stringify(a.buildArgs),
+        key
+      ).toString("base64");
+      entry.buildArgs = { keys: Object.keys(a.buildArgs).sort(), ciphertext };
+    }
+
     return entry;
   });
 
@@ -312,19 +346,28 @@ export function parseBundle(raw: unknown, passphrase: string): ParsedBundle {
     throw new Error("Invalid passphrase or corrupted bundle");
   }
 
-  const apps: ParsedBundleApp[] = manifest.apps.map((a) => {
-    const { env, ...rest } = a;
-    const envVars: Record<string, string> = {};
-    if (env) {
-      const json = decryptToUtf8(Buffer.from(env.ciphertext, "base64"), key);
-      const obj: unknown = JSON.parse(json);
-      if (obj && typeof obj === "object" && !Array.isArray(obj)) {
-        for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
-          if (typeof v === "string") envVars[k] = v;
-        }
+  const decryptBlock = (
+    block: { ciphertext: string } | undefined
+  ): Record<string, string> => {
+    const out: Record<string, string> = {};
+    if (!block) return out;
+    const json = decryptToUtf8(Buffer.from(block.ciphertext, "base64"), key);
+    const obj: unknown = JSON.parse(json);
+    if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+      for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+        if (typeof v === "string") out[k] = v;
       }
     }
-    return { ...rest, envVars };
+    return out;
+  };
+
+  const apps: ParsedBundleApp[] = manifest.apps.map((a) => {
+    const { env, buildArgs, ...rest } = a;
+    return {
+      ...rest,
+      envVars: decryptBlock(env),
+      buildArgs: decryptBlock(buildArgs)
+    };
   });
 
   return {
@@ -333,6 +376,6 @@ export function parseBundle(raw: unknown, passphrase: string): ParsedBundle {
     source: manifest.source,
     includesSecrets: manifest.includesSecrets,
     apps,
-    datastores: manifest.version === 2 ? manifest.datastores : []
+    datastores: manifest.version === 1 ? [] : manifest.datastores
   };
 }

@@ -158,6 +158,7 @@ export type RestorePreflightApp = {
   volumeCount: number;
   alertCount: number;
   envKeyCount: number;
+  buildArgKeyCount: number;
 };
 
 export type RestorePreflightDatastore = {

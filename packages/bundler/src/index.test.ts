@@ -30,6 +30,7 @@ function sampleApp(overrides: Partial<BundleAppInput> = {}): BundleAppInput {
       { type: "discord", name: "ops", url: "https://discord.example/hook", enabled: true }
     ],
     envVars: { API_KEY: "sk-secret-123", DEBUG: "false" },
+    buildArgs: { NIXPACKS_NODE_VERSION: "22" },
     ...overrides
   };
 }
@@ -261,7 +262,7 @@ describe("v2 datastores round-trip", () => {
   it("preserves datastore config and bindings through build/parse", () => {
     const bundle = buildBundle([sampleApp()], OPTS, [DS]);
     const parsed = parseBundle(bundle, OPTS.passphrase);
-    assert.equal(parsed.version, 2);
+    assert.equal(parsed.version, BUNDLE_VERSION);
     assert.deepEqual(parsed.datastores, [DS]);
   });
 
@@ -334,13 +335,16 @@ const GOLDEN_BUNDLE_V2 = {
 describe("golden bundle v2 (format compatibility)", () => {
   it("matches the current schema and constants", () => {
     assert.equal(GOLDEN_BUNDLE_V2.format, BUNDLE_FORMAT);
-    assert.equal(GOLDEN_BUNDLE_V2.version, BUNDLE_VERSION);
+    // Frozen at v2 forever; BUNDLE_VERSION has moved on (see the v3 golden).
+    assert.equal(GOLDEN_BUNDLE_V2.version, 2);
     assert.equal(BundleManifestSchema.safeParse(GOLDEN_BUNDLE_V2).success, true);
   });
 
   it("still parses, decrypts, and carries its datastores", () => {
     const parsed = parseBundle(GOLDEN_BUNDLE_V2, GOLDEN_PASSPHRASE);
     assert.equal(parsed.version, 2);
+    // Pre-v3 bundles have no build variables at all, not an absent-but-null one.
+    assert.deepEqual(parsed.apps[0]!.buildArgs, {});
     assert.deepEqual(parsed.apps[0]!.envVars, {
       API_KEY: "sk-secret-123",
       DATABASE_URL: "postgresql://sohwe:oldpass@sohwe-ds-main-db:5432/main_db"
@@ -357,5 +361,124 @@ describe("golden bundle v2 (format compatibility)", () => {
       () => parseBundle(GOLDEN_BUNDLE_V2, "not the passphrase"),
       /Invalid passphrase or corrupted bundle/
     );
+  });
+});
+
+// The v3 golden: produced by a real buildBundle() with an app carrying build
+// variables, and frozen here like the goldens above. Same rules — if this
+// breaks, bump BUNDLE_VERSION again and add a migration path.
+const GOLDEN_BUNDLE_V3 = {
+  format: "sohwe-backup",
+  version: 3,
+  createdAt: "2026-01-01T00:00:00.000Z",
+  source: { orgName: "Acme", sohweVersion: "0.6.0" },
+  kdf: { algo: "scrypt", salt: "1KPt2514qqR/nV1k1Mu8Fw==", N: 16384, r: 8, p: 1 },
+  includesSecrets: true,
+  apps: [
+    {
+      name: "Web",
+      slug: "web",
+      gitRepo: "https://github.com/acme/web",
+      gitBranch: "main",
+      buildMode: "auto",
+      buildCmd: null,
+      startCmd: "node server.js",
+      port: 3000,
+      domain: "web.example.com",
+      memoryLimitMb: 512,
+      cpuLimit: 1.5,
+      volumes: [{ mountPath: "/data", sizeBytes: "1048576" }],
+      alertDestinations: [
+        {
+          type: "discord",
+          name: "ops",
+          url: "https://discord.example/hook",
+          enabled: true
+        }
+      ],
+      env: {
+        keys: ["API_KEY", "DATABASE_URL"],
+        ciphertext:
+          "4ZEuAMoZm7iz7s7tJA2x6GMQsxhhITlm2HtTdjQ/qx6RoBDBpn4eAVw9el4nooeH9meDB2VyED02E1Ifs5/QYjdV/1c1kf905C63FRsrT9CGZG8LCSUii9t+1ftuhpkfIOeTBklCggFBAQzfTZHitHFWFJmgaJD8H3gHMPiE+6M/"
+      },
+      buildArgs: {
+        keys: ["NEXT_PUBLIC_SITE_URL", "NIXPACKS_NODE_VERSION"],
+        ciphertext:
+          "dC59nOrVSKMBtts3oUDmOBJb0GVBZ5SUI0B/ITd80uc8ZPy4ypf77lkQHki1z6z/bBMtxLW4JHWTEYqE9kxyJ5RBnd8XpPP1xgHhDzx0HnqlOAFCKfSZvBMXz80E4rteYK5/hTIw8DJVC4g="
+      }
+    }
+  ],
+  datastores: [
+    {
+      kind: "postgres",
+      name: "Main DB",
+      slug: "main-db",
+      engineVersion: "16",
+      memoryLimitMb: 1024,
+      cpuLimit: 2,
+      publicPort: 24001,
+      bindings: [{ appSlug: "web", envKeys: ["DATABASE_URL"] }]
+    }
+  ],
+  signature: "3oehby47ZITu1BJBAVd6hZ33Le6P3tXKS+fWr1zhsDg="
+};
+
+describe("golden bundle v3 (format compatibility)", () => {
+  it("matches the current schema and constants", () => {
+    assert.equal(GOLDEN_BUNDLE_V3.format, BUNDLE_FORMAT);
+    assert.equal(GOLDEN_BUNDLE_V3.version, BUNDLE_VERSION);
+    assert.equal(BundleManifestSchema.safeParse(GOLDEN_BUNDLE_V3).success, true);
+  });
+
+  it("still parses and decrypts both variable blocks", () => {
+    const parsed = parseBundle(GOLDEN_BUNDLE_V3, GOLDEN_PASSPHRASE);
+    assert.equal(parsed.version, 3);
+    assert.deepEqual(parsed.apps[0]!.envVars, {
+      API_KEY: "sk-secret-123",
+      DATABASE_URL: "postgresql://sohwe:oldpass@sohwe-ds-main-db:5432/main_db"
+    });
+    assert.deepEqual(parsed.apps[0]!.buildArgs, {
+      NIXPACKS_NODE_VERSION: "22",
+      NEXT_PUBLIC_SITE_URL: "https://web.example.com"
+    });
+  });
+
+  it("signs the buildArgs block (tampering breaks the signature)", () => {
+    const tampered = structuredClone(GOLDEN_BUNDLE_V3);
+    tampered.apps[0]!.buildArgs.keys = ["NIXPACKS_NODE_VERSION"];
+    assert.throws(
+      () => parseBundle(tampered, GOLDEN_PASSPHRASE),
+      /Invalid passphrase or corrupted bundle/
+    );
+  });
+});
+
+describe("build variables round-trip", () => {
+  it("encrypts build variables and restores them", () => {
+    const bundle = buildBundle(
+      [sampleApp({ buildArgs: { NIXPACKS_NODE_VERSION: "22", NPM_TOKEN: "npm_xyz" } })],
+      OPTS
+    );
+    const entry = bundle.apps[0]!;
+    // Keys are listed in the clear for preflight summaries; values never are.
+    assert.deepEqual(entry.buildArgs?.keys, ["NIXPACKS_NODE_VERSION", "NPM_TOKEN"]);
+    assert.equal(JSON.stringify(bundle).includes("npm_xyz"), false);
+
+    const parsed = parseBundle(bundle, OPTS.passphrase);
+    assert.deepEqual(parsed.apps[0]!.buildArgs, {
+      NIXPACKS_NODE_VERSION: "22",
+      NPM_TOKEN: "npm_xyz"
+    });
+  });
+
+  it("omits build variables entirely when secrets are excluded", () => {
+    const bundle = buildBundle([sampleApp()], { ...OPTS, includeSecrets: false });
+    assert.equal(bundle.apps[0]!.buildArgs, undefined);
+    assert.deepEqual(parseBundle(bundle, OPTS.passphrase).apps[0]!.buildArgs, {});
+  });
+
+  it("omits the block for an app with no build variables", () => {
+    const bundle = buildBundle([sampleApp({ buildArgs: {} })], OPTS);
+    assert.equal(bundle.apps[0]!.buildArgs, undefined);
   });
 });

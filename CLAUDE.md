@@ -105,11 +105,12 @@ Never commit real secrets or generated env files.
 
 ### API
 
-- `apps/api/src/index.ts` is the process entrypoint only (env load, `listen`, boot tasks, SIGTERM). The Fastify instance is assembled by `buildServer` in `apps/api/src/server.ts` — put new routes and plugins there, so the server stays constructible without binding a port. Routes are registered via `register*Routes` functions; modules live in `apps/api/src/routes` (`applications`, `env-vars`, `volumes`, `alert-destinations`, `app-filesystem`, `host-fs`, `backups`, `datastores`, `github`, `github-webhook`, `members`, `audit`).
+- `apps/api/src/index.ts` is the process entrypoint only (env load, `listen`, boot tasks, SIGTERM). The Fastify instance is assembled by `buildServer` in `apps/api/src/server.ts` — put new routes and plugins there, so the server stays constructible without binding a port. Routes are registered via `register*Routes` functions; modules live in `apps/api/src/routes` (`applications`, `env-vars`, `build-args`, `volumes`, `alert-destinations`, `app-filesystem`, `host-fs`, `backups`, `datastores`, `github`, `github-webhook`, `members`, `audit`).
 - Protected routes use `requireRole(min)` from `apps/api/src/rbac.ts` (see *Roles, Invitations, and the Audit Log*) and scope every query by `req.user!.organizationId`. Backups routes are org-scoped, not app-scoped. `authPreHandler` in `apps/api/src/session.ts` is the underlying auth step and is fine on its own only for routes with no role floor at all.
 - Redis handles owned by a route module (the deploy queue, the stats client) are created inside `register*Routes` and closed in that instance's `onClose` — never at module load. A module-level connection is shared by every server built in the process, so one `app.close()` breaks the rest, which the route tests hit immediately.
-- Never return `Application.envVarsEncrypted` from general endpoints. Use `defaultApplicationSelect` and `serializeAppListRow` from `apps/api/src/app-public.ts` unless a route deliberately deals in secrets.
-- Mutating env routes must not log request bodies. Preserve the existing `logLevel: "silent"` pattern when editing them.
+- Never return `Application.envVarsEncrypted` or `Application.buildArgsEncrypted` from general endpoints. Use `defaultApplicationSelect` and `serializeAppListRow` from `apps/api/src/app-public.ts` unless a route deliberately deals in secrets.
+- Mutating env and build-arg routes must not log request bodies. Preserve the existing `logLevel: "silent"` pattern when editing them.
+- Applications carry two independent variable maps — runtime env vars (`/env`) and build variables (`/build-args`). Their shared shaping/merging logic lives in `apps/api/src/routes/variable-store.ts`; put changes there rather than in one route module, or the two drift.
 - Serialize BigInt values (e.g. volume `sizeBytes`) before JSON responses.
 - SSE build logs use Redis pub/sub plus stored `Deployment.buildLogs`; preserve replay-on-reconnect. Runtime log SSE (`GET /api/applications/:id/logs`) replays recent Docker logs then follows the Redis channel. The stored copy is capped and may be truncated (see `apps/worker/src/build-log.ts`) — do not assume it holds the whole build.
 - `GET /api/config` is public and allowed through the setup gate (`apps/api/src/setup-gate.ts`); it exists so the dashboard learns `SOHWE_BASE_DOMAIN` at runtime instead of baking it into the image.
@@ -132,11 +133,12 @@ Never commit real secrets or generated env files.
 - Stats snapshots in Redis are short-TTL; a missing sample means "not running", not an error.
 - The worker re-attaches log streams and stat sampling for already-running managed containers on startup - preserve that recovery path.
 - Env vars are encrypted at rest and decrypted only for Docker `Env` injection. Never write plaintext env values to build logs, runtime logs, alert payloads, API responses, or error messages.
+- Build variables are the *only* thing that reaches the image build; runtime env vars are injected long after the image exists. `packages/builder` owns argv construction (`nixpacksArgv`, `dockerBuildArgv` — keep both pure and tested) and scrubs build variable values out of forwarded tool output via `redactValues`. Docker gets the name-only `--build-arg KEY` form so values stay off the argv; nixpacks has no such form and needs `KEY=value`. Build logs may name the keys, never the values.
 - Custom domain/HTTPS behavior is driven by `SOHWE_HTTPS_ENABLED`, `SOHWE_CERT_RESOLVER`, `SOHWE_BASE_DOMAIN`, `TRAEFIK_DOCKER_NETWORK`.
 
 ### Backups and Bundles
 
-- Bundles are **config-only**: app settings, volume *definitions* (mount paths, not data), alert destinations, and optionally re-encrypted env vars. No git mirrors, no volume data. Do not quietly widen this scope.
+- Bundles are **config-only**: app settings, volume *definitions* (mount paths, not data), alert destinations, and optionally re-encrypted env vars and build variables. No git mirrors, no volume data. Do not quietly widen this scope.
 - `packages/bundler` derives a key from the user passphrase via scrypt, AES-256-GCM-encrypts env vars, and HMAC-SHA256-signs the manifest. Any change to bundle layout is a compatibility break - version it and note it in `CHANGELOG.md`. A frozen **golden bundle** in `packages/bundler/src/index.test.ts` must keep parsing; if that test fails you have changed the on-disk format (KDF params, `canonicalize`, ciphertext layout, or schema) — bump `BUNDLE_VERSION` and add a migration path rather than editing the golden.
 - Restore is non-destructive by default: restored apps land in `idle` so nothing deploys and no ACME certs are requested until the user acts. Slug collisions are resolved by an explicit `rename` / `overwrite` / `skip` policy chosen after preflight.
 - Preflight summaries report env var *key counts*, never values.

@@ -10,7 +10,7 @@ This repository is a **pnpm + Turborepo** monorepo. The detailed bootstrap and p
 
 Shipped through **Phase 5**:
 
-- **Phases 0–3** — deploys from Git, Dockerfile + Nixpacks builds, custom domains with opt-in HTTPS, encrypted env vars, named persistent volumes, memory/CPU limits, per-app internal Docker networks.
+- **Phases 0–3** — deploys from Git, Dockerfile + Nixpacks builds, custom domains with opt-in HTTPS, encrypted env vars and build variables, named persistent volumes, memory/CPU limits, per-app internal Docker networks.
 - **Phase 3.5 (packaging & install)** — production Dockerfiles, `docker-compose.prod.yml` + HTTPS overlay, multi-arch GHCR publishing on tag, and a one-command installer for fresh Ubuntu 22.04/24.04 hosts.
 - **Phase 4 (observability)** — runtime log streaming, live CPU/memory metrics, and crash/OOM webhook alerts.
 - **Phase 4.5 (portable bundles)** — signed, passphrase-encrypted config bundles with local and S3-compatible destinations, restore preflight/apply, and scheduled exports with retention.
@@ -76,17 +76,45 @@ Three roles, enforced by the API on every request:
 | Role | Can do |
 | --- | --- |
 | `owner` | Everything, including changing roles and managing other owners. |
-| `admin` | Everything operational: apps, env vars, volumes, backups, Git, invitations, removing members. |
+| `admin` | Everything operational: apps, env vars, build variables, volumes, backups, Git, invitations, removing members. |
 | `member` | Read-only, plus deploying and rolling back existing apps. |
 
 Anything that can expose an app's secrets is admin-and-above **including read
-access**: environment variables (even the masked list), the container file
-browser, alert destination webhook URLs, backups, and the GitHub connection.
+access**: environment variables and build variables (even the masked lists), the
+container file browser, alert destination webhook URLs, backups, and the GitHub
+connection.
 
 The organization can never be left without an owner, nobody can change their own
 role or delete their own account, and removing someone signs out every session
-they hold. Every mutating action lands in the **Audit log** — with env var *key
+they hold. Every mutating action lands in the **Audit log** — with variable *key
 names* and counts, never values.
+
+### Runtime vs. build variables
+
+An app's **Variables** page has two editors, both encrypted at rest and both
+admin-and-above:
+
+- **Environment variables** are injected into the running container at deploy
+  time. Nothing in the build sees them.
+- **Build variables** are passed to the image build — `nixpacks build --env
+  KEY=value`, or `docker build --build-arg KEY` for a Dockerfile (the name-only
+  form, so values never reach the command line). This is the only lever on the
+  build itself.
+
+Reach for a build variable when the build needs to know something before the
+container exists:
+
+| Need | Set |
+| --- | --- |
+| Pin the Node version Nixpacks picks (it defaults to 18) | `NIXPACKS_NODE_VERSION=22` |
+| Pin another toolchain | `NIXPACKS_PYTHON_VERSION`, `NIXPACKS_GO_VERSION`, … |
+| A value a framework inlines at build time | `NEXT_PUBLIC_*`, `VITE_*` |
+| Credentials for a private package registry | `NPM_TOKEN`, … |
+
+Build variables end up in the built image and are readable with `docker
+history`, so keep runtime secrets in environment variables instead. A Dockerfile
+build only sees a variable it declares with a matching `ARG`. Either way,
+redeploy to apply.
 
 ### Managed datastores
 

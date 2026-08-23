@@ -124,6 +124,25 @@ export const EnvQuerySchema = z.object({
 export type EnvQuery = z.infer<typeof EnvQuerySchema>;
 
 /**
+ * Build-time variables. Same wire shape as runtime env vars — a flat
+ * `KEY=value` map — but a different lifetime and a different threat model:
+ * the builder passes these to `nixpacks build --env` / `docker build
+ * --build-arg`, so they are baked into image layers and readable via
+ * `docker history`. Kept as separate schemas from the env var ones so the two
+ * surfaces can diverge (limits, validation) without touching each other.
+ */
+export const BuildArgsReplaceSchema = z.object({
+  vars: z.record(EnvKeySchema, z.string().max(MAX_ENV_VALUE_LEN))
+});
+export type BuildArgsReplace = z.infer<typeof BuildArgsReplaceSchema>;
+
+export const BuildArgsPatchSchema = z.object({
+  set: z.record(EnvKeySchema, z.string().max(MAX_ENV_VALUE_LEN)).optional(),
+  unset: z.array(EnvKeySchema).optional()
+});
+export type BuildArgsPatch = z.infer<typeof BuildArgsPatchSchema>;
+
+/**
  * Absolute path under which a named volume is mounted; must be non-root with no `..`.
  */
 export const VolumeCreateSchema = z.object({

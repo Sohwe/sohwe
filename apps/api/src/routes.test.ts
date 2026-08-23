@@ -353,6 +353,8 @@ describe("API routes", { skip }, () => {
         ["POST", `/api/applications/${id}/deploy`, {}],
         ["GET", `/api/applications/${id}/env`, undefined],
         ["PUT", `/api/applications/${id}/env`, { vars: { A: "1" } }],
+        ["GET", `/api/applications/${id}/build-args`, undefined],
+        ["PUT", `/api/applications/${id}/build-args`, { vars: { A: "1" } }],
         ["GET", `/api/applications/${id}/stats`, undefined],
         ["GET", `/api/applications/${id}/volumes`, undefined]
       ] as const) {
@@ -491,6 +493,155 @@ describe("API routes", { skip }, () => {
       );
     });
 
+    it("keeps build variables separate from runtime env vars", async () => {
+      const cookie = await signIn();
+      const created = await createApp(cookie);
+
+      await app.inject({
+        method: "PUT",
+        url: `/api/applications/${created.id}/env`,
+        headers: { cookie },
+        payload: { vars: { RUNTIME_ONLY: "runtime-value" } }
+      });
+      await app.inject({
+        method: "PUT",
+        url: `/api/applications/${created.id}/build-args`,
+        headers: { cookie },
+        payload: { vars: { NIXPACKS_NODE_VERSION: "22" } }
+      });
+
+      const env = await app.inject({
+        method: "GET",
+        url: `/api/applications/${created.id}/env?reveal=true`,
+        headers: { cookie }
+      });
+      assert.equal(env.statusCode, 200);
+      assert.ok(env.body.includes("RUNTIME_ONLY"));
+      assert.ok(
+        !env.body.includes("NIXPACKS_NODE_VERSION"),
+        "a build variable must not show up as a runtime env var"
+      );
+
+      const args = await app.inject({
+        method: "GET",
+        url: `/api/applications/${created.id}/build-args?reveal=true`,
+        headers: { cookie }
+      });
+      assert.equal(args.statusCode, 200);
+      assert.ok(args.body.includes("NIXPACKS_NODE_VERSION"));
+      assert.ok(
+        !args.body.includes("RUNTIME_ONLY"),
+        "a runtime env var must not show up as a build variable"
+      );
+    });
+
+    it("masks build variable values unless reveal is requested", async () => {
+      const cookie = await signIn();
+      const created = await createApp(cookie);
+      await app.inject({
+        method: "PUT",
+        url: `/api/applications/${created.id}/build-args`,
+        headers: { cookie },
+        payload: { vars: { NPM_TOKEN: "npm-secret-value" } }
+      });
+
+      const masked = await app.inject({
+        method: "GET",
+        url: `/api/applications/${created.id}/build-args`,
+        headers: { cookie }
+      });
+      assert.equal(masked.statusCode, 200);
+      assert.ok(masked.body.includes("NPM_TOKEN"), "the key should be listed");
+      assert.ok(!masked.body.includes("npm-secret-value"), "the value must be masked");
+
+      const revealed = await app.inject({
+        method: "GET",
+        url: `/api/applications/${created.id}/build-args?reveal=true`,
+        headers: { cookie }
+      });
+      assert.equal(revealed.statusCode, 200);
+      assert.ok(revealed.body.includes("npm-secret-value"));
+    });
+
+    it("stores build variables encrypted, and never returns the column", async () => {
+      const cookie = await signIn();
+      const created = await createApp(cookie);
+      await app.inject({
+        method: "PUT",
+        url: `/api/applications/${created.id}/build-args`,
+        headers: { cookie },
+        payload: { vars: { NPM_TOKEN: "npm-secret-value" } }
+      });
+
+      const row = await prisma.application.findUniqueOrThrow({
+        where: { id: created.id },
+        select: { buildArgsEncrypted: true }
+      });
+      assert.ok(row.buildArgsEncrypted);
+      assert.ok(
+        !row.buildArgsEncrypted.toString("utf8").includes("npm-secret-value"),
+        "the plaintext value must not be recoverable from the column"
+      );
+
+      for (const url of ["/api/applications", `/api/applications/${created.id}`]) {
+        const res = await app.inject({ method: "GET", url, headers: { cookie } });
+        assert.equal(res.statusCode, 200, url);
+        assert.ok(!res.body.includes("buildArgsEncrypted"), `${url} leaked the column`);
+        assert.ok(!res.body.includes("npm-secret-value"), `${url} leaked a value`);
+      }
+    });
+
+    it("patches and clears build variables", async () => {
+      const cookie = await signIn();
+      const created = await createApp(cookie);
+      await app.inject({
+        method: "PUT",
+        url: `/api/applications/${created.id}/build-args`,
+        headers: { cookie },
+        payload: { vars: { A: "1", B: "2" } }
+      });
+
+      const patched = await app.inject({
+        method: "PATCH",
+        url: `/api/applications/${created.id}/build-args`,
+        headers: { cookie },
+        payload: { set: { C: "3" }, unset: ["A"] }
+      });
+      assert.equal(patched.statusCode, 200, patched.body);
+
+      const listed = await app.inject({
+        method: "GET",
+        url: `/api/applications/${created.id}/build-args`,
+        headers: { cookie }
+      });
+      assert.deepEqual((listed.json() as { keys: string[] }).keys, ["B", "C"]);
+
+      // Replacing with an empty map clears the column rather than storing `{}`.
+      await app.inject({
+        method: "PUT",
+        url: `/api/applications/${created.id}/build-args`,
+        headers: { cookie },
+        payload: { vars: {} }
+      });
+      const cleared = await prisma.application.findUniqueOrThrow({
+        where: { id: created.id },
+        select: { buildArgsEncrypted: true }
+      });
+      assert.equal(cleared.buildArgsEncrypted, null);
+    });
+
+    it("rejects an empty build variable patch", async () => {
+      const cookie = await signIn();
+      const created = await createApp(cookie);
+      const res = await app.inject({
+        method: "PATCH",
+        url: `/api/applications/${created.id}/build-args`,
+        headers: { cookie },
+        payload: {}
+      });
+      assert.equal(res.statusCode, 400);
+    });
+
     it("deletes an application and its rows", async () => {
       const cookie = await signIn();
       const created = await createApp(cookie);
@@ -553,7 +704,9 @@ describe("API routes", { skip }, () => {
         ["DELETE", `/api/applications/${foreignId}`, undefined],
         ["POST", `/api/applications/${foreignId}/deploy`, {}],
         ["PUT", `/api/applications/${foreignId}/env`, { vars: { A: "1" } }],
-        ["GET", `/api/applications/${foreignId}/env`, undefined]
+        ["GET", `/api/applications/${foreignId}/env`, undefined],
+        ["PUT", `/api/applications/${foreignId}/build-args`, { vars: { A: "1" } }],
+        ["GET", `/api/applications/${foreignId}/build-args`, undefined]
       ] as const) {
         const res = await app.inject({ method, url, headers: { cookie }, payload });
         assert.equal(res.statusCode, 404, `${method} ${url} returned ${String(res.statusCode)}`);
@@ -804,6 +957,10 @@ describe("API routes", { skip }, () => {
         ["GET", `/api/applications/${created.id}/env`, undefined],
         ["PUT", `/api/applications/${created.id}/env`, { vars: { A: "1" } }],
         ["PATCH", `/api/applications/${created.id}/env`, { set: { A: "1" } }],
+        // Build variables hold registry tokens as readily as env vars do.
+        ["GET", `/api/applications/${created.id}/build-args`, undefined],
+        ["PUT", `/api/applications/${created.id}/build-args`, { vars: { A: "1" } }],
+        ["PATCH", `/api/applications/${created.id}/build-args`, { set: { A: "1" } }],
         // The container filesystem reaches config files and /proc/self/environ.
         ["GET", `/api/applications/${created.id}/fs/list`, undefined],
         // Alert destination URLs are bearer credentials for a chat channel.
@@ -1653,7 +1810,7 @@ describe("API routes", { skip }, () => {
       }
     });
 
-    it("restores a v2 bundle: fresh credentials, idle status, rewritten bindings", async () => {
+    it("restores a bundle: fresh credentials, idle status, rewritten bindings", async () => {
       const cookie = await signIn();
       const passphrase = "bundle-pass-1";
       const bundle = buildBundle(
@@ -1672,7 +1829,8 @@ describe("API routes", { skip }, () => {
             cpuLimit: null,
             volumes: [],
             alertDestinations: [],
-            envVars: { DATABASE_URL: "postgresql://sohwe:stale@sohwe-ds-r-db:5432/r_db" }
+            envVars: { DATABASE_URL: "postgresql://sohwe:stale@sohwe-ds-r-db:5432/r_db" },
+            buildArgs: { NIXPACKS_NODE_VERSION: "22" }
           }
         ],
         {
@@ -1745,6 +1903,12 @@ describe("API routes", { skip }, () => {
       assert.equal(
         env.DATABASE_URL,
         `postgresql://sohwe:${creds.password!}@sohwe-ds-r-db:5432/r_db`
+      );
+
+      // Build variables ride the bundle in their own encrypted block.
+      assert.deepEqual(
+        decryptJson(Buffer.from(restoredApp.buildArgsEncrypted!)),
+        { NIXPACKS_NODE_VERSION: "22" }
       );
       assert.equal(await prisma.datastoreBinding.count(), 1);
     });

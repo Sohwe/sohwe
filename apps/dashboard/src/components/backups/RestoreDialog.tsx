@@ -185,7 +185,7 @@ export function RestoreDialog({
                       </span>
                     </span>
                     <span className="flex items-center gap-2 text-xs text-muted-foreground">
-                      <span>{a.volumeCount} vol · {a.alertCount} alerts · {a.envKeyCount} env</span>
+                      <span>{a.volumeCount} vol · {a.alertCount} alerts · {a.envKeyCount} env · {a.buildArgKeyCount} build</span>
                       {a.collides ? (
                         <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-amber-600 dark:text-amber-400">
                           slug exists

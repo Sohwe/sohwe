@@ -3,7 +3,14 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildAppImage, dockerBuild, type LogHandler } from "./index";
+import {
+  buildAppImage,
+  dockerBuild,
+  dockerBuildArgv,
+  nixpacksArgv,
+  redactValues,
+  type LogHandler
+} from "./index";
 
 /**
  * Engine selection is the part of the builder that can be tested without a
@@ -53,6 +60,22 @@ async function engineFor(
     // The tool is not installed here, and may not be; only the choice matters.
   });
   return announcedEngine();
+}
+
+/** Like `engineFor`, but with build variables attached. */
+async function engineForWithArgs(
+  mode: "auto" | "dockerfile" | "nixpacks",
+  buildArgs: Record<string, string>
+): Promise<void> {
+  await buildAppImage({
+    contextDir: dir,
+    imageTag: "sohwe/test:1",
+    mode,
+    buildArgs,
+    onLogLine
+  }).catch(() => {
+    // As above: the tool is absent, only the logged decisions matter.
+  });
 }
 
 describe("buildAppImage — engine selection", () => {
@@ -137,6 +160,123 @@ describe("dockerBuild", () => {
     await assert.rejects(
       dockerBuild({ contextDir: dir, imageTag: "sohwe/test:1", onLogLine }),
       /No Dockerfile in repository root/
+    );
+  });
+});
+
+describe("nixpacksArgv", () => {
+  it("puts every build variable behind its own --env flag", () => {
+    const argv = nixpacksArgv("/ctx", "img:1", {
+      buildArgs: { NIXPACKS_NODE_VERSION: "22", FOO: "bar" }
+    });
+    assert.deepEqual(argv, [
+      "build",
+      "/ctx",
+      "--name",
+      "img:1",
+      "--env",
+      "NIXPACKS_NODE_VERSION=22",
+      "--env",
+      "FOO=bar"
+    ]);
+  });
+
+  it("keeps command overrides and adds nothing when there are no variables", () => {
+    assert.deepEqual(
+      nixpacksArgv("/ctx", "img:1", { buildCmd: "npm run build", startCmd: " " }),
+      ["build", "/ctx", "--name", "img:1", "--build-cmd", "npm run build"]
+    );
+    assert.deepEqual(nixpacksArgv("/ctx", "img:1"), [
+      "build",
+      "/ctx",
+      "--name",
+      "img:1"
+    ]);
+  });
+
+  it("keeps a value containing '=' intact", () => {
+    const argv = nixpacksArgv("/ctx", "img:1", {
+      buildArgs: { OPTS: "a=1&b=2" }
+    });
+    assert.equal(argv.at(-1), "OPTS=a=1&b=2");
+  });
+});
+
+describe("dockerBuildArgv", () => {
+  it("passes build variables by name only, keeping values off the argv", () => {
+    const argv = dockerBuildArgv("/ctx", "img:1", { NPM_TOKEN: "npm_secret" });
+    assert.deepEqual(argv, [
+      "build",
+      "-t",
+      "img:1",
+      "--build-arg",
+      "NPM_TOKEN",
+      "/ctx"
+    ]);
+    assert.equal(argv.includes("npm_secret"), false);
+  });
+
+  it("keeps the context last so docker still parses it as the context", () => {
+    const argv = dockerBuildArgv("/ctx", "img:1", { A: "1", B: "2" });
+    assert.equal(argv.at(-1), "/ctx");
+  });
+});
+
+describe("redactValues", () => {
+  it("masks every occurrence of a value", () => {
+    assert.equal(
+      redactValues("token npm_abcdef and again npm_abcdef", ["npm_abcdef"]),
+      "token *** and again ***"
+    );
+  });
+
+  it("leaves the line alone when there is nothing to mask", () => {
+    assert.equal(redactValues("plain line", []), "plain line");
+    assert.equal(redactValues("plain line", undefined), "plain line");
+  });
+
+  it("ignores values too short to be worth masking", () => {
+    // "22" as NIXPACKS_NODE_VERSION would otherwise redact half the build log.
+    assert.equal(redactValues("Node 22 selected", ["22"]), "Node 22 selected");
+  });
+});
+
+describe("buildAppImage — build variable announcement", () => {
+  it("logs the keys, sorted, and never the values", async () => {
+    await engineForWithArgs("nixpacks", {
+      NPM_TOKEN: "npm_supersecret",
+      NIXPACKS_NODE_VERSION: "22"
+    });
+    const line = logs.find((l) => l.startsWith("[sohwe] Build variables:"));
+    assert.equal(line, "[sohwe] Build variables: NIXPACKS_NODE_VERSION, NPM_TOKEN");
+    assert.equal(
+      logs.some((l) => l.includes("npm_supersecret")),
+      false
+    );
+  });
+
+  it("says nothing when there are no build variables", async () => {
+    await engineFor("nixpacks");
+    assert.equal(
+      logs.some((l) => l.startsWith("[sohwe] Build variables:")),
+      false
+    );
+  });
+
+  it("warns that a Dockerfile needs a matching ARG", async () => {
+    await addDockerfile();
+    await engineForWithArgs("dockerfile", { NIXPACKS_NODE_VERSION: "22" });
+    assert.equal(
+      logs.some((l) => l.includes("declares a matching ARG")),
+      true
+    );
+  });
+
+  it("does not warn about ARG for a nixpacks build", async () => {
+    await engineForWithArgs("nixpacks", { NIXPACKS_NODE_VERSION: "22" });
+    assert.equal(
+      logs.some((l) => l.includes("declares a matching ARG")),
+      false
     );
   });
 });

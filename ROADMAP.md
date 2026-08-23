@@ -66,6 +66,7 @@ Evidence: `apps/api/src/routes/applications.ts`, `apps/api/src/routes/app-filesy
 - [x] `auto` falls back to Nixpacks when no Dockerfile exists.
 - [x] Build command override.
 - [x] Start command override.
+- [x] Build variables passed into the image build. (`nixpacks build --env KEY=value`; `docker build --build-arg KEY` name-only so values stay off the argv — pins `NIXPACKS_NODE_VERSION` and friends, and covers build-time-inlined values like `NEXT_PUBLIC_*`; encrypted at rest, admin-and-above, keys logged and values scrubbed from build output)
 - [x] Editable branch, port, build mode, commands, and custom domain.
 - [x] Custom domain support.
 - [x] Opt-in HTTPS Traefik labels.
@@ -73,7 +74,7 @@ Evidence: `apps/api/src/routes/applications.ts`, `apps/api/src/routes/app-filesy
 - [x] Commit subject recorded for deployments.
 - [x] Rollback reuses a previous successful image.
 
-Evidence: `packages/builder/src/index.ts`, `packages/types/src/index.ts`, `apps/api/src/routes/applications.ts`, `apps/worker/src/index.ts`, `apps/dashboard/src/components/apps/AppSettingsForm.tsx`, `apps/dashboard/src/components/apps/CreateAppDialog.tsx`, `apps/dashboard/src/components/apps/DeploymentsTable.tsx`.
+Evidence: `packages/builder/src/index.ts`, `packages/types/src/index.ts`, `apps/api/src/routes/applications.ts`, `apps/api/src/routes/build-args.ts`, `apps/worker/src/index.ts`, `apps/dashboard/src/components/apps/AppSettingsForm.tsx`, `apps/dashboard/src/components/apps/BuildArgsManager.tsx`, `apps/dashboard/src/components/apps/CreateAppDialog.tsx`, `apps/dashboard/src/components/apps/DeploymentsTable.tsx`.
 
 ### Phase 3 - Stateful Apps
 
@@ -81,7 +82,7 @@ Evidence: `packages/builder/src/index.ts`, `packages/types/src/index.ts`, `apps/
 - [x] Dedicated env var API routes.
 - [x] Masked env var list by default.
 - [x] Authenticated reveal support.
-- [x] Silent logging on env var mutation routes.
+- [x] Silent logging on env var mutation routes. (build variable routes too)
 - [x] Worker decrypts env vars only for Docker `Env` injection.
 - [x] Persistent volume database model.
 - [x] Volume create/list/delete API routes.
@@ -186,7 +187,7 @@ S3-compatible destinations, worker-driven scheduled exports, and retention.
 - [x] Implement config-mode signed bundle export.
 - [x] Implement local storage destination.
 - [x] Implement S3-compatible storage destination. (`@aws-sdk/client-s3`; works with AWS, MinIO, R2, Spaces — credentials encrypted at rest)
-- [x] Re-encrypt env vars with a passphrase-derived bundle key.
+- [x] Re-encrypt env vars with a passphrase-derived bundle key. (build variables ride the same key in their own block, bundle format v3)
 - [x] Add restore preflight.
 - [x] Add restore apply flow.
 - [x] Add slug collision policies: `rename`, `overwrite`, `skip`.

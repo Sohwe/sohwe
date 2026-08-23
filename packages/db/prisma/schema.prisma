@@ -75,6 +75,11 @@ model Application {
   port              Int          @default(3000)
   domain            String?
   envVarsEncrypted  Bytes?       @map("env_vars_encrypted")
+  // Variables exposed to the *build* (nixpacks `--env`, docker `--build-arg`),
+  // e.g. NIXPACKS_NODE_VERSION or NEXT_PUBLIC_* values Next.js inlines at build
+  // time. Separate from envVarsEncrypted because these end up baked into image
+  // layers and are visible in `docker history`; runtime env vars are not.
+  buildArgsEncrypted Bytes?      @map("build_args_encrypted")
   memoryLimitMb     Int?         @map("memory_limit_mb")
   cpuLimit          Float?       @map("cpu_limit")
   status            String       @default("idle") // idle | deploying | running | crashed | stopped
