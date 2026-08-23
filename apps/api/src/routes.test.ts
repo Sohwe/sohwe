@@ -2960,6 +2960,58 @@ describe("API routes", { skip }, () => {
       }
     });
 
+    it("refuses to suggest or apply a record when the base domain is proxied", async () => {
+      const cookie = await signIn();
+      const baseDomain = loadApiConfig().baseDomain;
+      // A real Cloudflare edge address. The regression: resolving a proxied
+      // base domain yields one of these, and Sohwe used to hand it back as the
+      // origin — advising people to point domains at Cloudflare itself, which
+      // serves Error 1000, and then reporting the result as `verified`.
+      const CF_EDGE = "172.67.148.151";
+      const server = await buildServer(loadApiConfig(), {
+        logger: false,
+        dns: {
+          resolveNs: fakeResolveNs,
+          resolve4: fakeResolve4({
+            [baseDomain]: [CF_EDGE],
+            "app.example.com": [CF_EDGE]
+          })
+        }
+      });
+      try {
+        const created = await createApp(cookie);
+        const add = await server.inject({
+          method: "POST",
+          url: `/api/applications/${created.id}/domains`,
+          headers: { cookie },
+          payload: { hostname: "app.example.com" }
+        });
+        assert.equal(add.statusCode, 200, add.body);
+        const body = add.json() as {
+          domain: { id: string; lastStatus: string; verifiedAt: string | null };
+          dns: { expectedIp: string | null; expectedIpIssue: string | null; record: unknown };
+        };
+
+        assert.notEqual(body.domain.lastStatus, "verified");
+        assert.equal(body.domain.verifiedAt, null);
+        assert.equal(body.dns.expectedIp, null);
+        assert.equal(body.dns.record, null, "must not suggest a record it cannot compute");
+        assert.match(body.dns.expectedIpIssue ?? "", /proxy address/);
+        // The response must never carry the edge address as something to use.
+        assert.equal(JSON.stringify(body.dns.record), "null");
+
+        const apply = await server.inject({
+          method: "POST",
+          url: `/api/applications/${created.id}/domains/${body.domain.id}/dns/apply`,
+          headers: { cookie }
+        });
+        assert.equal(apply.statusCode, 400, apply.body);
+        assert.match(apply.body, /proxy address|SOHWE_PUBLIC_IP/);
+      } finally {
+        await server.close();
+      }
+    });
+
     it("records domain changes in the audit log", async () => {
       const cookie = await signIn();
       const server = await domainServer();

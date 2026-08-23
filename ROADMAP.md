@@ -364,10 +364,18 @@ with an API driver and an org-level encrypted token — writes the record itself
       Cloud DNS, DigitalOcean, Vercel, Porkbun, Linode, OVH, Gandi, Name.com,
       IONOS, Hetzner); unknown providers fall back to showing the raw
       nameservers. (`apps/api/src/dns/providers.ts`)
-- [x] Live DNS verification per domain: expected A record (resolved from
-      `SOHWE_BASE_DOMAIN` or a wildcard label under it) vs the domain's current
-      resolution, with `verified` / `mismatch` / `unresolved` / `unknown`
-      states cached on the row so the list needs no lookup per row.
+- [x] Live DNS verification per domain: expected A record (from
+      `SOHWE_PUBLIC_IP`, else resolved from `SOHWE_BASE_DOMAIN` or a wildcard
+      label under it) vs the domain's current resolution, with `verified` /
+      `proxied` / `mismatch` / `unresolved` / `unknown` states cached on the row
+      so the list needs no lookup per row.
+- [x] Proxy-edge guard: an address inside a known proxy network (Cloudflare's
+      published ranges) is refused as an origin rather than returned, so the
+      assist cannot advise pointing a domain at the proxy itself — which loops
+      it onto its own edge (Error 1000) and then verifies clean. The auto-apply
+      refuses the same case, and `SOHWE_PUBLIC_IP` is the supported override
+      for an instance whose base domain is legitimately proxied.
+      (`apps/api/src/dns/cdn.ts`)
       (`apps/api/src/dns/inspect.ts`, `POST .../domains/:domainId/verify` and
       `GET /api/dns/inspect`, member-and-above — exposes nothing secret)
 - [x] Dedicated Domains tab: add form with live validation, per-row status
@@ -419,7 +427,9 @@ Evidence: `apps/api/src/dns/`, `apps/api/src/routes/domains.ts`,
 `packages/db/prisma/migrations/20260823101254_app_domains/`,
 `apps/dashboard/src/components/apps/DomainsManager.tsx`,
 `apps/dashboard/src/routes/app.$appId.domains.tsx`,
-`apps/api/src/dns/drivers.test.ts`, `apps/api/src/dns/cloudflare.test.ts`,
+`apps/api/src/dns/cdn.ts`, `apps/api/src/dns/cdn.test.ts`,
+`apps/api/src/dns/inspect.test.ts`, `apps/api/src/dns/drivers.test.ts`,
+`apps/api/src/dns/cloudflare.test.ts`,
 `apps/api/src/dns/providers.test.ts`, `apps/worker/src/container-spec.test.ts`,
 `apps/api/src/routes.test.ts`.
 

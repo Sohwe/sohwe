@@ -152,6 +152,18 @@ export function DomainDnsPanel({
         )}
       </div>
 
+      {d.expectedIpIssue && (
+        // The instance could not work out its own address. Until that is fixed
+        // there is no record to suggest and nothing can verify, so this leads
+        // rather than sitting below the record block.
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs">
+          <p className="font-medium text-amber-600 dark:text-amber-400">
+            This instance's public IP could not be determined
+          </p>
+          <p className="mt-1 text-muted-foreground">{d.expectedIpIssue}</p>
+        </div>
+      )}
+
       {d.record ? (
         <div className="flex flex-wrap items-center gap-2 rounded-md border bg-background px-3 py-2 text-sm">
           <span className="text-xs text-muted-foreground">Required record</span>
@@ -161,19 +173,29 @@ export function DomainDnsPanel({
           <span className="text-muted-foreground">→</span>
           <span className="font-mono text-xs">{d.record.value}</span>
           <CopyButton text={d.record.value} label="Copy value" />
+          {d.expectedIpSource === "configured" && (
+            <span className="text-[11px] text-muted-foreground">(from SOHWE_PUBLIC_IP)</span>
+          )}
         </div>
-      ) : (
+      ) : d.expectedIpIssue ? null : (
         <p className="text-xs text-muted-foreground">
-          Could not resolve this instance's public IP from its base domain, so no record
-          value can be suggested yet.
+          No record value can be suggested yet.
+        </p>
+      )}
+
+      {d.status === "proxied" && (
+        <p className="text-xs text-muted-foreground">
+          Resolves to <span className="font-mono">{d.resolvedIps.join(", ")}</span>, a proxy
+          edge rather than a server. Traffic may well be reaching this host — Sohwe cannot see
+          the origin behind a proxy, so it can neither confirm nor deny it from out here. Set
+          the record to DNS-only (grey cloud) if you want a definite answer.
         </p>
       )}
 
       {d.status === "mismatch" && (
         <p className="text-xs text-muted-foreground">
-          Currently resolves to <span className="font-mono">{d.resolvedIps.join(", ")}</span>.
-          {d.provider?.id === "cloudflare" &&
-            " If the record is proxied through Cloudflare (orange cloud), traffic may still reach this host — Sohwe cannot see the origin behind the proxy."}
+          Currently resolves to <span className="font-mono">{d.resolvedIps.join(", ")}</span>,
+          which is not this host.
         </p>
       )}
 

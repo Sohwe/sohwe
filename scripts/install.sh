@@ -21,6 +21,8 @@
 #
 #   SOHWE_HTTP_PORT      host port published for Traefik HTTP (default: 8080)
 #   SOHWE_SETUP_PASSWORD installer password for first dashboard access (min 8 chars)
+#   SOHWE_PUBLIC_IP      this server's public IPv4; detected automatically when
+#                        unset. Used by the custom-domain DNS assist.
 #   SOHWE_BASE_DOMAIN    wildcard parent domain for deployed app URLs, e.g.
 #                        apps.example.com -> myapp.apps.example.com. Defaults to
 #                        SOHWE_HOST, falling back to sohwe.localhost. Needs a
@@ -76,6 +78,9 @@ SOHWE_VERSION="${SOHWE_VERSION:-latest}"
 SOHWE_HOST_INPUT="${SOHWE_HOST:-}"
 SOHWE_ACME_EMAIL_INPUT="${SOHWE_ACME_EMAIL:-}"
 SOHWE_BASE_DOMAIN_INPUT="${SOHWE_BASE_DOMAIN:-}"
+# Filled in before the env file is written; also reused by check_dns so the
+# address reported to the operator is the one recorded in the config.
+detected_public_ip="${SOHWE_PUBLIC_IP:-}"
 NONINTERACTIVE="${SOHWE_NONINTERACTIVE:-0}"
 readonly DEFAULT_HTTP_PORT="${DEFAULT_HTTP_PORT:-8080}"
 readonly DEFAULT_BASE_DOMAIN="sohwe.localhost"
@@ -284,6 +289,15 @@ detect_public_ip() {
     hostname -I 2>/dev/null | awk '{print $1}'
 }
 
+# Populate detected_public_ip at most once. The detection makes network calls,
+# and both the DNS guidance and the env file want the same answer -- reporting
+# one address to the operator and recording another would be worse than either.
+ensure_public_ip() {
+    if [[ -z "${detected_public_ip}" ]]; then
+        detected_public_ip="$(detect_public_ip)"
+    fi
+}
+
 # First A record for a name. Prefer dig against a public resolver so the
 # host's own resolver cache cannot mask a missing record; getent (always
 # present on Ubuntu) is the fallback, with that caveat.
@@ -325,8 +339,8 @@ check_dns() {
         return
     fi
 
-    local ip
-    ip="$(detect_public_ip)"
+    ensure_public_ip
+    local ip="${detected_public_ip}"
     if [[ -z "${ip}" ]]; then
         warn "Could not detect this server's public IP; skipping DNS verification."
         return
@@ -556,6 +570,10 @@ write_env_file() {
     mkdir -p "${DATA_DIR}"
     chmod 750 "${DATA_DIR}"
 
+    # check_dns returns early on an HTTP-only install without detecting, so ask
+    # again here; SOHWE_PUBLIC_IP should be recorded either way.
+    ensure_public_ip
+
     local overlays="" https_enabled="false"
     if [[ -n "${SOHWE_HOST_INPUT}" ]]; then
         overlays="${COMPOSE_HTTPS}"
@@ -603,6 +621,12 @@ SOHWE_HOST=${SOHWE_HOST_INPUT}
 SOHWE_ACME_EMAIL=${SOHWE_ACME_EMAIL_INPUT}
 SOHWE_HTTPS_ENABLED=${https_enabled}
 SOHWE_BASE_DOMAIN=${SOHWE_BASE_DOMAIN_INPUT}
+# This server's public IP, detected at install time. The custom-domain DNS
+# assist uses it as the address custom domains must point at. Recorded here
+# rather than inferred from SOHWE_BASE_DOMAIN, because resolving a base domain
+# that sits behind Cloudflare's orange cloud returns a proxy address instead of
+# this server. Update it if the server's IP changes.
+SOHWE_PUBLIC_IP=${detected_public_ip}
 # Traefik ACME resolver named on deployed apps' TLS labels. Only consulted when
 # SOHWE_HTTPS_ENABLED=true. The default matches the resolver declared on the
 # traefik service in docker-compose.prod.yml; change it only alongside a compose

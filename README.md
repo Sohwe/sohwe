@@ -51,7 +51,7 @@ The installer will:
 
 Unlock first-run setup with your installer password, then complete setup (owner account + organization) in the dashboard. The installer password is a one-time gate — after setup you sign in with the owner account you created.
 
-Non-interactive installs can pass **`SOHWE_HTTP_PORT`**, **`SOHWE_SETUP_PASSWORD`**, **`SOHWE_BASE_DOMAIN`**, **`SOHWE_HOST`**, **`SOHWE_ACME_EMAIL`**, **`SOHWE_PUBLIC_URL`**, and **`SOHWE_VERSION`** via the environment, with `SOHWE_NONINTERACTIVE=1` (see the header comments in `scripts/install.sh`).
+Non-interactive installs can pass **`SOHWE_HTTP_PORT`**, **`SOHWE_SETUP_PASSWORD`**, **`SOHWE_BASE_DOMAIN`**, **`SOHWE_HOST`**, **`SOHWE_ACME_EMAIL`**, **`SOHWE_PUBLIC_URL`**, **`SOHWE_PUBLIC_IP`**, and **`SOHWE_VERSION`** via the environment, with `SOHWE_NONINTERACTIVE=1` (see the header comments in `scripts/install.sh`).
 
 ### Deploy on git push
 

@@ -15,6 +15,14 @@ export type ApiConfig = {
   redisUrl: string;
   httpsEnabled: boolean;
   baseDomain: string;
+  /**
+   * This host's own public IPv4, stated outright by the operator. Optional, and
+   * only used by the custom-domain DNS assist: without it Sohwe infers the
+   * address by resolving `baseDomain`, which yields a proxy edge address rather
+   * than this server whenever the base domain is behind Cloudflare's orange
+   * cloud. Set this on any instance whose base domain is proxied.
+   */
+  publicIp: string | null;
   setupPassword: string | null;
   /**
    * Absolute externally-reachable base URL of this instance (no trailing
@@ -95,6 +103,26 @@ function normalizePublicUrl(
   return `${parsed.origin}${parsed.pathname.replace(/\/+$/, "")}`;
 }
 
+/**
+ * `SOHWE_PUBLIC_IP`, if set: a bare IPv4 address. Unset is normal — the address
+ * is then inferred from the base domain. A malformed value is a boot error
+ * rather than a silent fallback, since falling back is exactly what this
+ * setting exists to override.
+ */
+function parsePublicIp(raw: string | undefined, errors: string[]): string | null {
+  const value = raw?.trim();
+  if (!value) return null;
+  if (!/^(?:(?:0|[1-9]\d{0,2})\.){3}(?:0|[1-9]\d{0,2})$/.test(value)) {
+    errors.push(`SOHWE_PUBLIC_IP must be a bare IPv4 address, got "${value}"`);
+    return null;
+  }
+  if (value.split(".").some((o) => Number(o) > 255)) {
+    errors.push(`SOHWE_PUBLIC_IP is not a valid IPv4 address: "${value}"`);
+    return null;
+  }
+  return value;
+}
+
 export function loadApiConfig(): ApiConfig {
   const errors: string[] = [];
 
@@ -139,6 +167,10 @@ export function loadApiConfig(): ApiConfig {
     errors
   );
 
+  // Checked at boot rather than at first use: a typo here would otherwise
+  // surface as a confusing DNS result long after the operator set it.
+  const publicIp = parsePublicIp(process.env.SOHWE_PUBLIC_IP, errors);
+
   if (errors.length > 0) {
     throw new Error(
       "Invalid environment configuration:\n" +
@@ -156,6 +188,7 @@ export function loadApiConfig(): ApiConfig {
     redisUrl,
     httpsEnabled: process.env.SOHWE_HTTPS_ENABLED === "true",
     baseDomain: process.env.SOHWE_BASE_DOMAIN ?? "sohwe.localhost",
+    publicIp,
     setupPassword: setupPassword && setupPassword.length > 0 ? setupPassword : null,
     publicUrl,
     corsOrigin: resolveCorsOrigin(),

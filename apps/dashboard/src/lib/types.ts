@@ -390,8 +390,12 @@ export type DnsInspection = {
   nameservers: string[];
   provider: DnsProviderInfo | null;
   expectedIp: string | null;
+  /** `configured` = SOHWE_PUBLIC_IP; `base-domain` = inferred by resolving it. */
+  expectedIpSource: "configured" | "base-domain" | null;
+  /** Why there is no `expectedIp`, in words fit to show an operator. */
+  expectedIpIssue: string | null;
   resolvedIps: string[];
-  status: "verified" | "mismatch" | "unresolved" | "unknown";
+  status: "verified" | "proxied" | "mismatch" | "unresolved" | "unknown";
   record: { type: "A"; name: string; value: string } | null;
 };
 

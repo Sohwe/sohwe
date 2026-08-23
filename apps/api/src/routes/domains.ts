@@ -15,6 +15,7 @@ import { recordAudit } from "../audit";
 import { requireRole } from "../rbac";
 import type { ApiConfig } from "../env";
 import { isUniqueViolation } from "../prisma-errors";
+import { cdnForAddress } from "../dns/cdn";
 import { DnsApiError } from "../dns/driver";
 import { getDnsDriver } from "../dns/drivers";
 import { inspectDomain, resolveExpectedIp, type DnsLookups } from "../dns/inspect";
@@ -209,7 +210,12 @@ export async function registerDomainRoutes(
 
       // Check immediately: the whole point of adding a domain here is to be
       // told, in the same breath, what DNS record it still needs.
-      const dns = await inspectDomain(hostname, config.baseDomain, lookups);
+      const dns = await inspectDomain(
+        hostname,
+        config.baseDomain,
+        lookups,
+        config.publicIp
+      );
       const domain = await recordCheck(created.id, dns);
       return { domain: serializeDomain(domain), dns };
     }
@@ -231,7 +237,12 @@ export async function registerDomainRoutes(
       });
       if (!existing) return reply.notFound();
 
-      const dns = await inspectDomain(existing.hostname, config.baseDomain, lookups);
+      const dns = await inspectDomain(
+        existing.hostname,
+        config.baseDomain,
+        lookups,
+        config.publicIp
+      );
       const domain = await recordCheck(existing.id, dns);
       return { domain: serializeDomain(domain), dns };
     }
@@ -350,13 +361,42 @@ export async function registerDomainRoutes(
       // Which provider to use is decided by the domain's own nameservers, not
       // by whatever credentials happen to be stored: writing a record at a
       // provider the zone does not live on would change nothing.
-      const dns = await inspectDomain(existing.hostname, config.baseDomain, lookups);
+      const dns = await inspectDomain(
+        existing.hostname,
+        config.baseDomain,
+        lookups,
+        config.publicIp
+      );
       const providerId = dns.provider?.id;
       if (!providerId || !isApiProvider(providerId)) {
         return reply.badRequest(
           dns.provider
             ? `Sohwe cannot write records at ${dns.provider.name} — add the record there manually.`
             : `Could not tell which DNS provider hosts ${existing.hostname}, so the record cannot be added automatically.`
+        );
+      }
+
+      const expected = await resolveExpectedIp(
+        config.baseDomain,
+        lookups.resolve4,
+        config.publicIp
+      );
+      if (expected.ip === null) {
+        // `expectedIpIssue` already says which of the several causes this is
+        // and what to do about it.
+        return reply.badRequest(expected.issue);
+      }
+      const expectedIp = expected.ip;
+
+      // Belt and braces. `resolveExpectedIp` already refuses a proxy address,
+      // so reaching here would mean a bug upstream — but this is the one call
+      // that writes to somebody's live DNS, and writing a proxy address here is
+      // what takes a working domain down with Error 1000.
+      const edge = cdnForAddress(expectedIp);
+      if (edge) {
+        return reply.badRequest(
+          `Refusing to point ${existing.hostname} at ${expectedIp}: that is a ${edge} ` +
+            "proxy address, not this server. Set SOHWE_PUBLIC_IP to this host's own public IP."
         );
       }
 
@@ -371,17 +411,6 @@ export async function registerDomainRoutes(
       if (!credential) {
         return reply.badRequest(
           `No ${dns.provider?.name ?? providerId} API token is configured for this organization.`
-        );
-      }
-
-      const expectedIp = await resolveExpectedIp(
-        config.baseDomain,
-        lookups.resolve4
-      );
-      if (!expectedIp) {
-        return reply.badRequest(
-          `Could not determine this instance's public IP: neither ${config.baseDomain} ` +
-            "nor a wildcard label under it resolves. Point SOHWE_BASE_DOMAIN at this host first."
         );
       }
 

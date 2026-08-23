@@ -43,7 +43,7 @@ export async function registerDnsRoutes(
     },
     async (req): Promise<DnsInspection> => {
       const { domain } = req.query as z.infer<typeof DnsInspectQuerySchema>;
-      return inspectDomain(domain, config.baseDomain, lookups);
+      return inspectDomain(domain, config.baseDomain, lookups, config.publicIp);
     }
   );
 

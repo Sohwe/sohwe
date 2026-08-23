@@ -657,15 +657,28 @@ export type DnsRecordSuggestion = {
 
 /**
  * - `verified`    the domain resolves to this instance's address
- * - `mismatch`    it resolves somewhere else (possibly a CDN proxy)
+ * - `proxied`     it resolves to a reverse-proxy edge (Cloudflare's orange
+ *                 cloud), so the origin behind it cannot be seen from outside.
+ *                 Distinct from `mismatch`: this is a working setup, not a
+ *                 misconfigured one, and must never be reported as `verified`
+ * - `mismatch`    it resolves somewhere else
  * - `unresolved`  no address records exist yet
- * - `unknown`     the instance's own address could not be determined
+ * - `unknown`     the instance's own address could not be determined; see
+ *                 `expectedIpIssue`
  */
 export type DnsInspectionStatus =
   | "verified"
+  | "proxied"
   | "mismatch"
   | "unresolved"
   | "unknown";
+
+/**
+ * How the instance's own public address was established.
+ * - `configured`   stated outright by the operator via `SOHWE_PUBLIC_IP`
+ * - `base-domain`  resolved from `SOHWE_BASE_DOMAIN` or a wildcard label
+ */
+export type ExpectedIpSource = "configured" | "base-domain";
 
 /** Response of `GET /api/dns/inspect`. Contains nothing secret. */
 export type DnsInspection = {
@@ -675,8 +688,18 @@ export type DnsInspection = {
   nameservers: string[];
   /** Matched provider; null when the nameservers are not in the registry. */
   provider: DnsProviderInfo | null;
-  /** IPv4 this instance's apps resolve to (via SOHWE_BASE_DOMAIN). */
+  /** IPv4 this instance's apps resolve to. Null when it could not be trusted. */
   expectedIp: string | null;
+  /** How `expectedIp` was established; null when there is no `expectedIp`. */
+  expectedIpSource: ExpectedIpSource | null;
+  /**
+   * Why `expectedIp` is null, in words fit to show an operator. Null whenever
+   * `expectedIp` is set. The case that matters: the apps base domain is itself
+   * behind a proxy, so resolving it yields an edge address rather than this
+   * server — pointing a customer domain at that address is what produces
+   * Cloudflare's "Error 1000: DNS points to prohibited IP".
+   */
+  expectedIpIssue: string | null;
   /** Addresses the domain currently resolves to. */
   resolvedIps: string[];
   status: DnsInspectionStatus;

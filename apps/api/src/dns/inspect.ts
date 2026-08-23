@@ -6,7 +6,8 @@
 // route tests never touch the network.
 
 import { Resolver } from "node:dns/promises";
-import type { DnsInspection } from "@sohwe/types";
+import type { DnsInspection, ExpectedIpSource } from "@sohwe/types";
+import { cdnForAddress } from "./cdn";
 import { findZoneNameservers, matchProvider, type NsLookup } from "./providers";
 
 export type DnsLookups = {
@@ -30,24 +31,78 @@ export function createDnsLookups(overrides: Partial<DnsLookups> = {}): DnsLookup
   };
 }
 
+/** The instance's own public address, or why it could not be established. */
+export type ExpectedIp =
+  | { ip: string; source: ExpectedIpSource; issue: null }
+  | { ip: null; source: null; issue: string };
+
 /**
- * IPv4 a custom domain must point at, discovered from the apps base domain:
- * its own A record first, then a wildcard probe label — hosts commonly publish
- * only `*.<base-domain>`. Null when neither resolves (e.g. local dev).
+ * IPv4 a custom domain must point at.
+ *
+ * An operator-supplied `SOHWE_PUBLIC_IP` wins outright — it is the only source
+ * that cannot be wrong about which machine this is. Otherwise it is discovered
+ * from the apps base domain: its own A record first, then a wildcard probe
+ * label, since hosts commonly publish only `*.<base-domain>`.
+ *
+ * A discovered address inside a proxy network is **refused, not returned**. If
+ * the base domain sits behind Cloudflare's orange cloud, resolving it yields an
+ * edge address; handing that back would make Sohwe advise pointing customer
+ * domains at Cloudflare itself, which loops the proxy onto its own edge and
+ * serves "Error 1000: DNS points to prohibited IP" — and would then verify
+ * clean, because the domain really does resolve to the address Sohwe asked for.
+ * Better to have no answer than a confidently wrong one.
  */
 export async function resolveExpectedIp(
   baseDomain: string,
-  resolve4: (host: string) => Promise<string[]>
-): Promise<string | null> {
+  resolve4: (host: string) => Promise<string[]>,
+  publicIp?: string | null
+): Promise<ExpectedIp> {
+  if (publicIp) {
+    const cdn = cdnForAddress(publicIp);
+    if (cdn) {
+      return {
+        ip: null,
+        source: null,
+        issue:
+          `SOHWE_PUBLIC_IP is set to ${publicIp}, which belongs to ${cdn}, not to a server. ` +
+          "Set it to this host's own public IP address."
+      };
+    }
+    return { ip: publicIp, source: "configured", issue: null };
+  }
+
   for (const host of [baseDomain, `sohwe-dns-probe.${baseDomain}`]) {
+    let addr: string | undefined;
     try {
       const addrs = await resolve4(host);
-      if (addrs.length > 0 && addrs[0]) return addrs[0];
+      addr = addrs[0];
     } catch {
       // Try the next candidate.
     }
+    if (!addr) continue;
+
+    const cdn = cdnForAddress(addr);
+    if (cdn) {
+      return {
+        ip: null,
+        source: null,
+        issue:
+          `${host} resolves to ${addr}, which is a ${cdn} proxy address rather than this server. ` +
+          `Sohwe cannot tell what this host's real IP is, and pointing a domain at ${addr} would ` +
+          `make ${cdn} fetch its origin from itself (Error 1000). Either turn off the proxy for ` +
+          `the apps base domain, or set SOHWE_PUBLIC_IP to this host's own public IP address.`
+      };
+    }
+    return { ip: addr, source: "base-domain", issue: null };
   }
-  return null;
+
+  return {
+    ip: null,
+    source: null,
+    issue:
+      `Neither ${baseDomain} nor a wildcard label under it resolves to an address, so this ` +
+      "instance's public IP is unknown. Point SOHWE_BASE_DOMAIN at this host, or set SOHWE_PUBLIC_IP."
+  };
 }
 
 /**
@@ -58,14 +113,15 @@ export async function resolveExpectedIp(
 export async function inspectDomain(
   domain: string,
   baseDomain: string,
-  lookups: DnsLookups
+  lookups: DnsLookups,
+  publicIp?: string | null
 ): Promise<DnsInspection> {
   const zoneInfo = await findZoneNameservers(domain, lookups.resolveNs);
   const provider = zoneInfo
     ? matchProvider(zoneInfo.nameservers, zoneInfo.zone)
     : null;
 
-  const expectedIp = await resolveExpectedIp(baseDomain, lookups.resolve4);
+  const expected = await resolveExpectedIp(baseDomain, lookups.resolve4, publicIp);
 
   let resolvedIps: string[] = [];
   try {
@@ -74,22 +130,34 @@ export async function inspectDomain(
     // No A records yet — reported as "unresolved" below.
   }
 
-  const status: DnsInspection["status"] = !expectedIp
-    ? "unknown"
-    : resolvedIps.length === 0
-      ? "unresolved"
-      : resolvedIps.includes(expectedIp)
+  // A domain sitting behind a proxy is a working setup whose origin simply
+  // cannot be seen from out here. It gets its own status rather than being
+  // called a mismatch (alarming, and wrong) or verified (wrong, and quiet).
+  const proxiedBy = resolvedIps.length > 0 && resolvedIps.every((ip) => cdnForAddress(ip));
+
+  const status: DnsInspection["status"] =
+    resolvedIps.length === 0
+      ? expected.ip
+        ? "unresolved"
+        : "unknown"
+      : expected.ip && resolvedIps.includes(expected.ip)
         ? "verified"
-        : "mismatch";
+        : proxiedBy
+          ? "proxied"
+          : expected.ip
+            ? "mismatch"
+            : "unknown";
 
   return {
     domain,
     zone: zoneInfo?.zone ?? null,
     nameservers: zoneInfo?.nameservers ?? [],
     provider,
-    expectedIp,
+    expectedIp: expected.ip,
+    expectedIpSource: expected.source,
+    expectedIpIssue: expected.issue,
     resolvedIps,
     status,
-    record: expectedIp ? { type: "A", name: domain, value: expectedIp } : null
+    record: expected.ip ? { type: "A", name: domain, value: expected.ip } : null
   };
 }

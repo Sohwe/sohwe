@@ -27,6 +27,13 @@ x-sohwe-env: &sohwe-env
   # host (curl with Host header or /etc/hosts) — set a real domain with a
   # wildcard A record for browser access.
   SOHWE_BASE_DOMAIN: ${SOHWE_BASE_DOMAIN:-sohwe.localhost}
+  # This host's own public IPv4, used only by the custom-domain DNS assist to
+  # know what address a custom domain must point at. Leave empty and the api
+  # infers it by resolving SOHWE_BASE_DOMAIN -- which yields a proxy edge
+  # address, not this server, whenever that domain is behind Cloudflare's
+  # orange cloud. Set it on any instance whose base domain is proxied, or the
+  # assist can only report that it cannot tell.
+  SOHWE_PUBLIC_IP: ${SOHWE_PUBLIC_IP:-}
   # Traefik ACME resolver named on deployed apps' TLS labels, used only when
   # SOHWE_HTTPS_ENABLED is true. The default matches the `letsencrypt` resolver
   # this file defines on the traefik service; change it only alongside a compose

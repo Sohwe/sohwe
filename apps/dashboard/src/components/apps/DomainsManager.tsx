@@ -50,6 +50,9 @@ const STATUS: Record<
   { label: string; variant: "success" | "warning" | "secondary" | "outline" }
 > = {
   verified: { label: "DNS verified", variant: "success" },
+  // Behind a proxy the origin is unknowable from outside, so this is neither a
+  // pass nor a failure — the app may well be serving fine.
+  proxied: { label: "Proxied", variant: "secondary" },
   mismatch: { label: "Points elsewhere", variant: "warning" },
   unresolved: { label: "No record yet", variant: "secondary" },
   unknown: { label: "Can't verify", variant: "outline" }
