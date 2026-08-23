@@ -160,6 +160,13 @@ services:
       # Read-only instance config for the host file browser. Harmless while the
       # feature is off; the same secrets already reach this container via env.
       - /etc/sohwe:/etc/sohwe:ro
+      # The API does synchronous Docker work the deploy queue cannot model:
+      # tearing down an app's containers/volumes/network on delete, reclaiming a
+      # detached volume, exec-ing into a running container for the file browser,
+      # and wiring datastore networks. Read-write because it removes resources.
+      # Without this every one of those endpoints fails with
+      # `connect ENOENT /var/run/docker.sock`.
+      - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
       test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
       interval: 30s
