@@ -122,6 +122,7 @@ Never commit real secrets or generated env files.
 
 - The worker is the only service that executes deploys: git clone, image build, container create/start, volume creation, per-app network creation, and deployment status transitions.
 - Build mode semantics live in `packages/builder`: `auto` prefers a Dockerfile and falls back to Nixpacks; `dockerfile` requires a root Dockerfile; `nixpacks` always uses Nixpacks.
+- `packages/builder/src/node-version.ts` supplies `NIXPACKS_NODE_VERSION` for Nixpacks builds when the repo pins nothing, because Nixpacks' own fallback is the end-of-life Node 18. Keep it subordinate to every explicit pin (`NIXPACKS_NODE_VERSION`, `engines.node`, `.nvmrc`, `.node-version`), keep it off Dockerfile builds, and keep `DEFAULT_NODE_VERSION` inside Nixpacks' `AVAILABLE_NODE_VERSIONS` — an unsupported value silently falls back to 18 and defeats the purpose.
 - Preserve Docker naming helpers from `@sohwe/types`:
   - volumes: `sohwe_app_<appId>_<volumeId>`
   - internal networks: `sohwe_app_<appId>_net`

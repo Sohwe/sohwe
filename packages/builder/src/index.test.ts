@@ -280,3 +280,50 @@ describe("buildAppImage — build variable announcement", () => {
     );
   });
 });
+
+describe("buildAppImage — Node version default", () => {
+  it("announces the supplied version for an unpinned Node repo", async () => {
+    await writeFile(join(dir, "package.json"), JSON.stringify({ name: "app" }), "utf8");
+    await engineFor("nixpacks");
+    assert.ok(
+      logs.some((l) => l.includes("No Node version pinned by this repo")),
+      "the substitution must be visible in the build log"
+    );
+    assert.ok(
+      logs.some((l) => l.includes("end-of-life")),
+      "the log should say why the default was not used"
+    );
+  });
+
+  it("stays quiet when the repo pins a version", async () => {
+    await writeFile(
+      join(dir, "package.json"),
+      JSON.stringify({ name: "app", engines: { node: ">=20.9.0" } }),
+      "utf8"
+    );
+    await engineFor("nixpacks");
+    assert.equal(
+      logs.some((l) => l.includes("No Node version pinned")),
+      false
+    );
+  });
+
+  it("stays quiet for a Dockerfile build, where the base image decides", async () => {
+    await addDockerfile();
+    await writeFile(join(dir, "package.json"), JSON.stringify({ name: "app" }), "utf8");
+    await engineFor("auto");
+    assert.equal(announcedEngine(), "dockerfile");
+    assert.equal(
+      logs.some((l) => l.includes("No Node version pinned")),
+      false
+    );
+  });
+
+  it("stays quiet for a repo that is not a Node project", async () => {
+    await engineFor("nixpacks");
+    assert.equal(
+      logs.some((l) => l.includes("No Node version pinned")),
+      false
+    );
+  });
+});

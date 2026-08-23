@@ -66,6 +66,7 @@ Evidence: `apps/api/src/routes/applications.ts`, `apps/api/src/routes/app-filesy
 - [x] `auto` falls back to Nixpacks when no Dockerfile exists.
 - [x] Build command override.
 - [x] Start command override.
+- [x] Nixpacks builds default to Node 22 LTS when the repo pins no version. (`packages/builder/src/node-version.ts`; Nixpacks' own fallback is the end-of-life Node 18. Skipped when `NIXPACKS_NODE_VERSION`, `engines.node`, `.nvmrc`, or `.node-version` says otherwise, and for Dockerfile builds)
 - [x] Build variables passed into the image build. (`nixpacks build --env KEY=value`; `docker build --build-arg KEY` name-only so values stay off the argv — pins `NIXPACKS_NODE_VERSION` and friends, and covers build-time-inlined values like `NEXT_PUBLIC_*`; encrypted at rest, admin-and-above, keys logged and values scrubbed from build output)
 - [x] Editable branch, port, build mode, commands, and custom domain.
 - [x] Custom domain support.
@@ -74,7 +75,7 @@ Evidence: `apps/api/src/routes/applications.ts`, `apps/api/src/routes/app-filesy
 - [x] Commit subject recorded for deployments.
 - [x] Rollback reuses a previous successful image.
 
-Evidence: `packages/builder/src/index.ts`, `packages/types/src/index.ts`, `apps/api/src/routes/applications.ts`, `apps/api/src/routes/build-args.ts`, `apps/worker/src/index.ts`, `apps/dashboard/src/components/apps/AppSettingsForm.tsx`, `apps/dashboard/src/components/apps/BuildArgsManager.tsx`, `apps/dashboard/src/components/apps/CreateAppDialog.tsx`, `apps/dashboard/src/components/apps/DeploymentsTable.tsx`.
+Evidence: `packages/builder/src/index.ts`, `packages/builder/src/node-version.ts`, `packages/types/src/index.ts`, `apps/api/src/routes/applications.ts`, `apps/api/src/routes/build-args.ts`, `apps/worker/src/index.ts`, `apps/dashboard/src/components/apps/AppSettingsForm.tsx`, `apps/dashboard/src/components/apps/BuildArgsManager.tsx`, `apps/dashboard/src/components/apps/CreateAppDialog.tsx`, `apps/dashboard/src/components/apps/DeploymentsTable.tsx`.
 
 ### Phase 3 - Stateful Apps
 

@@ -11,7 +11,7 @@
   "scripts": {
     "lint": "eslint .",
     "build": "tsc --noEmit",
-    "test": "node --import tsx --test src/index.test.ts",
+    "test": "node --import tsx --test src/index.test.ts src/node-version.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

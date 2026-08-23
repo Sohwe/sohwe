@@ -106,10 +106,17 @@ container exists:
 
 | Need | Set |
 | --- | --- |
-| Pin the Node version Nixpacks picks (it defaults to 18) | `NIXPACKS_NODE_VERSION=22` |
-| Pin another toolchain | `NIXPACKS_PYTHON_VERSION`, `NIXPACKS_GO_VERSION`, … |
 | A value a framework inlines at build time | `NEXT_PUBLIC_*`, `VITE_*` |
 | Credentials for a private package registry | `NPM_TOKEN`, … |
+| Pin a Node version other than the default | `NIXPACKS_NODE_VERSION=20` |
+| Pin another toolchain | `NIXPACKS_PYTHON_VERSION`, `NIXPACKS_GO_VERSION`, … |
+
+**Node version.** You usually do not need to set one. Nixpacks reads
+`engines.node`, `.nvmrc`, and `.node-version` from your repo, and when a repo
+pins none of them Sohwe supplies **Node 22 LTS** rather than letting Nixpacks
+fall back to its built-in default of Node 18, which is end-of-life and which
+current Next.js, Vite, and Tailwind refuse to build on. The build log says when
+this happens. Set `NIXPACKS_NODE_VERSION` to override, or pin it in the repo.
 
 Build variables end up in the built image and are readable with `docker
 history`, so keep runtime secrets in environment variables instead. A Dockerfile

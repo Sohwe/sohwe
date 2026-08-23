@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { NODE_VERSION_KEY, resolveNodeVersion } from "./node-version";
 
 export type LogHandler = (line: string) => void;
 
@@ -275,13 +276,37 @@ export async function buildAppImage(opts: BuildOptions): Promise<BuildResult> {
       mode === "auto" ? " (no Dockerfile found; auto-detecting runtime)" : ""
     }`
   );
+
+  // Nixpacks falls back to Node 18 (end of life) when a repo pins nothing.
+  // Fill in a supported LTS instead — only for Nixpacks, and only when neither
+  // the user nor the repo has expressed a preference.
+  const nodeVersion = resolveNodeVersion(contextDir, buildArgs);
+  const resolvedArgs = nodeVersion.applied
+    ? { ...buildArgs, [NODE_VERSION_KEY]: nodeVersion.version }
+    : buildArgs;
+  if (nodeVersion.applied) {
+    onLogLine(
+      `[sohwe] No Node version pinned by this repo; building with Node ${nodeVersion.version}.`
+    );
+    onLogLine(
+      `[sohwe] Nixpacks would default to Node 18, which is end-of-life. Pin your own with an "engines.node" field, a .nvmrc, or a ${NODE_VERSION_KEY} build variable.`
+    );
+  }
+
   await nixpacksBuild({
     contextDir,
     imageTag,
     buildCmd,
     startCmd,
-    buildArgs,
+    buildArgs: resolvedArgs,
     onLogLine
   });
   return { imageTag, engine: "nixpacks" };
 }
+
+export {
+  DEFAULT_NODE_VERSION,
+  NODE_VERSION_KEY,
+  resolveNodeVersion,
+  type NodeVersionResolution
+} from "./node-version";
