@@ -35,7 +35,12 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     strategy:
-      fail-fast: true
+      # Never cancel a sibling mid-push. These jobs publish to a real registry:
+      # a leg killed between `pushing manifest` calls leaves a tag pointing at
+      # one image while its siblings point at the previous release. Letting each
+      # leg finish costs a few CI minutes and keeps a release all-or-nothing per
+      # image rather than partially applied across them.
+      fail-fast: false
       matrix:
         include:
           - name: api
@@ -98,6 +103,14 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           # GitHub Actions cache so each matrix build reuses layers between runs.
+          #
+          # `ignore-error=true` is load-bearing on the export: it runs *after*
+          # the image has been pushed, so without it a hiccup in the Actions
+          # Cache service fails a release that already succeeded — which is
+          # exactly what happened on v0.6.4 ("error writing layer blob:
+          # not_found" after all three tags were live on GHCR). A cold cache
+          # costs a slower build; a red release over a good one costs a
+          # re-tag. Failures that matter — build, or push — still fail the job.
           cache-from: type=gha,scope=sohwe-${{ matrix.name }}
-          cache-to: type=gha,mode=max,scope=sohwe-${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=sohwe-${{ matrix.name }},ignore-error=true
           provenance: false   # Cleaner ghcr listing; no supply-chain attestation yet.
