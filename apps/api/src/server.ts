@@ -36,6 +36,7 @@ import { registerHostFsRoutes } from "./routes/host-fs";
 import { registerEnvVarRoutes } from "./routes/env-vars";
 import { registerMemberRoutes } from "./routes/members";
 import { registerVolumeRoutes } from "./routes/volumes";
+import { mapPrismaError } from "./prisma-errors";
 import { AUTH_RATE_LIMIT } from "./rate-limit";
 import { issueSession } from "./session";
 import type { ApiConfig } from "./env";
@@ -209,6 +210,18 @@ export async function buildServer(
   await registerGitHubWebhookRoutes(app);
   await registerMemberRoutes(app, config);
   await registerAuditRoutes(app);
+
+  // Last line of defence for database errors: Prisma's message names columns,
+  // constraints, and the failing client call, and the dashboard shows
+  // `message` verbatim in a toast. Routes that can explain a conflict in the
+  // caller's terms handle it themselves; anything that reaches here is turned
+  // into a plain HTTP error, with the original logged for the operator.
+  app.setErrorHandler((error, req, reply) => {
+    const mapped = mapPrismaError(error);
+    if (!mapped) return reply.send(error);
+    req.log.error({ err: error }, "database error");
+    return reply.send(app.httpErrors.createError(mapped.statusCode, mapped.message));
+  });
 
   return app;
 }

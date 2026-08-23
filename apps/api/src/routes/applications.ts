@@ -23,10 +23,15 @@ import { defaultApplicationSelect, serializeAppListRow } from "../app-public";
 import { getRunningAppContainer } from "../container-fs";
 import { recordAudit } from "../audit";
 import { requireRole } from "../rbac";
+import { isUniqueViolation } from "../prisma-errors";
 
 const docker = new Docker();
 
 const IdParam = z.object({ id: z.string().uuid() });
+
+function slugInUseMessage(slug: string): string {
+  return `An application with the slug "${slug}" already exists in this organization. Slugs must be unique — pick a different one.`;
+}
 const DepParam = z.object({ deploymentId: z.string().uuid() });
 
 function sseData(payload: unknown): string {
@@ -209,6 +214,16 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
         if (blocker) return reply.badRequest(blocker);
       }
 
+      // Slugs are unique per organization (they become the app subdomain, the
+      // container name, and the Traefik router), so a collision is a normal
+      // user mistake, not a server fault. Checked here for the clear message
+      // and caught below for the race between the two.
+      const slugTaken = await prisma.application.findFirst({
+        where: { organizationId: u.organizationId, slug: body.slug },
+        select: { id: true }
+      });
+      if (slugTaken) return reply.conflict(slugInUseMessage(body.slug));
+
       const created = await prisma.application.create({
         data: {
           name: body.name,
@@ -225,7 +240,11 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
           organizationId: u.organizationId
         },
         select: sel20
+      }).catch((err: unknown) => {
+        if (isUniqueViolation(err, "slug")) return null;
+        throw err;
       });
+      if (!created) return reply.conflict(slugInUseMessage(body.slug));
       // `sel20` is a widened Prisma.ApplicationSelect, so the row's fields are
       // not statically known here; the id is read back through a narrow view.
       const { id: createdId } = created as unknown as { id: string };

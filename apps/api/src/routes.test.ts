@@ -412,7 +412,13 @@ describe("API routes", { skip }, () => {
           gitRepo: "https://github.com/acme/web2"
         }
       });
-      assert.ok(res.statusCode >= 400, "expected a duplicate slug to be refused");
+      assert.equal(res.statusCode, 409, res.body);
+      const message = (res.json() as { message: string }).message;
+      assert.match(message, /already exists/i);
+      assert.match(message, /web/);
+      // The dashboard renders this verbatim, so it must not be Prisma's own
+      // text about constraints and columns.
+      assert.doesNotMatch(message, /prisma|constraint|organization_id/i);
       assert.equal(await prisma.application.count(), 1);
     });
 

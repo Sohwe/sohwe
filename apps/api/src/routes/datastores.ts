@@ -24,6 +24,7 @@ import { z } from "zod";
 import { envChangeMetadata, recordAudit } from "../audit";
 import type { ApiConfig } from "../env";
 import { requireRole } from "../rbac";
+import { isUniqueViolation } from "../prisma-errors";
 
 const docker = new Docker();
 
@@ -232,12 +233,10 @@ export async function registerDatastoreRoutes(
         });
         return reply.status(201).send(serializeDatastore(row));
       } catch (e) {
-        const code =
-          e && typeof e === "object" && "code" in e ? String(e.code) : "";
-        if (code === "P2002") {
-          return reply
-            .status(409)
-            .send({ message: "A datastore with that slug already exists" });
+        if (isUniqueViolation(e, "slug")) {
+          return reply.conflict(
+            `A datastore with the slug "${body.slug}" already exists in this organization. Slugs must be unique — pick a different one.`
+          );
         }
         throw e;
       }

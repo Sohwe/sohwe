@@ -39,6 +39,9 @@ export function CreateAppDialog({
   const [cStartCmd, setCStartCmd] = useState("");
   const [cDomain, setCDomain] = useState("");
   const [cAutoDeploy, setCAutoDeploy] = useState(false);
+  // A taken slug is a field problem, not a request problem — show it on the
+  // field instead of in a toast that disappears before the fix is typed.
+  const [slugError, setSlugError] = useState<string | null>(null);
 
   const githubQ = useQuery({
     queryKey: ["github", "app"],
@@ -54,6 +57,11 @@ export function CreateAppDialog({
     staleTime: 60_000
   });
 
+  function changeSlug(next: string) {
+    setCSlug(next.toLowerCase());
+    setSlugError(null);
+  }
+
   function pickRepo(fullName: string) {
     const repo = reposQ.data?.repositories.find((r) => r.fullName === fullName);
     if (!repo) return;
@@ -61,11 +69,12 @@ export function CreateAppDialog({
     setCBranch(repo.defaultBranch);
     // Only prefill identifiers the user hasn't already typed.
     if (!cName) setCName(repo.name);
-    if (!cSlug) setCSlug(slugFromRepoName(repo.name));
+    if (!cSlug) changeSlug(slugFromRepoName(repo.name));
   }
 
   const createMut = useMutation({
     mutationFn: () => {
+      setSlugError(null);
       const body = CreateApplicationSchema.parse({
         name: cName,
         slug: cSlug,
@@ -92,12 +101,18 @@ export function CreateAppDialog({
       setCStartCmd("");
       setCDomain("");
       setCAutoDeploy(false);
+      setSlugError(null);
       onOpenChange(false);
       onCreated?.(app);
       toast.success("Application created");
     },
     onError: (e) => {
-      toast.error(e instanceof Error ? e.message : "Create failed");
+      const message = e instanceof Error ? e.message : "Create failed";
+      if (/slug/i.test(message)) {
+        setSlugError(message);
+        return;
+      }
+      toast.error(message);
     }
   });
 
@@ -122,10 +137,13 @@ export function CreateAppDialog({
             <Field label="Slug (subdomain)">
               <Input
                 value={cSlug}
-                onChange={(e) => setCSlug(e.target.value.toLowerCase())}
+                onChange={(e) => changeSlug(e.target.value)}
                 required
                 pattern="[a-z0-9-]+"
+                aria-invalid={slugError ? true : undefined}
+                className={slugError ? "border-destructive focus-visible:ring-destructive" : undefined}
               />
+              {slugError ? <span className="text-xs text-destructive">{slugError}</span> : null}
             </Field>
           </div>
           {githubInstalled && reposQ.data && reposQ.data.repositories.length > 0 ? (
