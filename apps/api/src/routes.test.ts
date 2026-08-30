@@ -181,6 +181,7 @@ describe("API routes", { skip }, () => {
       const res = await app.inject({ method: "GET", url: "/api/config" });
       assert.equal(res.statusCode, 200);
       assert.equal(typeof res.json().baseDomain, "string");
+      assert.equal(typeof res.json().version, "string");
     });
   });
 

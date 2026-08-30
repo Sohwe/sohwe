@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
+import { useAppConfig } from "@/lib/config";
 import { Separator } from "@/components/ui/separator";
 import { isAdmin } from "@/lib/roles";
 import { ROLE_LABEL } from "@/lib/roles";
@@ -43,6 +44,7 @@ function SidebarContent({ onNavigate, me }: { onNavigate?: () => void; me: Me })
   // Git, Backups, and the audit log are admin-only on the API side; showing
   // them to a member would only lead to a 403.
   const admin = isAdmin(me);
+  const { version } = useAppConfig();
   return (
     <div className="flex h-full flex-col">
       <div className="flex h-14 items-center border-b border-border px-3">
@@ -84,6 +86,10 @@ function SidebarContent({ onNavigate, me }: { onNavigate?: () => void; me: Me })
         <p className="mt-0.5 truncate">
           {me.name ?? me.email} · {ROLE_LABEL[me.role] ?? me.role}
         </p>
+        <p className="mt-2 flex items-center justify-between gap-2 text-[10px] uppercase tracking-wide text-muted-foreground/70">
+          <span>Version</span>
+          <code className="normal-case tracking-normal">{version}</code>
+        </p>
       </div>
     </div>
   );
@@ -91,6 +97,7 @@ function SidebarContent({ onNavigate, me }: { onNavigate?: () => void; me: Me })
 
 export function AppSidebar({ me, collapsed, onToggleCollapse }: { me: Me; collapsed: boolean; onToggleCollapse: () => void }) {
   const admin = isAdmin(me);
+  const { version } = useAppConfig();
   return (
     <aside
       className={cn(
@@ -158,6 +165,12 @@ export function AppSidebar({ me, collapsed, onToggleCollapse }: { me: Me; collap
               <ScrollText className="h-4 w-4" />
             </Link>
           ) : null}
+          <span
+            className="mt-auto max-w-12 truncate px-1 text-center text-[10px] text-muted-foreground"
+            title={`Sohwe ${version}`}
+          >
+            {version}
+          </span>
         </div>
       ) : (
         <>

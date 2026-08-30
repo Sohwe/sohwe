@@ -83,10 +83,11 @@ export async function buildServer(
   }));
 
   // Public read-only config consumed by the dashboard (no auth, no secrets).
-  // `baseDomain` drives the `<slug>.<base-domain>` URL display next to apps
-  // and on the deploy form. Plumbed through from sohwe.env via compose so
-  // operators can change the domain without rebuilding the dashboard image.
+  // `version` identifies the exact release image; `baseDomain` drives the
+  // `<slug>.<base-domain>` URL display next to apps and on the deploy form.
+  // Runtime config avoids rebuilding the dashboard image for either value.
   app.get("/api/config", async () => ({
+    version: config.version,
     baseDomain: config.baseDomain,
     // The dashboard needs this to say whether a custom domain will actually
     // get a certificate, rather than showing an https:// link that times out.

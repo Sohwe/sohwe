@@ -102,6 +102,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            SOHWE_VERSION=${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
           # GitHub Actions cache so each matrix build reuses layers between runs.
           #
           # `ignore-error=true` is load-bearing on the export: it runs *after*

@@ -9,6 +9,9 @@
 ARG NODE_VERSION=24
 ARG PNPM_VERSION=9.0.0
 ARG NGINX_VERSION=1.27-alpine
+# Accepted by every release matrix leg; the dashboard reads the API's embedded
+# version at runtime, so it does not bake this value into the SPA.
+ARG SOHWE_VERSION=dev
 
 ############################
 # Stage 1: base (node + pnpm for the build)

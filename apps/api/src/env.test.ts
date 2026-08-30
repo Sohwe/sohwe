@@ -27,6 +27,7 @@ const MANAGED = [
   "SOHWE_CORS_ORIGIN",
   "SOHWE_HTTPS_ENABLED",
   "SOHWE_BASE_DOMAIN",
+  "SOHWE_VERSION",
   "SOHWE_SETUP_PASSWORD"
 ];
 
@@ -58,6 +59,7 @@ describe("loadApiConfig", () => {
   it("accepts a minimal valid environment", () => {
     const config = loadApiConfig();
     assert.equal(config.port, 3001);
+    assert.equal(config.version, "dev");
     assert.equal(config.sessionSecret, BASE_ENV.SESSION_SECRET);
     assert.equal(config.baseDomain, "sohwe.localhost");
     assert.equal(config.publicUrl, null);
@@ -173,7 +175,9 @@ describe("loadApiConfig", () => {
     process.env.SOHWE_HTTPS_ENABLED = "true";
     process.env.SOHWE_BASE_DOMAIN = "apps.example.com";
     process.env.SOHWE_SETUP_PASSWORD = "hunter2";
+    process.env.SOHWE_VERSION = "v1.2.3";
     const config = loadApiConfig();
+    assert.equal(config.version, "v1.2.3");
     assert.equal(config.httpsEnabled, true);
     assert.equal(config.baseDomain, "apps.example.com");
     assert.equal(config.setupPassword, "hunter2");

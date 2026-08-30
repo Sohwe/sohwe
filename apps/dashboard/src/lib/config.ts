@@ -1,13 +1,15 @@
 import { useQuery } from "@tanstack/react-query";
 import { apiGet } from "./api";
 
-// Operator-driven runtime config served by the API at GET /api/config: the
-// apps' base domain (the worker uses the same value to label app containers in
-// Traefik) and whether the operator turned HTTPS on. Was previously a
-// hardcoded constant in `lib/constants.ts`; that didn't survive operators
-// picking a real DNS name for `SOHWE_BASE_DOMAIN`, since the dashboard image
-// is built once at release time but the domain is per-install.
+// Runtime config served by the API at GET /api/config: the running release
+// tag, the apps' base domain (the worker uses the same value to label app
+// containers in Traefik), and whether the operator turned HTTPS on. The domain
+// was previously a hardcoded constant in `lib/constants.ts`; that didn't
+// survive operators picking a real DNS name for `SOHWE_BASE_DOMAIN`, since the
+// dashboard image is built once at release time but the domain is per-install.
 export type AppConfig = {
+  /** Exact release tag embedded in the API image; `dev` for local runs. */
+  version: string;
   baseDomain: string;
   /** `SOHWE_HTTPS_ENABLED` — whether Traefik will request certificates. */
   httpsEnabled: boolean;
@@ -19,6 +21,7 @@ export type AppConfig = {
 // blocking the UI on a config fetch — the URLs are informational, the
 // dashboard works with the wrong placeholder for a few hundred ms.
 const FALLBACK: AppConfig = {
+  version: "dev",
   baseDomain: "sohwe.localhost",
   httpsEnabled: false
 };

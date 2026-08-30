@@ -12,6 +12,7 @@
 ARG NODE_VERSION=24
 ARG PNPM_VERSION=9.0.0
 ARG NIXPACKS_VERSION=1.29.1
+ARG SOHWE_VERSION=dev
 
 ############################
 # Stage 1: base
@@ -59,6 +60,7 @@ RUN pnpm --filter @sohwe/db exec prisma generate
 # Stage 4: runtime (adds git, docker CLI, nixpacks)
 ############################
 FROM base AS runtime
+ARG SOHWE_VERSION
 ARG NIXPACKS_VERSION
 
 # Install build tooling used by user deploys:
@@ -108,7 +110,8 @@ RUN set -eux; \
     chmod +x /usr/local/bin/nixpacks; \
     nixpacks --version
 
-ENV NODE_ENV=production
+ENV NODE_ENV=production \
+    SOHWE_VERSION=${SOHWE_VERSION}
 COPY --from=build /app /app
 WORKDIR /app/apps/worker
 

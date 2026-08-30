@@ -9,6 +9,8 @@ import { parseHostFsAllowlist } from "./host-fs";
 // mid-deploy.
 
 export type ApiConfig = {
+  /** Exact release tag embedded in the image; `dev` for local source runs. */
+  version: string;
   port: number;
   sessionSecret: string;
   databaseUrl: string;
@@ -182,6 +184,7 @@ export function loadApiConfig(): ApiConfig {
   const setupPassword = process.env.SOHWE_SETUP_PASSWORD;
 
   return {
+    version: process.env.SOHWE_VERSION?.trim() || "dev",
     port,
     sessionSecret,
     databaseUrl,

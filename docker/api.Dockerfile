@@ -9,6 +9,7 @@
 
 ARG NODE_VERSION=24
 ARG PNPM_VERSION=9.0.0
+ARG SOHWE_VERSION=dev
 
 ############################
 # Stage 1: base
@@ -58,9 +59,11 @@ RUN pnpm --filter @sohwe/db exec prisma generate
 # Stage 4: runtime
 ############################
 FROM base AS runtime
+ARG SOHWE_VERSION
 ENV NODE_ENV=production \
     PORT=3001 \
-    HOST=0.0.0.0
+    HOST=0.0.0.0 \
+    SOHWE_VERSION=${SOHWE_VERSION}
 COPY --from=build /app /app
 WORKDIR /app/apps/api
 EXPOSE 3001
