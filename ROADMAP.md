@@ -213,7 +213,8 @@ Implementation notes:
 
 - [x] Add GitHub App configuration. (`packages/github/src/index.ts` manifest builder, `apps/api/src/routes/github.ts`, `GitHubApp` model in `packages/db/prisma/schema.prisma`)
 - [x] Add GitHub App installation flow. (`GET /api/github/manifest/new` -> `/manifest/callback` -> `/setup/callback` in `apps/api/src/routes/github.ts`; `apps/dashboard/src/routes/git.tsx`)
-- [x] List installation repositories. (`listInstallationRepositories` in `packages/github/src/index.ts`, `GET /api/github/repositories`)
+- [x] Support multiple personal-account/organization installations for one instance-owned App. (`GitHubInstallation` model, installation-aware callback/webhook/token resolution, installation list in `apps/dashboard/src/routes/git.tsx`)
+- [x] List and search repositories across installations. (`listInstallationRepositories` in `packages/github/src/index.ts`, `GET /api/github/repositories`, searchable picker in `CreateAppDialog.tsx`)
 - [x] Clone private repos using installation tokens. (`apps/worker/src/github.ts`, `gitClone` in `apps/worker/src/index.ts`)
 - [x] Add tracked branch auto-deploy toggle. (`Application.autoDeploy`, `apps/dashboard/src/components/apps/AutoDeployCard.tsx`, picker in `CreateAppDialog.tsx`)
 - [x] Add GitHub webhook route. (`apps/api/src/routes/github-webhook.ts`)

@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CreateApplicationSchema, normalizeHostname } from "@sohwe/types";
-import { Lock } from "lucide-react";
+import { Lock, Search } from "lucide-react";
 import { toast } from "sonner";
 import { Field } from "@/components/common/Field";
 import { Button } from "@/components/ui/button";
@@ -39,6 +39,7 @@ export function CreateAppDialog({
   const [cStartCmd, setCStartCmd] = useState("");
   const [cDomain, setCDomain] = useState("");
   const [cAutoDeploy, setCAutoDeploy] = useState(false);
+  const [repoSearch, setRepoSearch] = useState("");
   // A taken slug is a field problem, not a request problem — show it on the
   // field instead of in a toast that disappears before the fix is typed.
   const [slugError, setSlugError] = useState<string | null>(null);
@@ -56,6 +57,14 @@ export function CreateAppDialog({
     enabled: githubInstalled,
     staleTime: 60_000
   });
+  const filteredRepos = useMemo(() => {
+    const repositories = reposQ.data?.repositories ?? [];
+    const query = repoSearch.trim().toLowerCase();
+    if (!query) return repositories;
+    return repositories.filter((repo) =>
+      `${repo.fullName} ${repo.accountLogin ?? ""}`.toLowerCase().includes(query)
+    );
+  }, [repoSearch, reposQ.data?.repositories]);
 
   function changeSlug(next: string) {
     setCSlug(next.toLowerCase());
@@ -103,6 +112,7 @@ export function CreateAppDialog({
       setCStartCmd("");
       setCDomain("");
       setCAutoDeploy(false);
+      setRepoSearch("");
       setSlugError(null);
       onOpenChange(false);
       onCreated?.(app);
@@ -148,23 +158,58 @@ export function CreateAppDialog({
               {slugError ? <span className="text-xs text-destructive">{slugError}</span> : null}
             </Field>
           </div>
-          {githubInstalled && reposQ.data && reposQ.data.repositories.length > 0 ? (
-            <Field label="Repository (from your GitHub App installation)">
-              <Select onValueChange={pickRepo}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Pick a repository, or enter a URL below" />
-                </SelectTrigger>
-                <SelectContent>
-                  {reposQ.data.repositories.map((r) => (
-                    <SelectItem key={r.id} value={r.fullName}>
-                      <span className="flex items-center gap-1.5">
-                        {r.fullName}
-                        {r.private ? <Lock className="h-3 w-3 opacity-60" /> : null}
-                      </span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+          {githubInstalled ? (
+            <Field label="Repository (from connected GitHub installations)">
+              {reposQ.isLoading ? (
+                <p className="text-xs text-muted-foreground">Loading repositories…</p>
+              ) : null}
+              {reposQ.isError ? (
+                <p className="text-xs text-destructive">
+                  {reposQ.error instanceof Error
+                    ? reposQ.error.message
+                    : "Could not load GitHub repositories."}
+                </p>
+              ) : null}
+              {reposQ.data && reposQ.data.repositories.length === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  No repositories are shared with the connected installations yet.
+                </p>
+              ) : null}
+              {reposQ.data && reposQ.data.repositories.length > 0 ? (
+                <div className="space-y-2">
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      value={repoSearch}
+                      onChange={(e) => setRepoSearch(e.target.value)}
+                      className="pl-9"
+                      placeholder="Search by repository or organization"
+                      autoComplete="off"
+                    />
+                  </div>
+                  <Select onValueChange={pickRepo} disabled={filteredRepos.length === 0}>
+                    <SelectTrigger>
+                      <SelectValue
+                        placeholder={
+                          filteredRepos.length === 0
+                            ? "No matching repositories"
+                            : `Pick a repository (${String(filteredRepos.length)} available)`
+                        }
+                      />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {filteredRepos.map((r) => (
+                        <SelectItem key={`${String(r.installationId)}:${String(r.id)}`} value={r.fullName}>
+                          <span className="flex items-center gap-1.5">
+                            {r.fullName}
+                            {r.private ? <Lock className="h-3 w-3 opacity-60" /> : null}
+                          </span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ) : null}
             </Field>
           ) : null}
           <Field label={githubInstalled ? "Git URL (https)" : "Public Git URL (https)"}>

@@ -3,7 +3,8 @@ import { prisma } from "@sohwe/db";
 import {
   getInstallationToken,
   type GitHubAppCredentials,
-  type InstallationToken
+  type InstallationToken,
+  type RepoRef
 } from "./index";
 
 // Database-aware helpers, kept out of `./index` so the core stays dependency-
@@ -19,9 +20,19 @@ export type ResolvedGitHubApp = {
   name: string;
   htmlUrl: string;
   ownerLogin: string | null;
-  installationId: number | null;
-  installedAt: Date | null;
+  multiAccount: boolean;
+  installations: ResolvedGitHubInstallation[];
   credentials: GitHubAppCredentials;
+};
+
+export type ResolvedGitHubInstallation = {
+  id: string;
+  installationId: number;
+  accountLogin: string | null;
+  accountType: string | null;
+  repositorySelection: string | null;
+  htmlUrl: string | null;
+  installedAt: Date;
 };
 
 /**
@@ -49,8 +60,8 @@ function toResolved(row: {
   name: string;
   htmlUrl: string;
   ownerLogin: string | null;
-  installationId: number | null;
-  installedAt: Date | null;
+  multiAccount: boolean;
+  installations: ResolvedGitHubInstallation[];
   credentialsEncrypted: Buffer;
 }): ResolvedGitHubApp {
   return {
@@ -61,8 +72,8 @@ function toResolved(row: {
     name: row.name,
     htmlUrl: row.htmlUrl,
     ownerLogin: row.ownerLogin,
-    installationId: row.installationId,
-    installedAt: row.installedAt,
+    multiAccount: row.multiAccount,
+    installations: row.installations,
     credentials: decryptAppCredentials(row.credentialsEncrypted)
   };
 }
@@ -71,7 +82,10 @@ function toResolved(row: {
 export async function loadGitHubApp(
   organizationId: string
 ): Promise<ResolvedGitHubApp | null> {
-  const row = await prisma.gitHubApp.findUnique({ where: { organizationId } });
+  const row = await prisma.gitHubApp.findUnique({
+    where: { organizationId },
+    include: { installations: { orderBy: { accountLogin: "asc" } } }
+  });
   return row ? toResolved(row) : null;
 }
 
@@ -82,29 +96,65 @@ export async function loadGitHubApp(
 export async function loadGitHubAppByAppId(
   appId: number
 ): Promise<ResolvedGitHubApp | null> {
-  const row = await prisma.gitHubApp.findFirst({ where: { appId } });
+  const row = await prisma.gitHubApp.findFirst({
+    where: { appId },
+    include: { installations: { orderBy: { accountLogin: "asc" } } }
+  });
   return row ? toResolved(row) : null;
 }
 
 export type OrgInstallationToken = {
   app: ResolvedGitHubApp;
+  installation: ResolvedGitHubInstallation;
   token: InstallationToken;
 };
 
 /**
- * Installation token for an organization, or null when no App is connected or
- * it has not been installed on an account yet. Callers treat null as "fall back
- * to an unauthenticated clone", which is correct for public repositories.
+ * Installation tokens for every GitHub account connected to a Sohwe
+ * organization. Repository listing uses all of them.
  */
-export async function getOrgInstallationToken(
+export async function getOrgInstallationTokens(
   organizationId: string
+): Promise<OrgInstallationToken[]> {
+  const app = await loadGitHubApp(organizationId);
+  if (!app) return [];
+  return Promise.all(
+    app.installations.map(async (installation) => ({
+      app,
+      installation,
+      token: await getInstallationToken(
+        app.appId,
+        app.credentials.pem,
+        installation.installationId
+      )
+    }))
+  );
+}
+
+/** Installation token whose account owns `ref`, for clone and status calls. */
+export async function getRepoInstallationToken(
+  organizationId: string,
+  ref: RepoRef
 ): Promise<OrgInstallationToken | null> {
   const app = await loadGitHubApp(organizationId);
-  if (!app?.installationId) return null;
+  if (!app || app.installations.length === 0) return null;
+
+  const owner = ref.owner.toLowerCase();
+  const installation =
+    app.installations.find(
+      (item) => item.accountLogin?.toLowerCase() === owner
+    ) ??
+    // A migrated pre-multi-account row has no account metadata. Preserve its
+    // old behavior until its next setup callback fills the metadata in.
+    (app.installations.length === 1 && !app.installations[0]?.accountLogin
+      ? app.installations[0]
+      : undefined);
+  if (!installation) return null;
+
   const token = await getInstallationToken(
     app.appId,
     app.credentials.pem,
-    app.installationId
+    installation.installationId
   );
-  return { app, token };
+  return { app, installation, token };
 }

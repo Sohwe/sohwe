@@ -15,8 +15,9 @@ import { GITHUB_WEBHOOK_PATH } from "./github";
 // deploy, so nothing in the payload is trusted until the signature verifies.
 //
 // Which App signed a delivery cannot be known before verification (the payload
-// itself is untrusted), so the handler tries each connected App's secret. A
-// self-hosted instance has one, so this is a single HMAC in practice.
+// itself is untrusted), so the handler tries each connected App's secret. After
+// verification, installation-aware events must also name an installation that
+// an authenticated Sohwe admin previously connected.
 
 const deployQueue = createQueue();
 
@@ -34,6 +35,14 @@ type VerifiedDelivery = {
   appId: number;
   payload: unknown;
 };
+
+function payloadInstallationId(payload: unknown): number | null {
+  if (!payload || typeof payload !== "object") return null;
+  const installation = (payload as { installation?: unknown }).installation;
+  if (!installation || typeof installation !== "object") return null;
+  const id = (installation as { id?: unknown }).id;
+  return typeof id === "number" && Number.isInteger(id) && id > 0 ? id : null;
+}
 
 async function verifyDelivery(
   rawBody: Buffer,
@@ -204,24 +213,52 @@ export async function registerGitHubWebhookRoutes(app: FastifyInstance) {
           return { ok: true };
         }
 
+        const installationId = payloadInstallationId(verified.payload);
+
         if (event === "installation") {
           const action = (verified.payload as { action?: unknown } | null)
             ?.action;
-          if (action === "deleted" || action === "suspend") {
-            await prisma.gitHubApp.updateMany({
-              where: { organizationId: verified.organizationId },
-              data: { installationId: null, installedAt: null }
+          if (
+            installationId !== null &&
+            (action === "deleted" || action === "suspend")
+          ) {
+            const removed = await prisma.gitHubInstallation.deleteMany({
+              where: {
+                installationId,
+                githubApp: { organizationId: verified.organizationId }
+              }
             });
             clearInstallationTokenCache(verified.appId);
             req.log.info(
-              { action },
-              "GitHub App installation removed; cleared installation id"
+              { action, installationId, removed: removed.count },
+              "GitHub App installation removed"
             );
           }
           await ignore(
             `Installation event (${typeof action === "string" ? action : "unknown"}).`
           );
           return { ok: true };
+        }
+
+        if (installationId === null) {
+          await ignore(
+            `The verified "${event || "unknown"}" delivery did not identify an installation.`
+          );
+          return { ok: true, ignored: "missing installation" };
+        }
+
+        const knownInstallation = await prisma.gitHubInstallation.findFirst({
+          where: {
+            installationId,
+            githubApp: { organizationId: verified.organizationId }
+          },
+          select: { id: true }
+        });
+        if (!knownInstallation) {
+          await ignore(
+            `Installation ${String(installationId)} has not been connected by a Sohwe admin.`
+          );
+          return { ok: true, ignored: "unknown installation" };
         }
 
         if (event !== "push") {

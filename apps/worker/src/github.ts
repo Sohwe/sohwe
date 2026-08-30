@@ -6,7 +6,7 @@ import {
   type CommitStatusState,
   type RepoRef
 } from "@sohwe/github";
-import { getOrgInstallationToken } from "@sohwe/github/resolve";
+import { getRepoInstallationToken } from "@sohwe/github/resolve";
 
 // GitHub-aware deploy support (Phase 5): clone private repositories with a
 // short-lived installation token, and report the deploy outcome back to the
@@ -36,7 +36,7 @@ export async function resolveGitHubContext(app: {
   const ref = parseRepoFullName(app.repoFullName);
   if (!ref) return null;
 
-  const resolved = await getOrgInstallationToken(app.organizationId);
+  const resolved = await getRepoInstallationToken(app.organizationId, ref);
   if (!resolved) return null;
 
   return {

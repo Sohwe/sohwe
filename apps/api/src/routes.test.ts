@@ -1,6 +1,6 @@
 import { after, before, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { randomBytes } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -67,6 +67,7 @@ const TABLES = [
   "bundles",
   "backup_schedules",
   "backup_destinations",
+  "github_installations",
   "github_apps",
   "alert_destinations",
   "volumes",
@@ -952,6 +953,47 @@ describe("API routes", { skip }, () => {
   describe("GitHub webhook", () => {
     const path = "/api/webhooks/github";
 
+    async function addGitHubInstallation(
+      installationId: number
+    ): Promise<{ cookie: string; secret: string }> {
+      const cookie = await signIn();
+      const owner = await prisma.user.findUniqueOrThrow({
+        where: { email: OWNER.email },
+        select: { organizationId: true }
+      });
+      const secret = "test-webhook-secret";
+      await prisma.gitHubApp.create({
+        data: {
+          organizationId: owner.organizationId,
+          appId: 123,
+          slug: "sohwe-test",
+          name: "Sohwe test",
+          clientId: "client-id",
+          htmlUrl: "https://github.com/apps/sohwe-test",
+          ownerLogin: "owner",
+          multiAccount: true,
+          credentialsEncrypted: encryptJson({
+            pem: "private-key",
+            webhookSecret: secret,
+            clientSecret: "client-secret"
+          }),
+          installations: {
+            create: {
+              installationId,
+              accountLogin: "acme",
+              accountType: "Organization",
+              repositorySelection: "selected"
+            }
+          }
+        }
+      });
+      return { cookie, secret };
+    }
+
+    function signWebhook(secret: string, body: string): string {
+      return `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
+    }
+
     it("rejects an unsigned delivery and records it", async () => {
       const res = await app.inject({
         method: "POST",
@@ -994,6 +1036,60 @@ describe("API routes", { skip }, () => {
         payload: JSON.stringify({ ref: "refs/heads/main" })
       });
       assert.equal(await prisma.deployment.count(), 0);
+    });
+
+    it("ignores a validly signed push from an installation not connected to Sohwe", async () => {
+      const { secret } = await addGitHubInstallation(101);
+      const body = JSON.stringify({
+        installation: { id: 999 },
+        ref: "refs/heads/main",
+        after: "a".repeat(40),
+        deleted: false,
+        repository: { full_name: "acme/web" },
+        head_commit: { message: "Untrusted installation" }
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: path,
+        headers: {
+          "content-type": "application/json",
+          "x-github-event": "push",
+          "x-hub-signature-256": signWebhook(secret, body)
+        },
+        payload: body
+      });
+      assert.equal(res.statusCode, 200, res.body);
+      assert.equal(await prisma.deployment.count(), 0);
+      const delivery = await prisma.webhookDelivery.findFirstOrThrow();
+      assert.equal(delivery.outcome, "ignored");
+      assert.match(delivery.detail ?? "", /has not been connected/);
+    });
+
+    it("accepts a signed push from a connected installation", async () => {
+      const { cookie, secret } = await addGitHubInstallation(101);
+      await createApp(cookie);
+      const body = JSON.stringify({
+        installation: { id: 101 },
+        ref: "refs/heads/main",
+        after: "b".repeat(40),
+        deleted: false,
+        repository: { full_name: "acme/web" },
+        head_commit: { message: "Known installation" }
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: path,
+        headers: {
+          "content-type": "application/json",
+          "x-github-event": "push",
+          "x-hub-signature-256": signWebhook(secret, body)
+        },
+        payload: body
+      });
+      assert.equal(res.statusCode, 200, res.body);
+      const delivery = await prisma.webhookDelivery.findFirstOrThrow();
+      assert.equal(delivery.outcome, "ignored");
+      assert.match(delivery.detail ?? "", /Auto-deploy is off/);
     });
 
     it("requires authentication to read the delivery log", async () => {
@@ -1044,6 +1140,73 @@ describe("API routes", { skip }, () => {
       await app.inject({ method: "POST", url: "/api/setup", payload: OWNER });
       const res = await app.inject({ method: "GET", url: "/api/github/app" });
       assert.equal(res.statusCode, 401);
+    });
+
+    it("lists every connected GitHub account without leaking credentials", async () => {
+      const cookie = await signIn();
+      const owner = await prisma.user.findUniqueOrThrow({
+        where: { email: OWNER.email },
+        select: { organizationId: true }
+      });
+      await prisma.gitHubApp.create({
+        data: {
+          organizationId: owner.organizationId,
+          appId: 123,
+          slug: "sohwe-test",
+          name: "Sohwe test",
+          clientId: "client-id",
+          htmlUrl: "https://github.com/apps/sohwe-test",
+          ownerLogin: "owner",
+          multiAccount: true,
+          credentialsEncrypted: encryptJson({
+            pem: "private-key",
+            webhookSecret: "webhook-secret",
+            clientSecret: "client-secret"
+          }),
+          installations: {
+            create: [
+              {
+                installationId: 101,
+                accountLogin: "acme",
+                accountType: "Organization",
+                repositorySelection: "selected",
+                htmlUrl:
+                  "https://github.com/organizations/acme/settings/installations/101"
+              },
+              {
+                installationId: 102,
+                accountLogin: "octo",
+                accountType: "User",
+                repositorySelection: "all",
+                htmlUrl: "https://github.com/settings/installations/102"
+              }
+            ]
+          }
+        }
+      });
+
+      const res = await app.inject({
+        method: "GET",
+        url: "/api/github/app",
+        headers: { cookie }
+      });
+      assert.equal(res.statusCode, 200, res.body);
+      const body = res.json() as {
+        app: {
+          installed: boolean;
+          multiAccount: boolean;
+          installations: Array<{ accountLogin: string }>;
+        };
+      };
+      assert.equal(body.app.installed, true);
+      assert.equal(body.app.multiAccount, true);
+      assert.deepEqual(
+        body.app.installations.map((installation) => installation.accountLogin),
+        ["acme", "octo"]
+      );
+      assert.ok(!res.body.includes("webhook-secret"));
+      assert.ok(!res.body.includes("private-key"));
+      assert.ok(!res.body.includes("client-secret"));
     });
   });
 

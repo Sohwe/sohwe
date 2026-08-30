@@ -70,6 +70,7 @@ export type AuditAction =
   | "domain.primary"
   | "domain.redirect"
   | "github.connect"
+  | "github.install"
   | "github.disconnect"
   | "host_fs.list"
   | "host_fs.read"
@@ -117,6 +118,7 @@ export const AUDIT_ACTIONS: readonly AuditAction[] = [
   "domain.primary",
   "domain.redirect",
   "github.connect",
+  "github.install",
   "github.disconnect",
   "host_fs.list",
   "host_fs.read",

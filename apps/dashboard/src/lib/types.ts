@@ -210,9 +210,17 @@ export type GitHubAppStatus = {
     name: string;
     htmlUrl: string;
     ownerLogin: string | null;
+    /** True for Apps created with multi-account installation enabled. */
+    multiAccount: boolean;
     installed: boolean;
-    installationId: number | null;
-    installedAt: string | null;
+    installations: Array<{
+      installationId: number;
+      accountLogin: string | null;
+      accountType: string | null;
+      repositorySelection: string | null;
+      htmlUrl: string | null;
+      installedAt: string;
+    }>;
     createdAt: string;
     installUrl: string;
   } | null;
@@ -246,6 +254,9 @@ export type GitHubRepo = {
   defaultBranch: string;
   htmlUrl: string;
   cloneUrl: string;
+  installationId: number;
+  accountLogin: string | null;
+  accountType: string | null;
 };
 
 export type FsListEntry = { name: string; kind: "file" | "dir" | "symlink" };

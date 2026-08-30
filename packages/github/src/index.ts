@@ -279,6 +279,68 @@ export function clearInstallationTokenCache(appId?: number): void {
   }
 }
 
+// --- App installations -----------------------------------------------------
+
+export type AppInstallation = {
+  installationId: number;
+  accountLogin: string;
+  accountType: "Organization" | "User";
+  repositorySelection: "all" | "selected" | null;
+  htmlUrl: string;
+};
+
+/** Narrow GitHub's installation response to the public metadata Sohwe stores. */
+export function parseAppInstallation(value: unknown): AppInstallation | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Record<string, unknown>;
+  const account = raw.account as Record<string, unknown> | null | undefined;
+  const installationId = raw.id;
+  const accountLogin = account?.login;
+  const accountType = account?.type;
+  if (
+    typeof installationId !== "number" ||
+    !Number.isInteger(installationId) ||
+    installationId <= 0 ||
+    typeof accountLogin !== "string" ||
+    !accountLogin ||
+    (accountType !== "Organization" && accountType !== "User")
+  ) {
+    return null;
+  }
+
+  const fallbackUrl =
+    accountType === "Organization"
+      ? `${GITHUB_WEB}/organizations/${encodeURIComponent(accountLogin)}/settings/installations/${String(installationId)}`
+      : `${GITHUB_WEB}/settings/installations/${String(installationId)}`;
+  const selection = raw.repository_selection;
+  return {
+    installationId,
+    accountLogin,
+    accountType,
+    repositorySelection:
+      selection === "all" || selection === "selected" ? selection : null,
+    htmlUrl: typeof raw.html_url === "string" ? raw.html_url : fallbackUrl
+  };
+}
+
+/** Verify and describe one installation using credentials for the App itself. */
+export async function getAppInstallation(
+  appId: number,
+  pem: string,
+  installationId: number
+): Promise<AppInstallation> {
+  const jwt = createAppJwt(appId, pem);
+  const body = await ghFetch(
+    `/app/installations/${String(installationId)}`,
+    `Bearer ${jwt}`
+  );
+  const installation = parseAppInstallation(body);
+  if (!installation || installation.installationId !== installationId) {
+    throw new Error("GitHub returned invalid installation metadata");
+  }
+  return installation;
+}
+
 /**
  * Clone URL carrying an installation token as basic-auth. **Secret** — this
  * string must never reach build logs, error messages, or the database. Pair it
@@ -421,7 +483,10 @@ export function buildAppManifest(opts: {
     // Re-send the operator to the setup URL when they change which repos are
     // shared, so Sohwe can refresh its cached installation id.
     setup_on_update: true,
-    public: false,
+    // "Public" here means installable by more than the owner account. Every
+    // target account must still approve the App and choose repository access;
+    // it does not expose repositories or publish the App in Marketplace.
+    public: true,
     default_permissions: {
       contents: "read",
       metadata: "read",

@@ -12,6 +12,7 @@ import {
   buildAppManifest,
   createAppJwt,
   manifestCreateUrl,
+  parseAppInstallation,
   parseGitHubRepoUrl,
   parsePushEvent,
   parseRepoFullName,
@@ -295,7 +296,39 @@ describe("buildAppManifest", () => {
       statuses: "write"
     });
     assert.deepEqual(manifest.default_events, ["push"]);
-    assert.equal(manifest.public, false);
+    assert.equal(manifest.public, true);
+  });
+});
+
+describe("parseAppInstallation", () => {
+  it("keeps the account metadata needed for a multi-account installation", () => {
+    assert.deepEqual(
+      parseAppInstallation({
+        id: 42,
+        account: { login: "acme", type: "Organization" },
+        repository_selection: "selected",
+        html_url: "https://github.com/organizations/acme/settings/installations/42"
+      }),
+      {
+        installationId: 42,
+        accountLogin: "acme",
+        accountType: "Organization",
+        repositorySelection: "selected",
+        htmlUrl: "https://github.com/organizations/acme/settings/installations/42"
+      }
+    );
+  });
+
+  it("rejects malformed installation metadata", () => {
+    assert.equal(parseAppInstallation(null), null);
+    assert.equal(parseAppInstallation({ id: 42, account: {} }), null);
+    assert.equal(
+      parseAppInstallation({
+        id: 42,
+        account: { login: "acme", type: "Enterprise" }
+      }),
+      null
+    );
   });
 });
 

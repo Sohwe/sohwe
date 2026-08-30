@@ -155,8 +155,9 @@ Never commit real secrets or generated env files.
 ### GitHub and Push Deploys
 
 - Sohwe never ships a central GitHub App. Each instance creates its own via GitHub's manifest flow; credentials (`pem`, `webhookSecret`, `clientSecret`) are encrypted with `SOHWE_ENCRYPTION_KEY` in `GitHubApp.credentialsEncrypted` and must never be returned by any endpoint.
+- One `GitHubApp` has many `GitHubInstallation` rows. Repository listing combines them, while clone/status calls must select the installation whose `accountLogin` owns the repository. A migrated legacy installation may have no account metadata and is the only permitted fallback when it is the App's sole installation.
 - The webhook route needs the **raw** request body for `X-Hub-Signature-256`. It lives in an encapsulated Fastify scope with its own buffer content-type parser — do not move it to the root instance or re-serialize the payload.
-- Nothing in a webhook payload may be trusted before the HMAC verifies. Which app signed a delivery is unknowable beforehand, so each connected app's secret is tried.
+- Nothing in a webhook payload may be trusted before the HMAC verifies. Which app signed a delivery is unknowable beforehand, so each connected app's secret is tried. After verification, installation-aware deliveries must also match a stored installation; a signature is App-wide and does not prove the sender's installation was approved in Sohwe.
 - Installation tokens are secrets. Never log a tokenized clone URL; run anything derived from a failed clone through `redactSecret` / `redactDeployError` first. Git echoes the remote in its error output.
 - Commit-status reporting is best-effort and must swallow its own failures — it can never fail a deploy.
 - Every delivery is recorded through `recordWebhookDelivery` (`apps/api/src/webhook-deliveries.ts`), including rejected ones — a wrong webhook secret is the most common cause of a silent missed push. Recording is best-effort and must never fail a delivery that would otherwise deploy. Rejected rows may only carry GitHub's clear-text headers; repo/branch/commit are populated after the HMAC verifies.

@@ -7,14 +7,14 @@ import {
   buildAppManifest,
   clearInstallationTokenCache,
   convertAppManifest,
-  createAppJwt,
+  getAppInstallation,
   listInstallationRepositories,
   manifestCreateUrl,
   parseGitHubRepoUrl,
   repoFullName
 } from "@sohwe/github";
 import {
-  getOrgInstallationToken,
+  getOrgInstallationTokens,
   loadGitHubApp
 } from "@sohwe/github/resolve";
 import { z } from "zod";
@@ -185,8 +185,18 @@ export async function registerGitHubRoutes(
           name: true,
           htmlUrl: true,
           ownerLogin: true,
-          installationId: true,
-          installedAt: true,
+          multiAccount: true,
+          installations: {
+            orderBy: { accountLogin: "asc" },
+            select: {
+              installationId: true,
+              accountLogin: true,
+              accountType: true,
+              repositorySelection: true,
+              htmlUrl: true,
+              installedAt: true
+            }
+          },
           createdAt: true
         }
       });
@@ -206,9 +216,9 @@ export async function registerGitHubRoutes(
               name: row.name,
               htmlUrl: row.htmlUrl,
               ownerLogin: row.ownerLogin,
-              installed: row.installationId !== null,
-              installationId: row.installationId,
-              installedAt: row.installedAt,
+              multiAccount: row.multiAccount,
+              installed: row.installations.length > 0,
+              installations: row.installations,
               createdAt: row.createdAt,
               installUrl: appInstallUrl(row.slug)
             }
@@ -311,6 +321,7 @@ export async function registerGitHubRoutes(
           clientId: conversion.clientId,
           htmlUrl: conversion.htmlUrl,
           ownerLogin: conversion.owner,
+          multiAccount: true,
           credentialsEncrypted: encryptJson({
             pem: conversion.credentials.pem,
             webhookSecret: conversion.credentials.webhookSecret,
@@ -359,53 +370,101 @@ export async function registerGitHubRoutes(
         return reply.redirect(`${DASHBOARD_GIT_PATH}?pending=1`);
       }
 
-      // Confirm the installation actually belongs to this App before storing
-      // it, so a crafted link can't point the instance at someone else's.
-      const jwt = createAppJwt(connected.appId, connected.credentials.pem);
-      const res = await fetch(
-        `https://api.github.com/app/installations/${String(installationId)}`,
-        {
-          headers: {
-            Accept: "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-            "User-Agent": "sohwe",
-            Authorization: `Bearer ${jwt}`
-          }
-        }
-      );
-      if (!res.ok) {
+      // Confirm the installation belongs to this App, then retain its account
+      // identity so clone/status calls can select the right installation.
+      let installation;
+      try {
+        installation = await getAppInstallation(
+          connected.appId,
+          connected.credentials.pem,
+          installationId
+        );
+      } catch (err) {
         req.log.warn(
-          { status: res.status, installationId },
+          { err, installationId },
           "Rejected GitHub setup callback: installation does not belong to this app"
         );
         return reply.redirect(`${DASHBOARD_GIT_PATH}?error=bad_installation`);
       }
 
-      await prisma.gitHubApp.update({
-        where: { organizationId: u.organizationId },
-        data: { installationId, installedAt: new Date() }
+      const claimed = await prisma.gitHubInstallation.findUnique({
+        where: { installationId },
+        select: { githubAppId: true }
+      });
+      if (claimed && claimed.githubAppId !== connected.id) {
+        req.log.warn(
+          { installationId },
+          "Rejected GitHub setup callback: installation is already connected elsewhere"
+        );
+        return reply.redirect(`${DASHBOARD_GIT_PATH}?error=bad_installation`);
+      }
+
+      const stored = await prisma.gitHubInstallation.upsert({
+        where: { installationId },
+        create: {
+          githubAppId: connected.id,
+          installationId,
+          accountLogin: installation.accountLogin,
+          accountType: installation.accountType,
+          repositorySelection: installation.repositorySelection,
+          htmlUrl: installation.htmlUrl
+        },
+        update: {
+          accountLogin: installation.accountLogin,
+          accountType: installation.accountType,
+          repositorySelection: installation.repositorySelection,
+          htmlUrl: installation.htmlUrl,
+          installedAt: new Date()
+        },
+        select: { id: true }
       });
       clearInstallationTokenCache(connected.appId);
 
-      return reply.redirect(`${DASHBOARD_GIT_PATH}?installed=1`);
+      await recordAudit(req, {
+        action: "github.install",
+        targetType: "github",
+        targetId: stored.id,
+        targetLabel: installation.accountLogin,
+        metadata: {
+          installationId,
+          accountType: installation.accountType,
+          repositorySelection: installation.repositorySelection
+        }
+      });
+
+      return reply.redirect(
+        `${DASHBOARD_GIT_PATH}?installed=${encodeURIComponent(installation.accountLogin)}`
+      );
     }
   );
 
-  /** Repositories the installation can see, for the app-create repo picker. */
+  /** Repositories all connected installations can see, for the app-create picker. */
   app.get(
     "/api/github/repositories",
     { preHandler: [requireRole("admin")] },
     async (req, reply) => {
       const u = req.user!;
-      const resolved = await getOrgInstallationToken(u.organizationId);
-      if (!resolved) {
+      const resolved = await getOrgInstallationTokens(u.organizationId);
+      if (resolved.length === 0) {
         return reply.badRequest(
           "No GitHub App is installed for this organization."
         );
       }
-      const repositories = await listInstallationRepositories(
-        resolved.token.token
-      );
+      const repositories = (
+        await Promise.all(
+          resolved.map(async ({ installation, token }) => {
+            const repos = await listInstallationRepositories(token.token);
+            return repos.map((repo) => ({
+              ...repo,
+              installationId: installation.installationId,
+              accountLogin: installation.accountLogin,
+              accountType: installation.accountType
+            }));
+          })
+        )
+      )
+        .flat()
+        .sort((a, b) => a.fullName.localeCompare(b.fullName));
       return { repositories };
     }
   );

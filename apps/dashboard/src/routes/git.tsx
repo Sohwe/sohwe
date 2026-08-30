@@ -6,6 +6,7 @@ import {
   ExternalLink,
   GitBranch,
   Lock,
+  Plus,
   RefreshCw,
   Unplug
 } from "lucide-react";
@@ -47,7 +48,7 @@ function useCallbackNotice(onHandled: () => void): void {
     const error = params.get("error");
     if (!installed && !pending && !error) return;
 
-    if (installed) toast.success("GitHub App installed");
+    if (installed) toast.success(`GitHub App installed on ${installed}`);
     else if (pending) toast.info("Installation is waiting for an org owner to approve it");
     else if (error === "bad_installation") {
       toast.error("That installation does not belong to this instance's GitHub App");
@@ -70,7 +71,8 @@ function ConnectCard({ status }: { status: GitHubAppStatus }) {
         <CardDescription>
           Sohwe creates a GitHub App that belongs to you. GitHub generates the
           private key and webhook secret; this instance stores them encrypted and
-          never sends them anywhere else.
+          never sends them anywhere else. After creation, the same App can be
+          installed on each GitHub account or organization you choose.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -116,9 +118,9 @@ function ConnectCard({ status }: { status: GitHubAppStatus }) {
         </div>
 
         <p className="text-xs text-muted-foreground">
-          You will review the permissions on GitHub (read repository contents and
-          metadata, write commit statuses), then pick which repositories to
-          share.
+          This chooses who owns the App registration, not the only organization
+          it can access. GitHub will then let you choose an installation account
+          and the repositories to share.
         </p>
       </CardContent>
     </Card>
@@ -136,8 +138,8 @@ function RepositoryList() {
       <CardHeader>
         <CardTitle className="text-base">Shared repositories</CardTitle>
         <CardDescription>
-          Repositories this installation can read. Change the selection on GitHub
-          to add or remove entries.
+          Repositories across all connected GitHub accounts and organizations.
+          Configure an installation above to add or remove entries.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -166,6 +168,11 @@ function RepositoryList() {
                       <Badge variant="outline" className="shrink-0 gap-1">
                         <Lock className="h-3 w-3" />
                         private
+                      </Badge>
+                    ) : null}
+                    {r.accountLogin ? (
+                      <Badge variant="secondary" className="shrink-0">
+                        {r.accountLogin}
                       </Badge>
                     ) : null}
                   </span>
@@ -312,7 +319,7 @@ function ConnectedCard({ status }: { status: GitHubAppStatus }) {
             {app.installed ? (
               <Badge variant="success" className="gap-1">
                 <CheckCircle2 className="h-3 w-3" />
-                installed
+                {app.installations.length} installed
               </Badge>
             ) : (
               <Badge variant="warning">not installed</Badge>
@@ -329,8 +336,57 @@ function ConnectedCard({ status }: { status: GitHubAppStatus }) {
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
               <p>
                 The app exists but is not installed on an account yet, so it
-                cannot read any repositories. Install it to finish setup.
+                cannot read any repositories. Add an account or organization
+                to finish setup.
               </p>
+            </div>
+          ) : null}
+
+          {!app.multiAccount ? (
+            <div className="flex gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+              <p>
+                This GitHub App was created by an older Sohwe version and can
+                only be installed on its owner account. Reconnect it to enable
+                multiple accounts and organizations.
+              </p>
+            </div>
+          ) : null}
+
+          {app.installations.length > 0 ? (
+            <div className="divide-y divide-border rounded-md border border-border">
+              {app.installations.map((installation) => (
+                <div
+                  key={installation.installationId}
+                  className="flex items-center justify-between gap-3 px-3 py-2 text-sm"
+                >
+                  <div className="min-w-0">
+                    <div className="truncate font-medium">
+                      {installation.accountLogin ?? "Existing installation"}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {installation.accountType ?? "GitHub account"}
+                      {installation.repositorySelection
+                        ? ` · ${installation.repositorySelection === "all" ? "all repositories" : "selected repositories"}`
+                        : ""}
+                    </div>
+                  </div>
+                  {installation.htmlUrl ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        if (installation.htmlUrl) {
+                          window.open(installation.htmlUrl, "_blank", "noopener");
+                        }
+                      }}
+                    >
+                      Configure
+                    </Button>
+                  ) : null}
+                </div>
+              ))}
             </div>
           ) : null}
 
@@ -338,12 +394,13 @@ function ConnectedCard({ status }: { status: GitHubAppStatus }) {
             <Button
               type="button"
               variant={app.installed ? "outline" : "default"}
+              disabled={!app.multiAccount && app.installed}
               onClick={() => {
                 window.location.href = app.installUrl;
               }}
             >
-              <RefreshCw className="mr-2 h-4 w-4" />
-              {app.installed ? "Change repository access" : "Install app"}
+              <Plus className="mr-2 h-4 w-4" />
+              Add account or organization
             </Button>
             <Button
               type="button"

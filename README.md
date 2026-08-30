@@ -55,7 +55,7 @@ Non-interactive installs can pass **`SOHWE_HTTP_PORT`**, **`SOHWE_SETUP_PASSWORD
 
 ### Deploy on git push
 
-Open **Git** in the dashboard and create a GitHub App. Sohwe never ships a central app: GitHub's manifest flow creates one that belongs to you, and this instance stores its private key and webhook secret encrypted with `SOHWE_ENCRYPTION_KEY`. Install the app, pick which repositories to share, then turn on **Push to deploy** on any app (or tick it when creating one).
+Open **Git** in the dashboard and create a GitHub App. Sohwe never ships a central app: GitHub's manifest flow creates one that belongs to you, and this instance stores its private key and webhook secret encrypted with `SOHWE_ENCRYPTION_KEY`. Use **Add account or organization** for each GitHub account you want to connect, approve the repositories there, then search across the combined repository picker and turn on **Push to deploy** on any app (or tick it when creating one).
 
 The app requests the minimum: read repository contents and metadata, write commit statuses, and the `push` event only. Private repositories clone with a short-lived installation token, and each deploy reports pending/success/failure back to the commit.
 

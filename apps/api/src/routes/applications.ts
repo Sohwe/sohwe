@@ -155,8 +155,18 @@ async function autoDeployBlocker(
   if (!githubApp) {
     return "Connect a GitHub App first (Settings -> Git) to enable auto-deploy.";
   }
-  if (!githubApp.installationId) {
-    return "Install the GitHub App on your account first to enable auto-deploy.";
+  if (githubApp.installations.length === 0) {
+    return "Install the GitHub App on the repository's account first to enable auto-deploy.";
+  }
+  const owner = repoName.split("/")[0]?.toLowerCase();
+  const hasMatchingInstallation = githubApp.installations.some(
+    (installation) => installation.accountLogin?.toLowerCase() === owner
+  );
+  const hasLegacyInstallation =
+    githubApp.installations.length === 1 &&
+    !githubApp.installations[0]?.accountLogin;
+  if (!hasMatchingInstallation && !hasLegacyInstallation) {
+    return `Install the GitHub App on ${owner ?? "the repository account"} first to enable auto-deploy.`;
   }
   return null;
 }
