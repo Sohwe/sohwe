@@ -125,6 +125,56 @@ Anything scoped to the build ends up in the built image and is readable with
 key that looks like a secret. A Dockerfile build additionally only sees a
 variable it declares with a matching `ARG`. Either way, redeploy to apply.
 
+### Monorepo Docker builds
+
+Docker builds always keep the repository root as their build context, so a
+nested application can still read the root lockfile, workspace declaration,
+and shared packages. In an application's build settings, set:
+
+- **Dockerfile path** to a repository-relative file such as
+  `apps/api/Dockerfile`.
+- **Docker target** when the file has separate multi-stage targets such as
+  `api`, `worker`, or `migrate`.
+- **Container command override** to run a different long-lived process from
+  the same image. Sohwe invokes it through `/bin/sh -lc`; leave it empty to use
+  the image's `CMD`.
+
+Absolute Dockerfile paths, parent-directory traversal, and paths that resolve
+through a symlink outside the cloned repository are rejected. These settings
+are also preserved in portable backup bundles.
+
+### Multi-service projects
+
+Open **Projects** when one repository needs several processes from the same
+commit. A project can contain:
+
+- `http` services, which declare a port and are the only services routed by
+  Traefik;
+- `worker` services, which stay private and long-running without a fake domain;
+- one `release` service, which runs to completion once (typically migrations)
+  before a candidate release can start.
+
+All services share a project bridge and resolve one another by service slug.
+Sohwe builds every image first, runs the release job, starts and checks the
+runtime candidates, then moves the project to the new release. Until that final
+promotion boundary, the previous release stays live. Coordinated rollback
+reuses all service images from a successful release; database migrations are
+forward-only.
+
+The first dashboard preset targets FleetOptics: root Dockerfile stages `api`,
+`worker`, and `migrate`. The project API also supports arbitrary service lists,
+per-service Dockerfiles/targets/commands/resource limits, explicit image groups
+for sharing one build, and shared or service-specific encrypted variables.
+Managed Postgres/Redis bindings may target every service or a selected subset.
+External S3/R2 settings belong in encrypted project/service variables.
+
+Project service logs are persisted separately from build logs, tagged by
+service and release, and available as both bounded history and authenticated
+live SSE. Worker restart recovery reattaches to running service containers;
+Docker log rotation and bounded database retention protect the host disk.
+Portable bundles use format v6 for project/service config while continuing to
+restore v1-v5 bundles.
+
 ### Managed datastores
 
 Open **Datastores** to create a managed Postgres 16/17 or Redis 7 instance on

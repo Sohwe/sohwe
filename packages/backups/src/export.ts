@@ -1,7 +1,8 @@
 import {
   buildBundle,
   type BundleAppInput,
-  type BundleDatastoreInput
+  type BundleDatastoreInput,
+  type BundleProjectInput
 } from "@sohwe/bundler";
 import { decryptJson, encryptJson } from "@sohwe/crypto";
 import { prisma } from "@sohwe/db";
@@ -61,6 +62,9 @@ export async function gatherBundleApps(
     buildMode: a.buildMode,
     buildCmd: a.buildCmd,
     startCmd: a.startCmd,
+    runtimeCmd: a.runtimeCmd,
+    dockerfilePath: a.dockerfilePath,
+    dockerTarget: a.dockerTarget,
     port: a.port,
     // `domain` is the primary one, carried for bundles written before custom
     // domains became a list; `domains` is the complete set.
@@ -83,6 +87,51 @@ export async function gatherBundleApps(
   }));
 }
 
+/** Project/service config for bundle v6; live releases and logs are runtime state. */
+export async function gatherBundleProjects(
+  organizationId: string,
+  includeSecrets: boolean
+): Promise<BundleProjectInput[]> {
+  const projects = await prisma.project.findMany({
+    where: { organizationId },
+    include: {
+      services: {
+        include: { domains: { orderBy: { createdAt: "asc" } } },
+        orderBy: { createdAt: "asc" }
+      }
+    },
+    orderBy: { createdAt: "asc" }
+  });
+  return projects.map((project) => ({
+    name: project.name,
+    slug: project.slug,
+    gitRepo: project.gitRepo,
+    gitBranch: project.gitBranch,
+    envVars: includeSecrets ? readVars(project.envVarsEncrypted) : {},
+    services: project.services.map((service) => ({
+      name: service.name,
+      slug: service.slug,
+      kind: service.kind,
+      buildMode: service.buildMode,
+      buildCmd: service.buildCmd,
+      startCmd: service.startCmd,
+      runtimeCmd: service.runtimeCmd,
+      serviceDirectory: service.serviceDirectory,
+      workspaceSelector: service.workspaceSelector,
+      dockerfilePath: service.dockerfilePath,
+      dockerTarget: service.dockerTarget,
+      imageGroup: service.imageGroup,
+      port: service.port,
+      domains: service.domains.map((domain) => domain.hostname),
+      memoryLimitMb: service.memoryLimitMb,
+      cpuLimit: service.cpuLimit == null ? null : Number(service.cpuLimit),
+      restartPolicy: service.restartPolicy,
+      envVars: includeSecrets ? readVars(service.envVarsEncrypted) : {},
+      buildArgs: includeSecrets ? readVars(service.buildArgsEncrypted) : {}
+    }))
+  }));
+}
+
 /**
  * Read every managed datastore in an org and shape it for the bundler —
  * config only, never credentials. Bindings reference apps by slug because ids
@@ -96,6 +145,17 @@ export async function gatherBundleDatastores(
     include: {
       bindings: {
         include: { application: { select: { slug: true } } },
+        orderBy: { createdAt: "asc" }
+      },
+      projectBindings: {
+        include: {
+          project: {
+            select: {
+              slug: true,
+              services: { select: { id: true, slug: true } }
+            }
+          }
+        },
         orderBy: { createdAt: "asc" }
       }
     },
@@ -112,6 +172,17 @@ export async function gatherBundleDatastores(
     bindings: d.bindings.map((b) => ({
       appSlug: b.application.slug,
       envKeys: b.envKeys
+    })),
+    projectBindings: d.projectBindings.map((binding) => ({
+      projectSlug: binding.project.slug,
+      serviceSlugs: binding.project.services
+        .filter(
+          (service) =>
+            binding.serviceIds.length === 0 ||
+            binding.serviceIds.includes(service.id)
+        )
+        .map((service) => service.slug),
+      envKey: binding.envKey
     }))
   }));
 }
@@ -180,6 +251,10 @@ export async function runScheduledExport(
     schedule.includeSecrets
   );
   const bundleDatastores = await gatherBundleDatastores(schedule.organizationId);
+  const bundleProjects = await gatherBundleProjects(
+    schedule.organizationId,
+    schedule.includeSecrets
+  );
   const manifest = buildBundle(
     bundleApps,
     {
@@ -191,7 +266,8 @@ export async function runScheduledExport(
       },
       createdAtIso
     },
-    bundleDatastores
+    bundleDatastores,
+    bundleProjects
   );
   const json = JSON.stringify(manifest);
   const sizeBytes = Buffer.byteLength(json, "utf8");

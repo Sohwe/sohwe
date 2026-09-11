@@ -180,6 +180,15 @@ export async function registerDomainRoutes(
             : `${hostname} is the built-in address of the app "${generatedFor.name}". Pick a different hostname.`
         );
       }
+      const projectOwner = await prisma.serviceDomain.findUnique({
+        where: { hostname },
+        select: { id: true }
+      });
+      if (projectOwner) {
+        return reply.conflict(
+          `${hostname} is already attached to a project service on this instance.`
+        );
+      }
 
       const existingCount = await prisma.domain.count({
         where: { applicationId: a.id }

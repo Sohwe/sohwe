@@ -36,6 +36,9 @@ export type AppRow = {
   buildMode: string;
   buildCmd: string | null;
   startCmd: string | null;
+  runtimeCmd: string | null;
+  dockerfilePath: string;
+  dockerTarget: string | null;
   /**
    * The app's primary custom domain, or null. Derived by the API from
    * `domains` — the full list is the source of truth.
@@ -75,6 +78,69 @@ export function getCurrentDeploymentId(
 }
 
 export type BuildMode = "auto" | "dockerfile" | "nixpacks";
+
+export type ServiceKind = "http" | "worker" | "release";
+
+export type ProjectService = {
+  id: string;
+  projectId: string;
+  name: string;
+  slug: string;
+  kind: ServiceKind;
+  buildMode: BuildMode;
+  buildCmd: string | null;
+  startCmd: string | null;
+  runtimeCmd: string | null;
+  serviceDirectory: string;
+  workspaceSelector: string | null;
+  dockerfilePath: string;
+  dockerTarget: string | null;
+  imageGroup: string | null;
+  port: number | null;
+  memoryLimitMb: number | null;
+  cpuLimit: number | null;
+  restartPolicy: string;
+  domains: { id: string; hostname: string; isPrimary: boolean }[];
+};
+
+export type ProjectRelease = {
+  id: string;
+  projectId: string;
+  commitSha: string | null;
+  commitMessage: string | null;
+  trigger: string;
+  sourceReleaseId: string | null;
+  status: string;
+  errorMessage: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  serviceDeployments: {
+    id: string;
+    serviceId: string;
+    imageTag: string | null;
+    status: string;
+    errorMessage: string | null;
+    exitCode: number | null;
+    service: { name: string; slug: string; kind: ServiceKind };
+  }[];
+};
+
+export type ProjectRow = {
+  id: string;
+  name: string;
+  slug: string;
+  gitRepo: string;
+  gitBranch: string;
+  repoFullName: string | null;
+  autoDeploy: boolean;
+  status: string;
+  currentReleaseId: string | null;
+  services: ProjectService[];
+  releases: ProjectRelease[];
+  createdAt: string;
+  updatedAt: string;
+};
 
 export type AppStats =
   | { running: false }

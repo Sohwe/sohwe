@@ -29,6 +29,7 @@ const APP: SpecApp = {
   id: "11111111-2222-3333-4444-555555555555",
   slug: "web",
   port: 3000,
+  runtimeCmd: null,
   domains: [],
   memoryLimitMb: null,
   cpuLimit: null
@@ -488,6 +489,17 @@ describe("buildContainerSpec", () => {
     const s = spec();
     assert.equal(s.name, "sohwe-web");
     assert.equal(s.Image, "sohwe/app-web:dep-1");
+  });
+
+  it("uses the image command when no runtime override is configured", () => {
+    assert.equal(spec().Cmd, undefined);
+  });
+
+  it("runs a configured runtime command through a shell", () => {
+    assert.deepEqual(
+      spec({ app: { runtimeCmd: " node dist/media-worker.js " } }).Cmd,
+      ["/bin/sh", "-lc", "node dist/media-worker.js"]
+    );
   });
 
   it("exposes the app's port", () => {

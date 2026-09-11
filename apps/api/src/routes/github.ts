@@ -161,6 +161,19 @@ export async function backfillRepoFullNames(log: {
       });
       filled += 1;
     }
+    const projects = await prisma.project.findMany({
+      where: { repoFullName: null },
+      select: { id: true, gitRepo: true }
+    });
+    for (const project of projects) {
+      const ref = parseGitHubRepoUrl(project.gitRepo);
+      if (!ref) continue;
+      await prisma.project.update({
+        where: { id: project.id },
+        data: { repoFullName: repoFullName(ref) }
+      });
+      filled += 1;
+    }
     if (filled > 0) log.info({ filled }, "Backfilled GitHub repo names");
   } catch (err) {
     log.warn({ err }, "Backfill of application repo names failed");
@@ -530,6 +543,10 @@ export async function registerGitHubRoutes(
       await prisma.$transaction([
         // Push deploys stop working, so don't leave apps claiming otherwise.
         prisma.application.updateMany({
+          where: { organizationId: u.organizationId, autoDeploy: true },
+          data: { autoDeploy: false }
+        }),
+        prisma.project.updateMany({
           where: { organizationId: u.organizationId, autoDeploy: true },
           data: { autoDeploy: false }
         }),

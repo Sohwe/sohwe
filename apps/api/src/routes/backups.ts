@@ -14,6 +14,7 @@ import {
   encryptSchedulePassphrase,
   gatherBundleApps,
   gatherBundleDatastores,
+  gatherBundleProjects,
   makeBundleFilename,
   resolveDestination,
   writeBundle
@@ -75,7 +76,11 @@ async function restoreDatastores(
   organizationId: string,
   entries: BundleDatastoreEntry[],
   collisionPolicy: "rename" | "overwrite" | "skip",
-  appIdByBundleSlug: Map<string, string>
+  appIdByBundleSlug: Map<string, string>,
+  projectByBundleSlug: Map<
+    string,
+    { id: string; serviceIdBySlug: Map<string, string> }
+  >
 ): Promise<RestoredDatastoreCounts> {
   const counts: RestoredDatastoreCounts = {
     datastoresCreated: 0,
@@ -202,6 +207,41 @@ async function restoreDatastores(
         database: creds.database
       }
     });
+  }
+
+  for (const d of entries) {
+    const ds = mapped.get(d.slug);
+    if (!ds) continue;
+    for (const binding of d.projectBindings ?? []) {
+      const project = projectByBundleSlug.get(binding.projectSlug);
+      if (!project) {
+        counts.bindingsDropped++;
+        continue;
+      }
+      const serviceIds = binding.serviceSlugs
+        .map((slug) => project.serviceIdBySlug.get(slug))
+        .filter((id): id is string => Boolean(id));
+      if (serviceIds.length !== binding.serviceSlugs.length) {
+        counts.bindingsDropped++;
+        continue;
+      }
+      await tx.projectDatastoreBinding.upsert({
+        where: {
+          datastoreId_projectId: {
+            datastoreId: ds.id,
+            projectId: project.id
+          }
+        },
+        create: {
+          datastoreId: ds.id,
+          projectId: project.id,
+          envKey: binding.envKey,
+          serviceIds
+        },
+        update: { envKey: binding.envKey, serviceIds }
+      });
+      counts.bindingsRestored++;
+    }
   }
 
   for (const d of entries) {
@@ -457,6 +497,10 @@ export async function registerBackupRoutes(app: FastifyInstance) {
       }
 
       const bundleDatastores = await gatherBundleDatastores(u.organizationId);
+      const bundleProjects = await gatherBundleProjects(
+        u.organizationId,
+        body.includeSecrets
+      );
 
       const createdAtIso = new Date().toISOString();
       const manifest = buildBundle(
@@ -467,7 +511,8 @@ export async function registerBackupRoutes(app: FastifyInstance) {
           source: { orgName: u.organization.name, sohweVersion: SOHWE_VERSION },
           createdAtIso
         },
-        bundleDatastores
+        bundleDatastores,
+        bundleProjects
       );
 
       const json = JSON.stringify(manifest);
@@ -591,6 +636,11 @@ export async function registerBackupRoutes(app: FastifyInstance) {
         select: { slug: true }
       });
       const existingDsSlugs = new Set(existingDs.map((d) => d.slug));
+      const existingProjects = await prisma.project.findMany({
+        where: { organizationId: u.organizationId },
+        select: { slug: true }
+      });
+      const existingProjectSlugs = new Set(existingProjects.map((p) => p.slug));
 
       return {
         sourceOrgName: parsed.source.orgName,
@@ -604,6 +654,14 @@ export async function registerBackupRoutes(app: FastifyInstance) {
           alertCount: a.alertDestinations.length,
           envKeyCount: Object.keys(a.envVars).length,
           buildArgKeyCount: Object.keys(a.buildArgs).length
+        })),
+        projects: parsed.projects.map((project) => ({
+          name: project.name,
+          slug: project.slug,
+          collides: existingProjectSlugs.has(project.slug),
+          serviceCount: project.services.length,
+          serviceKinds: project.services.map((service) => service.kind),
+          envKeyCount: Object.keys(project.envVars).length
         })),
         datastores: parsed.datastores.map((d) => ({
           name: d.name,
@@ -648,6 +706,10 @@ export async function registerBackupRoutes(app: FastifyInstance) {
         let domainsSkipped = 0;
         /** Bundle app slug -> restored/overwritten app id, for datastore bindings. */
         const appIdByBundleSlug = new Map<string, string>();
+        const projectByBundleSlug = new Map<
+          string,
+          { id: string; serviceIdBySlug: Map<string, string> }
+        >();
 
         for (const a of parsed.apps) {
           const collides = usedSlugs.has(a.slug);
@@ -697,6 +759,9 @@ export async function registerBackupRoutes(app: FastifyInstance) {
             buildMode: a.buildMode,
             buildCmd: a.buildCmd,
             startCmd: a.startCmd,
+            runtimeCmd: a.runtimeCmd,
+            dockerfilePath: a.dockerfilePath,
+            dockerTarget: a.dockerTarget,
             port: a.port,
             memoryLimitMb: a.memoryLimitMb,
             cpuLimit: a.cpuLimit,
@@ -764,12 +829,152 @@ export async function registerBackupRoutes(app: FastifyInstance) {
           appIdByBundleSlug.set(a.slug, newApp.id);
         }
 
+        const existingProjects = await tx.project.findMany({
+          where: { organizationId: u.organizationId },
+          select: { id: true, slug: true }
+        });
+        const usedProjectSlugs = new Set(existingProjects.map((p) => p.slug));
+        const projectIdBySlug = new Map(existingProjects.map((p) => [p.slug, p.id]));
+        let projectsCreated = 0;
+        let projectsOverwritten = 0;
+        let projectsSkipped = 0;
+        let projectsRenamed = 0;
+        let serviceDomainsSkipped = 0;
+
+        for (const project of parsed.projects) {
+          const collides = usedProjectSlugs.has(project.slug);
+          if (collides && body.collisionPolicy === "skip") {
+            projectsSkipped++;
+            continue;
+          }
+          let slug = project.slug;
+          let existingId: string | null = null;
+          if (collides && body.collisionPolicy === "overwrite") {
+            existingId = projectIdBySlug.get(project.slug)!;
+            projectsOverwritten++;
+          } else if (collides) {
+            slug = `${project.slug}-restored`;
+            let n = 2;
+            while (usedProjectSlugs.has(slug)) {
+              slug = `${project.slug}-restored-${n++}`;
+            }
+            projectsRenamed++;
+          } else {
+            projectsCreated++;
+          }
+
+          const allDomains = project.services.flatMap((service) => service.domains);
+          const [appDomains, projectDomains] = await Promise.all([
+            tx.domain.findMany({
+              where: { hostname: { in: allDomains } },
+              select: { hostname: true }
+            }),
+            tx.serviceDomain.findMany({
+              where: {
+                hostname: { in: allDomains },
+                ...(existingId
+                  ? { service: { projectId: { not: existingId } } }
+                  : {})
+              },
+              select: { hostname: true }
+            })
+          ]);
+          const taken = new Set([
+            ...appDomains.map((d) => d.hostname),
+            ...projectDomains.map((d) => d.hostname)
+          ]);
+          const restoredRef = parseGitHubRepoUrl(project.gitRepo);
+          const serviceData = project.services.map((service) => {
+            const domains = service.domains.filter((hostname) => !taken.has(hostname));
+            serviceDomainsSkipped += service.domains.length - domains.length;
+            return {
+              name: service.name,
+              slug: service.slug,
+              kind: service.kind,
+              buildMode: service.buildMode,
+              buildCmd: service.buildCmd,
+              startCmd: service.startCmd,
+              runtimeCmd: service.runtimeCmd,
+              serviceDirectory: service.serviceDirectory,
+              workspaceSelector: service.workspaceSelector,
+              dockerfilePath: service.dockerfilePath,
+              dockerTarget: service.dockerTarget,
+              imageGroup: service.imageGroup,
+              port: service.port,
+              memoryLimitMb: service.memoryLimitMb,
+              cpuLimit: service.cpuLimit,
+              restartPolicy: service.kind === "release" ? "no" : service.restartPolicy,
+              envVarsEncrypted:
+                Object.keys(service.envVars).length > 0
+                  ? encryptJson(service.envVars)
+                  : null,
+              buildArgsEncrypted:
+                Object.keys(service.buildArgs).length > 0
+                  ? encryptJson(service.buildArgs)
+                  : null,
+              domains: {
+                create: domains.map((hostname, index) => ({
+                  hostname,
+                  isPrimary: index === 0
+                }))
+              }
+            };
+          });
+          const scalars = {
+            name: project.name,
+            slug,
+            gitRepo: project.gitRepo,
+            gitBranch: project.gitBranch,
+            repoFullName: restoredRef ? repoFullName(restoredRef) : null,
+            autoDeploy: false,
+            status: "idle",
+            currentReleaseId: null,
+            envVarsEncrypted:
+              Object.keys(project.envVars).length > 0
+                ? encryptJson(project.envVars)
+                : null
+          };
+
+          let restored;
+          if (existingId) {
+            await tx.project.update({
+              where: { id: existingId },
+              data: { currentReleaseId: null }
+            });
+            await tx.projectRelease.deleteMany({ where: { projectId: existingId } });
+            await tx.service.deleteMany({ where: { projectId: existingId } });
+            restored = await tx.project.update({
+              where: { id: existingId },
+              data: { ...scalars, services: { create: serviceData } },
+              include: { services: { select: { id: true, slug: true } } }
+            });
+          } else {
+            restored = await tx.project.create({
+              data: {
+                organizationId: u.organizationId,
+                ...scalars,
+                services: { create: serviceData }
+              },
+              include: { services: { select: { id: true, slug: true } } }
+            });
+            usedProjectSlugs.add(slug);
+            projectIdBySlug.set(slug, restored.id);
+          }
+          projectByBundleSlug.set(project.slug, {
+            id: restored.id,
+            serviceIdBySlug: new Map(
+              restored.services.map((service) => [service.slug, service.id])
+            )
+          });
+        }
+
         const datastores = await restoreDatastores(
           tx,
           u.organizationId,
           parsed.datastores,
           body.collisionPolicy,
-          appIdByBundleSlug
+          appIdByBundleSlug,
+          projectByBundleSlug
         );
 
         return {
@@ -778,6 +983,11 @@ export async function registerBackupRoutes(app: FastifyInstance) {
           skipped,
           renamed,
           domainsSkipped,
+          projectsCreated,
+          projectsOverwritten,
+          projectsSkipped,
+          projectsRenamed,
+          serviceDomainsSkipped,
           ...datastores
         };
       });

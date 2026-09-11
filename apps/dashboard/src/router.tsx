@@ -25,6 +25,7 @@ import { JoinPage } from "@/routes/join";
 import { MembersPage } from "@/routes/members";
 import { AuditPage } from "@/routes/audit";
 import { DeploymentsPage } from "@/components/apps/DeploymentsPage";
+import { ProjectsPage } from "@/routes/projects";
 
 const rootRoute = createRootRouteWithContext<{ queryClient: QueryClient }>()({
   component: () => <Outlet />
@@ -115,6 +116,12 @@ const backupsRoute = createRoute({
   getParentRoute: () => authedLayoutRoute,
   path: "backups",
   component: BackupsPage
+});
+
+const projectsRoute = createRoute({
+  getParentRoute: () => authedLayoutRoute,
+  path: "projects",
+  component: ProjectsPage
 });
 
 const datastoresRoute = createRoute({
@@ -259,6 +266,7 @@ const routeTree = rootRoute.addChildren([
         deploymentsLayoutRoute.addChildren([deploymentsIndexRoute, deploymentsWithIdRoute])
       ])
     ]),
+    projectsRoute,
     backupsRoute,
     datastoresRoute,
     datastoreDetailRoute,

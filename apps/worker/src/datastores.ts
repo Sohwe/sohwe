@@ -19,6 +19,7 @@ import {
   datastoreContainerName,
   datastoreServicePort,
   datastoreVolumeName,
+  projectInternalNetworkName,
   type DatastoreCredentials,
   type DatastoreKind
 } from "@sohwe/types";
@@ -44,6 +45,7 @@ type DatastoreRow = {
   publicPort: number | null;
   credentialsEncrypted: Uint8Array;
   bindings: { applicationId: string; envKeys: string[] }[];
+  projectBindings: { projectId: string }[];
 };
 
 function readCreds(row: DatastoreRow): DatastoreCredentials {
@@ -186,6 +188,23 @@ async function startDatastoreContainer(
     await ensureAppNetwork(docker, b.applicationId);
     await connectNetwork(docker, appInternalNetworkName(b.applicationId), c.id);
   }
+  for (const binding of ds.projectBindings) {
+    const network = projectInternalNetworkName(binding.projectId);
+    try {
+      await docker.createNetwork({
+        Name: network,
+        Driver: "bridge",
+        Internal: false,
+        Labels: {
+          "sohwe.managed": "true",
+          "sohwe.project": binding.projectId
+        }
+      });
+    } catch {
+      // already exists
+    }
+    await connectNetwork(docker, network, c.id);
+  }
 
   // Private datastores leave the default bridge so they are reachable only on
   // bound apps' internal networks. Public ones keep the bridge endpoint —
@@ -299,7 +318,10 @@ async function rewriteBoundEnvKeys(
 async function loadDatastore(datastoreId: string): Promise<DatastoreRow | null> {
   return prisma.datastore.findUnique({
     where: { id: datastoreId },
-    include: { bindings: { select: { applicationId: true, envKeys: true } } }
+    include: {
+      bindings: { select: { applicationId: true, envKeys: true } },
+      projectBindings: { select: { projectId: true } }
+    }
   });
 }
 

@@ -144,7 +144,7 @@ async function removeDockerForApplication(
  * Enabling it without a GitHub App installed would leave the toggle on and
  * nothing ever deploying, which is worse than refusing.
  */
-async function autoDeployBlocker(
+export async function autoDeployBlocker(
   organizationId: string,
   repoName: string | null
 ): Promise<string | null> {
@@ -223,6 +223,17 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
         const blocker = await autoDeployBlocker(u.organizationId, repoName);
         if (blocker) return reply.badRequest(blocker);
       }
+      if (body.domain) {
+        const projectDomain = await prisma.serviceDomain.findUnique({
+          where: { hostname: body.domain },
+          select: { id: true }
+        });
+        if (projectDomain) {
+          return reply.conflict(
+            `${body.domain} is already attached to a project service on this instance.`
+          );
+        }
+      }
 
       // Slugs are unique per organization (they become the app subdomain, the
       // container name, and the Traefik router), so a collision is a normal
@@ -246,6 +257,9 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
           buildMode: body.buildMode,
           buildCmd: body.buildCmd ?? null,
           startCmd: body.startCmd ?? null,
+          runtimeCmd: body.runtimeCmd ?? null,
+          dockerfilePath: body.dockerfilePath,
+          dockerTarget: body.dockerTarget ?? null,
           organizationId: u.organizationId,
           // A domain given at creation becomes the app's primary one. It is
           // created in the same statement so a hostname another app already
@@ -312,6 +326,15 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
       }
       if (body.startCmd !== undefined) {
         data.startCmd = body.startCmd ? body.startCmd : null;
+      }
+      if (body.runtimeCmd !== undefined) {
+        data.runtimeCmd = body.runtimeCmd ? body.runtimeCmd : null;
+      }
+      if (body.dockerfilePath !== undefined) {
+        data.dockerfilePath = body.dockerfilePath;
+      }
+      if (body.dockerTarget !== undefined) {
+        data.dockerTarget = body.dockerTarget;
       }
       if (body.memoryLimitMb !== undefined) {
         data.memoryLimitMb = body.memoryLimitMb;

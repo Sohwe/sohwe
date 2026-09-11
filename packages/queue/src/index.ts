@@ -10,6 +10,17 @@ export type DeployJobData = {
   promoteImageFromDeploymentId?: string;
 };
 
+// --- Phase 9: coordinated project releases --------------------------------
+
+export const PROJECT_DEPLOY_QUEUE = "project-deploy";
+
+export type ProjectDeployJobData = {
+  projectId: string;
+  releaseId: string;
+  /** A rollback reuses every service image recorded by this release. */
+  promoteFromReleaseId?: string;
+};
+
 // --- Backups (Phase 4.5): scheduled exports + retention --------------------
 
 export const BACKUP_QUEUE = "backup";
@@ -48,6 +59,14 @@ export function appLogChannelName(applicationId: string): string {
   return `logs:app:${applicationId}`;
 }
 
+export function projectLogChannelName(projectId: string): string {
+  return `logs:project:${projectId}`;
+}
+
+export function serviceLogChannelName(serviceId: string): string {
+  return `logs:service:${serviceId}`;
+}
+
 /**
  * Redis string key holding the latest CPU/memory sample for an app, written by
  * the worker with a short TTL and read by the API stats endpoint (polling).
@@ -68,6 +87,13 @@ export function getConnectionOptionsForBull(): ConnectionOptions {
 
 export function createQueue(): Queue<DeployJobData> {
   return new Queue<DeployJobData>(DEPLOY_QUEUE, {
+    connection: getConnectionOptionsForBull(),
+    defaultJobOptions: { removeOnComplete: 200, removeOnFail: 100 }
+  });
+}
+
+export function createProjectDeployQueue(): Queue<ProjectDeployJobData> {
+  return new Queue<ProjectDeployJobData>(PROJECT_DEPLOY_QUEUE, {
     connection: getConnectionOptionsForBull(),
     defaultJobOptions: { removeOnComplete: 200, removeOnFail: 100 }
   });

@@ -13,6 +13,9 @@ import { Prisma, prisma } from "@sohwe/db";
 
 export type AuditTargetType =
   | "application"
+  | "project"
+  | "service"
+  | "projectRelease"
   | "deployment"
   | "volume"
   | "env"
@@ -36,6 +39,15 @@ export type AuditAction =
   | "application.create"
   | "application.update"
   | "application.delete"
+  | "project.create"
+  | "project.delete"
+  | "project.release"
+  | "project.rollback"
+  | "project.variables.update"
+  | "service.update"
+  | "service.create"
+  | "service.delete"
+  | "service.variables.update"
   | "deployment.deploy"
   | "deployment.rollback"
   | "env.update"
@@ -84,6 +96,15 @@ export const AUDIT_ACTIONS: readonly AuditAction[] = [
   "application.create",
   "application.update",
   "application.delete",
+  "project.create",
+  "project.delete",
+  "project.release",
+  "project.rollback",
+  "project.variables.update",
+  "service.update",
+  "service.create",
+  "service.delete",
+  "service.variables.update",
   "deployment.deploy",
   "deployment.rollback",
   "env.update",

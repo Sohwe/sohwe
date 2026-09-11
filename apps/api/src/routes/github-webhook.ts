@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { prisma } from "@sohwe/db";
-import { createQueue } from "@sohwe/queue";
+import { createProjectDeployQueue, createQueue } from "@sohwe/queue";
 import {
   clearInstallationTokenCache,
   parsePushEvent,
@@ -20,6 +20,7 @@ import { GITHUB_WEBHOOK_PATH } from "./github";
 // an authenticated Sohwe admin previously connected.
 
 const deployQueue = createQueue();
+const projectDeployQueue = createProjectDeployQueue();
 
 // Generous, but bounded: a busy monorepo can deliver a burst of pushes, while
 // an unauthenticated public endpoint still needs a ceiling.
@@ -89,13 +90,18 @@ async function explainNoDeploys(
     where: { organizationId, repoFullName: push.repoFullName },
     select: { name: true, gitBranch: true, autoDeploy: true }
   });
-  if (candidates.length === 0) {
+  const projects = await prisma.project.findMany({
+    where: { organizationId, repoFullName: push.repoFullName },
+    select: { name: true, gitBranch: true, autoDeploy: true }
+  });
+  const all = [...candidates, ...projects];
+  if (all.length === 0) {
     return `No app is linked to ${push.repoFullName}.`;
   }
-  const onBranch = candidates.filter((a) => a.gitBranch === push.branch);
+  const onBranch = all.filter((item) => item.gitBranch === push.branch);
   if (onBranch.length === 0) {
-    const tracked = [...new Set(candidates.map((a) => a.gitBranch))].join(", ");
-    return `Apps linked to ${push.repoFullName} track ${tracked}, not ${push.branch}.`;
+    const tracked = [...new Set(all.map((item) => item.gitBranch))].join(", ");
+    return `Apps or projects linked to ${push.repoFullName} track ${tracked}, not ${push.branch}.`;
   }
   const names = onBranch.map((a) => a.name).join(", ");
   return `Auto-deploy is off for ${names}.`;
@@ -134,6 +140,35 @@ async function enqueuePushDeploys(
     );
     deploymentIds.push(deployment.id);
   }
+  const projects = await prisma.project.findMany({
+    where: {
+      organizationId,
+      repoFullName: push.repoFullName,
+      gitBranch: push.branch,
+      autoDeploy: true
+    },
+    include: { services: { select: { id: true } } }
+  });
+  for (const project of projects) {
+    const release = await prisma.projectRelease.create({
+      data: {
+        projectId: project.id,
+        status: "pending",
+        trigger: "push",
+        commitSha: push.headSha || null,
+        commitMessage: push.headMessage,
+        serviceDeployments: {
+          create: project.services.map((service) => ({ serviceId: service.id }))
+        }
+      }
+    });
+    await projectDeployQueue.add(
+      "project-deploy",
+      { projectId: project.id, releaseId: release.id },
+      { jobId: release.id, removeOnComplete: 200, removeOnFail: 100 }
+    );
+    deploymentIds.push(release.id);
+  }
   return deploymentIds;
 }
 
@@ -141,6 +176,7 @@ export async function registerGitHubWebhookRoutes(app: FastifyInstance) {
   // Opened at module load; close it with the server so the process can exit.
   app.addHook("onClose", async () => {
     await deployQueue.close().catch(() => {});
+    await projectDeployQueue.close().catch(() => {});
   });
 
   // Encapsulated so the raw-body parser applies to this route only; every other

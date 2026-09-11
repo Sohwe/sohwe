@@ -39,6 +39,7 @@ import { registerEnvVarRoutes } from "./routes/env-vars";
 import { registerMemberRoutes } from "./routes/members";
 import { registerVariableRoutes } from "./routes/variables";
 import { registerVolumeRoutes } from "./routes/volumes";
+import { registerProjectRoutes } from "./routes/projects";
 import { mapPrismaError } from "./prisma-errors";
 import { AUTH_RATE_LIMIT } from "./rate-limit";
 import { issueSession } from "./session";
@@ -204,6 +205,7 @@ export async function buildServer(
   });
 
   await registerApplicationRoutes(app);
+  await registerProjectRoutes(app);
   await registerEnvVarRoutes(app);
   await registerBuildArgRoutes(app);
   await registerVariableRoutes(app);

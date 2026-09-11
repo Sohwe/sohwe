@@ -9,6 +9,8 @@ import {
   dockerBuildArgv,
   nixpacksArgv,
   redactValues,
+  resolveDockerfilePath,
+  resolveDockerTarget,
   type LogHandler
 } from "./index";
 
@@ -118,13 +120,13 @@ describe("buildAppImage — engine selection", () => {
       buildCmd: "npm run build",
       onLogLine
     }).catch(() => {});
-    assert.ok(logs.some((l) => l.includes("overrides are ignored in Dockerfile mode")));
+    assert.ok(logs.some((l) => l.includes("build-cmd override is ignored")));
   });
 
   it("does not warn about overrides when none were given", async () => {
     await addDockerfile();
     await engineFor("auto");
-    assert.ok(!logs.some((l) => l.includes("overrides are ignored")));
+    assert.ok(!logs.some((l) => l.includes("override is ignored")));
   });
 });
 
@@ -137,7 +139,7 @@ describe("buildAppImage — dockerfile mode without a Dockerfile", () => {
         mode: "dockerfile",
         onLogLine
       }),
-      /no Dockerfile was found at the repo root/
+      /Dockerfile was not found in the repository/
     );
     // No engine announcement: the mode was rejected before selection.
     assert.equal(announcedEngine(), null);
@@ -148,7 +150,7 @@ describe("dockerBuild", () => {
   it("refuses a context with no Dockerfile", async () => {
     await assert.rejects(
       dockerBuild({ contextDir: dir, imageTag: "sohwe/test:1", onLogLine }),
-      /No Dockerfile in repository root/
+      /Dockerfile not found at Dockerfile/
     );
   });
 
@@ -159,7 +161,25 @@ describe("dockerBuild", () => {
     await writeFile(join(dir, "docker", "Dockerfile"), "FROM scratch\n", "utf8");
     await assert.rejects(
       dockerBuild({ contextDir: dir, imageTag: "sohwe/test:1", onLogLine }),
-      /No Dockerfile in repository root/
+      /Dockerfile not found at Dockerfile/
+    );
+  });
+
+  it("builds from a nested Dockerfile when configured", async () => {
+    const { mkdir } = await import("node:fs/promises");
+    await mkdir(join(dir, "apps", "api"), { recursive: true });
+    await writeFile(join(dir, "apps", "api", "Dockerfile"), "FROM scratch\n");
+    await buildAppImage({
+      contextDir: dir,
+      imageTag: "sohwe/test:1",
+      mode: "auto",
+      dockerfilePath: "apps/api/Dockerfile",
+      dockerTarget: "api",
+      onLogLine
+    }).catch(() => {});
+    assert.equal(announcedEngine(), "dockerfile");
+    assert.ok(
+      logs.some((l) => l.includes("apps/api/Dockerfile, target api"))
     );
   });
 });
@@ -219,6 +239,75 @@ describe("dockerBuildArgv", () => {
   it("keeps the context last so docker still parses it as the context", () => {
     const argv = dockerBuildArgv("/ctx", "img:1", { A: "1", B: "2" });
     assert.equal(argv.at(-1), "/ctx");
+  });
+
+  it("adds a nested Dockerfile and multi-stage target", () => {
+    const argv = dockerBuildArgv(dir, "img:1", undefined, {
+      dockerfilePath: "apps/api/Dockerfile",
+      dockerTarget: "worker"
+    });
+    assert.deepEqual(argv, [
+      "build",
+      "-t",
+      "img:1",
+      "--file",
+      join(dir, "apps/api/Dockerfile"),
+      "--target",
+      "worker",
+      dir
+    ]);
+  });
+
+  it("keeps the default Dockerfile implicit", () => {
+    assert.deepEqual(
+      dockerBuildArgv(dir, "img:1", undefined, { dockerfilePath: "Dockerfile" }),
+      ["build", "-t", "img:1", dir]
+    );
+  });
+});
+
+describe("resolveDockerfilePath", () => {
+  it("resolves a repository-relative nested path", () => {
+    assert.equal(
+      resolveDockerfilePath(dir, "apps/api/Dockerfile"),
+      join(dir, "apps/api/Dockerfile")
+    );
+  });
+
+  it("rejects absolute paths and traversal", () => {
+    assert.throws(() => resolveDockerfilePath(dir, "/tmp/Dockerfile"), /relative/);
+    assert.throws(
+      () => resolveDockerfilePath(dir, "../Dockerfile"),
+      /inside the repository/
+    );
+  });
+
+  it("rejects a symlink that escapes the repository", async () => {
+    const { symlink } = await import("node:fs/promises");
+    const outside = join(tmpdir(), `sohwe-outside-${Date.now()}`);
+    await writeFile(outside, "FROM scratch\n");
+    await symlink(outside, join(dir, "Dockerfile"));
+    try {
+      assert.throws(
+        () => resolveDockerfilePath(dir, "Dockerfile"),
+        /resolves outside/
+      );
+    } finally {
+      await rm(outside, { force: true });
+    }
+  });
+});
+
+describe("resolveDockerTarget", () => {
+  it("normalizes a valid target and treats an empty target as absent", () => {
+    assert.equal(resolveDockerTarget(" worker-prod "), "worker-prod");
+    assert.equal(resolveDockerTarget("  "), null);
+  });
+
+  it("rejects values that could be parsed as docker options", () => {
+    for (const target of ["--no-cache", "api target", "/worker"]) {
+      assert.throws(() => resolveDockerTarget(target), /Docker target/);
+    }
   });
 });
 

@@ -8,35 +8,189 @@ datasource db {
 }
 
 model Organization {
-  id           String        @id @default(uuid())
-  name         String
-  slug         String        @unique
-  createdAt    DateTime      @default(now()) @map("created_at")
-  users        User[]
-  applications Application[]
-  backupDestinations BackupDestination[]
-  bundles            Bundle[]
-  backupSchedules    BackupSchedule[]
-  githubApp          GitHubApp?
-  webhookDeliveries  WebhookDelivery[]
-  invitations        Invitation[]
-  auditLogs          AuditLog[]
-  datastores         Datastore[]
+  id                     String                  @id @default(uuid())
+  name                   String
+  slug                   String                  @unique
+  createdAt              DateTime                @default(now()) @map("created_at")
+  users                  User[]
+  applications           Application[]
+  projects               Project[]
+  backupDestinations     BackupDestination[]
+  bundles                Bundle[]
+  backupSchedules        BackupSchedule[]
+  githubApp              GitHubApp?
+  webhookDeliveries      WebhookDelivery[]
+  invitations            Invitation[]
+  auditLogs              AuditLog[]
+  datastores             Datastore[]
   dnsProviderCredentials DnsProviderCredential[]
 
   @@map("organizations")
 }
 
+// --- Phase 9: projects and coordinated multi-service releases -------------
+
+// Applications remain the backwards-compatible single-container deployment
+// model. A Project is the multi-service deployment group: one repository and
+// branch are resolved once, then every Service is built from that exact commit.
+model Project {
+  id                String                    @id @default(uuid())
+  organizationId    String                    @map("organization_id")
+  organization      Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name              String
+  slug              String
+  gitRepo           String                    @map("git_repository")
+  gitBranch         String                    @default("main") @map("git_branch")
+  repoFullName      String?                   @map("repo_full_name")
+  autoDeploy        Boolean                   @default(false) @map("auto_deploy")
+  status            String                    @default("idle") // idle | deploying | running | crashed | stopped
+  envVarsEncrypted  Bytes?                    @map("env_vars_encrypted")
+  currentReleaseId  String?                   @unique @map("current_release_id")
+  currentRelease    ProjectRelease?           @relation("CurrentProjectRelease", fields: [currentReleaseId], references: [id], onDelete: SetNull)
+  services          Service[]
+  releases          ProjectRelease[]          @relation("ProjectReleases")
+  logs              ServiceLog[]
+  datastoreBindings ProjectDatastoreBinding[]
+  createdAt         DateTime                  @default(now()) @map("created_at")
+  updatedAt         DateTime                  @updatedAt @map("updated_at")
+
+  @@unique([organizationId, slug])
+  @@index([repoFullName])
+  @@map("projects")
+}
+
+// A service is configuration, not a mutable Docker container identity.
+// `http` is routed; `worker` is long-running but private; `release` runs once
+// before a release is promoted. A project may have at most one release service
+// (enforced by the API; PostgreSQL migration adds the partial unique index).
+model Service {
+  id                 String              @id @default(uuid())
+  projectId          String              @map("project_id")
+  project            Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name               String
+  slug               String
+  kind               String // http | worker | release
+  buildMode          String              @default("dockerfile") @map("build_mode")
+  buildCmd           String?             @map("build_command")
+  startCmd           String?             @map("start_command")
+  runtimeCmd         String?             @map("runtime_command")
+  serviceDirectory   String              @default(".") @map("service_directory")
+  workspaceSelector  String?             @map("workspace_selector")
+  dockerfilePath     String              @default("Dockerfile") @map("dockerfile_path")
+  dockerTarget       String?             @map("docker_target")
+  imageGroup         String?             @map("image_group")
+  port               Int?
+  envVarsEncrypted   Bytes?              @map("env_vars_encrypted")
+  buildArgsEncrypted Bytes?              @map("build_args_encrypted")
+  memoryLimitMb      Int?                @map("memory_limit_mb")
+  cpuLimit           Float?              @map("cpu_limit")
+  restartPolicy      String              @default("unless-stopped") @map("restart_policy")
+  domains            ServiceDomain[]
+  deployments        ServiceDeployment[]
+  logs               ServiceLog[]
+  createdAt          DateTime            @default(now()) @map("created_at")
+  updatedAt          DateTime            @updatedAt @map("updated_at")
+
+  @@unique([projectId, slug])
+  @@index([projectId, kind])
+  @@map("services")
+}
+
+model ServiceDomain {
+  id        String   @id @default(uuid())
+  serviceId String   @map("service_id")
+  service   Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  hostname  String   @unique
+  isPrimary Boolean  @default(false) @map("is_primary")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([serviceId])
+  @@map("service_domains")
+}
+
+model ProjectRelease {
+  id                 String              @id @default(uuid())
+  projectId          String              @map("project_id")
+  project            Project             @relation("ProjectReleases", fields: [projectId], references: [id], onDelete: Cascade)
+  currentForProject  Project?            @relation("CurrentProjectRelease")
+  commitSha          String?             @map("commit_sha")
+  commitMessage      String?             @map("commit_message") @db.Text
+  trigger            String              @default("manual") // manual | push | rollback
+  sourceReleaseId    String?             @map("source_release_id")
+  sourceRelease      ProjectRelease?     @relation("ProjectReleaseRollback", fields: [sourceReleaseId], references: [id], onDelete: SetNull)
+  rollbackReleases   ProjectRelease[]    @relation("ProjectReleaseRollback")
+  status             String              @default("pending") // pending | building | releasing | deploying | success | failed
+  errorMessage       String?             @map("error_message") @db.Text
+  startedAt          DateTime?           @map("started_at")
+  finishedAt         DateTime?           @map("finished_at")
+  serviceDeployments ServiceDeployment[]
+  logs               ServiceLog[]
+  createdAt          DateTime            @default(now()) @map("created_at")
+
+  @@index([projectId, createdAt])
+  @@map("project_releases")
+}
+
+model ServiceDeployment {
+  id           String         @id @default(uuid())
+  releaseId    String         @map("release_id")
+  release      ProjectRelease @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+  serviceId    String         @map("service_id")
+  service      Service        @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  imageTag     String?        @map("image_tag")
+  status       String         @default("pending") // pending | building | built | running | success | failed
+  buildLogs    String?        @map("build_logs") @db.Text
+  errorMessage String?        @map("error_message") @db.Text
+  exitCode     Int?           @map("exit_code")
+  containerId  String?        @map("container_id")
+  startedAt    DateTime?      @map("started_at")
+  finishedAt   DateTime?      @map("finished_at")
+  logs         ServiceLog[]
+  createdAt    DateTime       @default(now()) @map("created_at")
+
+  @@unique([releaseId, serviceId])
+  @@index([serviceId, createdAt])
+  @@map("service_deployments")
+}
+
+// Runtime and one-shot job output is persisted before it is broadcast. This
+// keeps per-service history available across SSE, worker, and container restarts.
+model ServiceLog {
+  id                    BigInt            @id @default(autoincrement())
+  projectId             String            @map("project_id")
+  project               Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  serviceId             String            @map("service_id")
+  service               Service           @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  releaseId             String            @map("release_id")
+  release               ProjectRelease    @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+  serviceDeploymentId   String            @map("service_deployment_id")
+  serviceDeployment     ServiceDeployment @relation(fields: [serviceDeploymentId], references: [id], onDelete: Cascade)
+  stream                String // stdout | stderr | system
+  level                 String            @default("info") // debug | info | warn | error
+  message               String            @db.Text
+  eventKey              String?           @unique @map("event_key")
+  containerId           String?           @map("container_id")
+  containerTimestamp    DateTime?         @map("container_timestamp")
+  containerTimestampRaw String?           @map("container_timestamp_raw")
+  restartNumber         Int               @default(0) @map("restart_number")
+  createdAt             DateTime          @default(now()) @map("created_at")
+
+  @@index([projectId, id])
+  @@index([serviceId, id])
+  @@index([releaseId, id])
+  @@map("service_logs")
+}
+
 model User {
-  id             String       @id @default(uuid())
-  email          String       @unique
-  passwordHash   String       @map("password_hash")
-  name           String?
-  role           String       @default("owner") // owner | admin | member
-  organizationId String       @map("organization_id")
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  createdAt      DateTime     @default(now()) @map("created_at")
-  sessions       Session[]
+  id                  String       @id @default(uuid())
+  email               String       @unique
+  passwordHash        String       @map("password_hash")
+  name                String?
+  role                String       @default("owner") // owner | admin | member
+  organizationId      String       @map("organization_id")
+  organization        Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdAt           DateTime     @default(now()) @map("created_at")
+  sessions            Session[]
   invitationsSent     Invitation[] @relation("InvitationInviter")
   invitationsAccepted Invitation[] @relation("InvitationAcceptor")
   auditLogs           AuditLog[]
@@ -56,39 +210,42 @@ model Session {
 }
 
 model Application {
-  id                String       @id @default(uuid())
-  organizationId    String       @map("organization_id")
-  organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  name              String
-  slug              String
-  gitRepo           String       @map("git_repository")
-  gitBranch         String       @default("main") @map("git_branch")
+  id                 String             @id @default(uuid())
+  organizationId     String             @map("organization_id")
+  organization       Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name               String
+  slug               String
+  gitRepo            String             @map("git_repository")
+  gitBranch          String             @default("main") @map("git_branch")
   // `owner/repo` when gitRepo points at GitHub. Denormalized from gitRepo so
   // the push webhook can resolve a delivery to apps with one indexed lookup
   // instead of parsing every repo URL in the org.
-  repoFullName      String?      @map("repo_full_name")
+  repoFullName       String?            @map("repo_full_name")
   // Deploy automatically when the tracked branch (gitBranch) receives a push.
-  autoDeploy        Boolean      @default(false) @map("auto_deploy")
-  buildMode         String       @default("auto") @map("build_mode") // auto | dockerfile | nixpacks
-  buildCmd          String?      @map("build_command")
-  startCmd          String?      @map("start_command")
-  port              Int          @default(3000)
-  envVarsEncrypted  Bytes?       @map("env_vars_encrypted")
+  autoDeploy         Boolean            @default(false) @map("auto_deploy")
+  buildMode          String             @default("auto") @map("build_mode") // auto | dockerfile | nixpacks
+  buildCmd           String?            @map("build_command")
+  startCmd           String?            @map("start_command")
+  runtimeCmd         String?            @map("runtime_command")
+  dockerfilePath     String             @default("Dockerfile") @map("dockerfile_path")
+  dockerTarget       String?            @map("docker_target")
+  port               Int                @default(3000)
+  envVarsEncrypted   Bytes?             @map("env_vars_encrypted")
   // Variables exposed to the *build* (nixpacks `--env`, docker `--build-arg`),
   // e.g. NIXPACKS_NODE_VERSION or NEXT_PUBLIC_* values Next.js inlines at build
   // time. Separate from envVarsEncrypted because these end up baked into image
   // layers and are visible in `docker history`; runtime env vars are not.
-  buildArgsEncrypted Bytes?      @map("build_args_encrypted")
-  memoryLimitMb     Int?         @map("memory_limit_mb")
-  cpuLimit          Float?       @map("cpu_limit")
-  status            String       @default("idle") // idle | deploying | running | crashed | stopped
-  createdAt         DateTime     @default(now()) @map("created_at")
-  updatedAt         DateTime     @updatedAt @map("updated_at")
-  deployments       Deployment[]
-  volumes           Volume[]
-  domains           Domain[]
-  alertDestinations AlertDestination[]
-  datastoreBindings DatastoreBinding[]
+  buildArgsEncrypted Bytes?             @map("build_args_encrypted")
+  memoryLimitMb      Int?               @map("memory_limit_mb")
+  cpuLimit           Float?             @map("cpu_limit")
+  status             String             @default("idle") // idle | deploying | running | crashed | stopped
+  createdAt          DateTime           @default(now()) @map("created_at")
+  updatedAt          DateTime           @updatedAt @map("updated_at")
+  deployments        Deployment[]
+  volumes            Volume[]
+  domains            Domain[]
+  alertDestinations  AlertDestination[]
+  datastoreBindings  DatastoreBinding[]
 
   @@unique([organizationId, slug])
   @@index([repoFullName])
@@ -168,7 +325,7 @@ model AlertDestination {
   id            String      @id @default(uuid())
   applicationId String      @map("application_id")
   application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
-  type          String      // discord | slack | generic
+  type          String // discord | slack | generic
   name          String
   url           String
   enabled       Boolean     @default(true)
@@ -191,23 +348,23 @@ model AlertDestination {
 // the API; the private key signs app JWTs and the webhook secret verifies
 // deliveries, both server-side only.
 model GitHubApp {
-  id                   String       @id @default(uuid())
-  organizationId       String       @unique @map("organization_id")
-  organization         Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  appId                Int          @map("app_id")
+  id                   String               @id @default(uuid())
+  organizationId       String               @unique @map("organization_id")
+  organization         Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  appId                Int                  @map("app_id")
   slug                 String
   name                 String
-  clientId             String       @map("client_id")
-  htmlUrl              String       @map("html_url")
+  clientId             String               @map("client_id")
+  htmlUrl              String               @map("html_url")
   /// GitHub account/org that owns the app, for display only.
-  ownerLogin           String?      @map("owner_login")
-  credentialsEncrypted Bytes        @map("credentials_encrypted")
+  ownerLogin           String?              @map("owner_login")
+  credentialsEncrypted Bytes                @map("credentials_encrypted")
   /// New Apps are installable on multiple accounts. False identifies a legacy
   /// private App that must be reconnected before another account can install it.
-  multiAccount         Boolean      @default(false) @map("multi_account")
+  multiAccount         Boolean              @default(false) @map("multi_account")
   installations        GitHubInstallation[]
-  createdAt            DateTime     @default(now()) @map("created_at")
-  updatedAt            DateTime     @updatedAt @map("updated_at")
+  createdAt            DateTime             @default(now()) @map("created_at")
+  updatedAt            DateTime             @updatedAt @map("updated_at")
 
   @@index([appId])
   @@map("github_apps")
@@ -275,8 +432,8 @@ model BackupDestination {
   organizationId  String           @map("organization_id")
   organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   name            String
-  kind            String           // local | s3
-  config          Json             // local: { path }; s3: { bucket, region, endpoint?, prefix? }
+  kind            String // local | s3
+  config          Json // local: { path }; s3: { bucket, region, endpoint?, prefix? }
   secretEncrypted Bytes?           @map("secret_encrypted") // s3: encrypted { accessKeyId, secretAccessKey }
   createdAt       DateTime         @default(now()) @map("created_at")
   updatedAt       DateTime         @updatedAt @map("updated_at")
@@ -329,6 +486,7 @@ model BackupSchedule {
   @@index([organizationId])
   @@map("backup_schedules")
 }
+
 // --- Phase 6: Multi-user ----------------------------------------------------
 
 // A pending offer to join an organization at a given role. Sohwe does not send
@@ -403,24 +561,25 @@ model AuditLog {
 // credentials on every row-creation path (create and restore), so the worker
 // only ever decrypts.
 model Datastore {
-  id                   String       @id @default(uuid())
-  organizationId       String       @map("organization_id")
-  organization         Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  kind                 String       // postgres | redis
+  id                   String                    @id @default(uuid())
+  organizationId       String                    @map("organization_id")
+  organization         Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  kind                 String // postgres | redis
   name                 String
   slug                 String
-  engineVersion        String       @map("engine_version") // postgres: 16 | 17; redis: 7
-  status               String       @default("provisioning") // provisioning | running | deleting | error | idle
-  memoryLimitMb        Int?         @map("memory_limit_mb")
-  cpuLimit             Float?       @map("cpu_limit")
-  storageSizeHintBytes BigInt?      @map("storage_size_hint_bytes")
+  engineVersion        String                    @map("engine_version") // postgres: 16 | 17; redis: 7
+  status               String                    @default("provisioning") // provisioning | running | deleting | error | idle
+  memoryLimitMb        Int?                      @map("memory_limit_mb")
+  cpuLimit             Float?                    @map("cpu_limit")
+  storageSizeHintBytes BigInt?                   @map("storage_size_hint_bytes")
   /// Host port the service is published on; null means private-only.
-  publicPort           Int?         @unique @map("public_port")
-  credentialsEncrypted Bytes        @map("credentials_encrypted")
-  errorMessage         String?      @map("error_message") @db.Text
-  createdAt            DateTime     @default(now()) @map("created_at")
-  updatedAt            DateTime     @updatedAt @map("updated_at")
+  publicPort           Int?                      @unique @map("public_port")
+  credentialsEncrypted Bytes                     @map("credentials_encrypted")
+  errorMessage         String?                   @map("error_message") @db.Text
+  createdAt            DateTime                  @default(now()) @map("created_at")
+  updatedAt            DateTime                  @updatedAt @map("updated_at")
   bindings             DatastoreBinding[]
+  projectBindings      ProjectDatastoreBinding[]
 
   @@unique([organizationId, slug])
   @@index([organizationId])
@@ -444,6 +603,24 @@ model DatastoreBinding {
   @@map("datastore_bindings")
 }
 
+// A project binding is resolved at deploy time rather than copying a password
+// into every service row. Empty serviceIds means every service; otherwise the
+// same connection URL is injected only into the selected services.
+model ProjectDatastoreBinding {
+  id          String    @id @default(uuid())
+  datastoreId String    @map("datastore_id")
+  datastore   Datastore @relation(fields: [datastoreId], references: [id], onDelete: Cascade)
+  projectId   String    @map("project_id")
+  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  envKey      String    @map("env_key")
+  serviceIds  String[]  @map("service_ids")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  @@unique([datastoreId, projectId])
+  @@index([projectId])
+  @@map("project_datastore_bindings")
+}
+
 // --- Phase 8: Custom domain DNS assist ---------------------------------------
 
 // An org-level DNS provider API credential (currently only "cloudflare"), used
@@ -454,7 +631,7 @@ model DnsProviderCredential {
   id             String       @id @default(uuid())
   organizationId String       @map("organization_id")
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  provider       String       // cloudflare
+  provider       String // cloudflare
   tokenEncrypted Bytes        @map("token_encrypted")
   createdAt      DateTime     @default(now()) @map("created_at")
   updatedAt      DateTime     @updatedAt @map("updated_at")

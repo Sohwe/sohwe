@@ -8,6 +8,7 @@ import {
   canonicalize,
   parseBundle,
   type BundleAppInput,
+  type BundleProjectInput,
   type BuildBundleOptions
 } from "./index";
 
@@ -21,6 +22,9 @@ function sampleApp(overrides: Partial<BundleAppInput> = {}): BundleAppInput {
     buildMode: "auto",
     buildCmd: null,
     startCmd: "node server.js",
+    runtimeCmd: "pnpm --filter @acme/api start",
+    dockerfilePath: "apps/api/Dockerfile",
+    dockerTarget: "runner",
     port: 3000,
     domain: "web.example.com",
     domains: ["web.example.com"],
@@ -41,6 +45,79 @@ const OPTS: BuildBundleOptions = {
   includeSecrets: true,
   source: { orgName: "Acme", sohweVersion: "0.4.0" },
   createdAtIso: "2026-01-01T00:00:00.000Z"
+};
+
+const FLEET_PROJECT: BundleProjectInput = {
+  name: "FleetOptics",
+  slug: "fleetoptics",
+  gitRepo: "https://github.com/acme/FleetOptics-Backend",
+  gitBranch: "main",
+  envVars: { S3_SECRET_KEY: "project-secret" },
+  services: [
+    {
+      name: "API",
+      slug: "api",
+      kind: "http",
+      buildMode: "dockerfile",
+      buildCmd: null,
+      startCmd: null,
+      runtimeCmd: null,
+      serviceDirectory: ".",
+      workspaceSelector: null,
+      dockerfilePath: "Dockerfile",
+      dockerTarget: "api",
+      imageGroup: null,
+      port: 3000,
+      domains: ["api.example.com"],
+      memoryLimitMb: 512,
+      cpuLimit: 1,
+      restartPolicy: "unless-stopped",
+      envVars: { API_ONLY: "secret" },
+      buildArgs: {}
+    },
+    {
+      name: "Worker",
+      slug: "worker",
+      kind: "worker",
+      buildMode: "dockerfile",
+      buildCmd: null,
+      startCmd: null,
+      runtimeCmd: null,
+      serviceDirectory: ".",
+      workspaceSelector: null,
+      dockerfilePath: "Dockerfile",
+      dockerTarget: "worker",
+      imageGroup: null,
+      port: null,
+      domains: [],
+      memoryLimitMb: 512,
+      cpuLimit: 1,
+      restartPolicy: "unless-stopped",
+      envVars: {},
+      buildArgs: {}
+    },
+    {
+      name: "Migrate",
+      slug: "migrate",
+      kind: "release",
+      buildMode: "dockerfile",
+      buildCmd: null,
+      startCmd: null,
+      runtimeCmd: null,
+      serviceDirectory: ".",
+      workspaceSelector: null,
+      dockerfilePath: "Dockerfile",
+      dockerTarget: "migrate",
+      imageGroup: null,
+      port: null,
+      domains: [],
+      memoryLimitMb: null,
+      cpuLimit: null,
+      restartPolicy: "no",
+      envVars: {},
+      buildArgs: {}
+    }
+  ]
 };
 
 describe("canonicalize", () => {
@@ -86,6 +163,9 @@ describe("buildBundle / parseBundle round-trip", () => {
     assert.equal(app.port, 3000);
     assert.equal(app.cpuLimit, 1.5);
     assert.equal(app.memoryLimitMb, 512);
+    assert.equal(app.runtimeCmd, "pnpm --filter @acme/api start");
+    assert.equal(app.dockerfilePath, "apps/api/Dockerfile");
+    assert.equal(app.dockerTarget, "runner");
     assert.equal(app.domain, "web.example.com");
     assert.deepEqual(app.volumes, [{ mountPath: "/data", sizeBytes: "1048576" }]);
     assert.deepEqual(app.alertDestinations, [
@@ -549,10 +629,10 @@ const GOLDEN_BUNDLE_V4 = {
   "signature": "G8mjHxR6zYO0wKVM0L++RhzZrUncdYSF6J9UG/hL1Y4="
 };
 
-describe("golden bundle v4 (current format)", () => {
+describe("golden bundle v4 (format compatibility)", () => {
   it("matches the current schema and constants", () => {
     assert.equal(GOLDEN_BUNDLE_V4.format, BUNDLE_FORMAT);
-    assert.equal(GOLDEN_BUNDLE_V4.version, BUNDLE_VERSION);
+    assert.equal(GOLDEN_BUNDLE_V4.version, 4);
     assert.equal(BundleManifestSchema.safeParse(GOLDEN_BUNDLE_V4).success, true);
   });
 
@@ -564,6 +644,9 @@ describe("golden bundle v4 (current format)", () => {
       "web.example.com",
       "www.example.com"
     ]);
+    assert.equal(parsed.apps[0]!.runtimeCmd, null);
+    assert.equal(parsed.apps[0]!.dockerfilePath, "Dockerfile");
+    assert.equal(parsed.apps[0]!.dockerTarget, null);
   });
 
   it("signs the domains list (tampering breaks the signature)", () => {
@@ -605,5 +688,38 @@ describe("build variables round-trip", () => {
   it("omits the block for an app with no build variables", () => {
     const bundle = buildBundle([sampleApp({ buildArgs: {} })], OPTS);
     assert.equal(bundle.apps[0]!.buildArgs, undefined);
+  });
+});
+
+describe("v5 Docker deployment settings", () => {
+  it("signs settings that determine the image stage and running process", () => {
+    const bundle = buildBundle([sampleApp()], OPTS);
+    const tampered = structuredClone(bundle);
+    tampered.apps[0]!.dockerTarget = "worker";
+    assert.throws(
+      () => parseBundle(tampered, OPTS.passphrase),
+      /Invalid passphrase or corrupted bundle/
+    );
+  });
+});
+
+describe("v6 projects and services", () => {
+  it("round-trips the FleetOptics topology and encrypted variables", () => {
+    const bundle = buildBundle([], OPTS, [], [FLEET_PROJECT]);
+    const raw = JSON.stringify(bundle);
+    assert.equal(raw.includes("project-secret"), false);
+    assert.equal(raw.includes('"projects"'), true);
+    const parsed = parseBundle(bundle, OPTS.passphrase);
+    assert.equal(parsed.version, 6);
+    assert.deepEqual(
+      parsed.projects[0]?.services.map((service) => [service.kind, service.dockerTarget]),
+      [["http", "api"], ["worker", "worker"], ["release", "migrate"]]
+    );
+    assert.deepEqual(parsed.projects[0]?.envVars, {
+      S3_SECRET_KEY: "project-secret"
+    });
+    assert.deepEqual(parsed.projects[0]?.services[0]?.envVars, {
+      API_ONLY: "secret"
+    });
   });
 });

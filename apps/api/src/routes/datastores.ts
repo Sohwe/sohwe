@@ -6,6 +6,7 @@ import {
   appInternalNetworkName,
   buildDatastoreConnectionUrl,
   CreateDatastoreBindingSchema,
+  CreateProjectDatastoreBindingSchema,
   CreateDatastoreSchema,
   DATASTORE_LABEL,
   DATASTORE_PUBLIC_PORT_MAX,
@@ -15,6 +16,7 @@ import {
   datastoreDefaultEnvKey,
   datastoreEngineVersions,
   datastoreServicePort,
+  projectInternalNetworkName,
   type DatastoreCredentials,
   type DatastoreKind
 } from "@sohwe/types";
@@ -30,6 +32,10 @@ const docker = new Docker();
 
 const IdParam = z.object({ id: z.string().uuid() });
 const BindingParam = z.object({
+  id: z.string().uuid(),
+  bindingId: z.string().uuid()
+});
+const ProjectBindingParam = z.object({
   id: z.string().uuid(),
   bindingId: z.string().uuid()
 });
@@ -157,6 +163,37 @@ async function connectDatastoreToApp(
   }
 }
 
+async function ensureProjectNetwork(projectId: string): Promise<void> {
+  try {
+    await docker.createNetwork({
+      Name: projectInternalNetworkName(projectId),
+      Driver: "bridge",
+      Internal: false,
+      Labels: { "sohwe.managed": "true", "sohwe.project": projectId }
+    });
+  } catch {
+    // A later project deploy/provision retries the idempotent connection.
+  }
+}
+
+async function connectDatastoreToProject(
+  datastoreId: string,
+  slug: string,
+  projectId: string,
+  connect: boolean
+): Promise<void> {
+  try {
+    const container = docker.getContainer(datastoreContainerName(slug));
+    const info = await container.inspect();
+    if (info.Config?.Labels?.[DATASTORE_LABEL] !== datastoreId) return;
+    const net = docker.getNetwork(projectInternalNetworkName(projectId));
+    if (connect) await net.connect({ Container: info.Id });
+    else await net.disconnect({ Container: info.Id, Force: true });
+  } catch {
+    // Best-effort: provisioning and deploying both reconcile the connection.
+  }
+}
+
 export async function registerDatastoreRoutes(
   app: FastifyInstance,
   config: ApiConfig
@@ -255,6 +292,10 @@ export async function registerDatastoreRoutes(
           bindings: {
             include: { application: { select: { name: true, slug: true } } },
             orderBy: { createdAt: "asc" }
+          },
+          projectBindings: {
+            include: { project: { select: { name: true, slug: true } } },
+            orderBy: { createdAt: "asc" }
           }
         }
       });
@@ -283,6 +324,15 @@ export async function registerDatastoreRoutes(
           appSlug: b.application.slug,
           envKeys: b.envKeys,
           createdAt: b.createdAt
+        })),
+        projectBindings: row.projectBindings.map((binding) => ({
+          id: binding.id,
+          projectId: binding.projectId,
+          projectName: binding.project.name,
+          projectSlug: binding.project.slug,
+          envKey: binding.envKey,
+          serviceIds: binding.serviceIds,
+          createdAt: binding.createdAt
         }))
       };
     }
@@ -626,6 +676,110 @@ export async function registerDatastoreRoutes(
           appSlug: binding.application.slug,
           mode: "datastore-injection",
           ...envChangeMetadata(before, after)
+        }
+      });
+      return { ok: true };
+    }
+  );
+
+  app.post(
+    "/api/datastores/:id/project-bindings",
+    {
+      preHandler: [requireRole("admin")],
+      schema: { params: IdParam, body: CreateProjectDatastoreBindingSchema },
+      ...secretOpts
+    },
+    async (req, reply) => {
+      const u = req.user!;
+      const { id } = IdParam.parse(req.params);
+      const body = CreateProjectDatastoreBindingSchema.parse(req.body);
+      const ds = await prisma.datastore.findFirst({
+        where: { id, organizationId: u.organizationId }
+      });
+      if (!ds) return reply.notFound();
+      const project = await prisma.project.findFirst({
+        where: { id: body.projectId, organizationId: u.organizationId },
+        include: { services: { select: { id: true, slug: true } } }
+      });
+      if (!project) return reply.notFound("Project not found");
+      const validIds = new Set(project.services.map((service) => service.id));
+      if (body.serviceIds.some((serviceId) => !validIds.has(serviceId))) {
+        return reply.badRequest("Every selected service must belong to the project");
+      }
+      const envKey = body.envKey ?? datastoreDefaultEnvKey(ds.kind as DatastoreKind);
+      try {
+        const binding = await prisma.projectDatastoreBinding.create({
+          data: {
+            datastoreId: ds.id,
+            projectId: project.id,
+            envKey,
+            serviceIds: [...new Set(body.serviceIds)]
+          }
+        });
+        await ensureProjectNetwork(project.id);
+        await connectDatastoreToProject(ds.id, ds.slug, project.id, true);
+        await recordAudit(req, {
+          action: "datastore.bind",
+          targetType: "datastore",
+          targetId: ds.id,
+          targetLabel: `${ds.slug} -> ${project.slug}`,
+          metadata: {
+            projectId: project.id,
+            envKey,
+            serviceIds: binding.serviceIds,
+            mode: "project-datastore-injection"
+          }
+        });
+        return reply.status(201).send({
+          id: binding.id,
+          projectId: binding.projectId,
+          envKey: binding.envKey,
+          serviceIds: binding.serviceIds,
+          note: "Takes effect on the project's next release"
+        });
+      } catch (error) {
+        if (isUniqueViolation(error)) {
+          return reply.conflict("This project is already bound to the datastore");
+        }
+        throw error;
+      }
+    }
+  );
+
+  app.delete(
+    "/api/datastores/:id/project-bindings/:bindingId",
+    {
+      preHandler: [requireRole("admin")],
+      schema: { params: ProjectBindingParam },
+      ...secretOpts
+    },
+    async (req, reply) => {
+      const u = req.user!;
+      const { id, bindingId } = ProjectBindingParam.parse(req.params);
+      const ds = await prisma.datastore.findFirst({
+        where: { id, organizationId: u.organizationId }
+      });
+      if (!ds) return reply.notFound();
+      const binding = await prisma.projectDatastoreBinding.findFirst({
+        where: { id: bindingId, datastoreId: ds.id },
+        include: { project: { select: { id: true, slug: true } } }
+      });
+      if (!binding) return reply.notFound();
+      await prisma.projectDatastoreBinding.delete({ where: { id: binding.id } });
+      await connectDatastoreToProject(
+        ds.id,
+        ds.slug,
+        binding.project.id,
+        false
+      );
+      await recordAudit(req, {
+        action: "datastore.unbind",
+        targetType: "datastore",
+        targetId: ds.id,
+        targetLabel: `${ds.slug} -> ${binding.project.slug}`,
+        metadata: {
+          projectId: binding.project.id,
+          mode: "project-datastore-injection"
         }
       });
       return { ok: true };

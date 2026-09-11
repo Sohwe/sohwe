@@ -12,6 +12,49 @@ write-ups.
 
 ### Added
 
+- **Phase 9 projects and coordinated services.** A new Project owns one Git
+  repository/branch and any number of `http`, `worker`, and one-shot `release`
+  services. A project release clones once, records one commit SHA, builds every
+  required image before touching the live release, runs the release/migration
+  service exactly once, starts and health-gates the HTTP/worker candidates, and
+  only then promotes them. A failed build, migration, or candidate startup
+  leaves the prior release live; rollback reuses every prior service image and
+  warns that migrations are forward-only. Existing Applications retain their
+  original single-container API and deploy path.
+
+- **Private project networking and project datastore bindings.** Project
+  services share an isolated bridge with stable service-slug DNS aliases; only
+  HTTP services also join Traefik. Managed Postgres/Redis can be bound once to
+  all or selected services, and its encrypted connection URL is resolved at
+  deploy time. Shared project variables and service overrides are encrypted at
+  rest. The dashboard now has a Projects view with a FleetOptics-ready
+  API/worker/migration form.
+
+- **Per-service project logs.** HTTP, worker, and release-job stdout/stderr are
+  stored with project, service, release, deployment, container, source stream,
+  severity, and the original Docker timestamp before live publication. History
+  is bounded, individual events are capped, known project/service/datastore
+  secrets are redacted, Docker log rotation is configured, and authenticated
+  SSE subscribes before replay so persisted/live handoff has no gap. Stable
+  event keys deduplicate replay when the worker reattaches after a restart.
+
+- **Portable bundle v6.** Project/service configuration, routing, commands,
+  variables, and project datastore bindings now survive export/restore. Secret
+  blocks remain excluded unless encrypted-secret export is selected; v1-v5
+  bundles remain readable.
+
+- **Phase 9 monorepo build foundation.** An application can now keep the
+  repository root as its Docker build context while selecting a nested
+  Dockerfile (for example `apps/api/Dockerfile`) and an optional multi-stage
+  target (`api`, `worker`, or `migrate`). Paths are constrained to the cloned
+  repository, including a real-path check that rejects symlink escapes. An
+  optional container command override makes it possible to run a second
+  long-lived process from the same image; leaving it empty preserves the image
+  `CMD`. The API, create/settings UI, worker, and application responses carry
+  all three settings. Existing applications continue to use `Dockerfile` and
+  their image command. Portable bundles move to v5 so the settings survive
+  backup/restore; v1-v4 bundles remain readable and receive the old defaults.
+
 - **The running release tag is visible at the bottom of the sidebar.** Expanded desktop and mobile navigation show a labelled version, while the collapsed desktop rail keeps a compact tag with the full value in its tooltip. Release images embed the exact pushed tag (for example `v0.7.0`) into the API and worker; the dashboard reads it from the public runtime config endpoint, so installs that track the mutable `latest` image still report the release they are actually running. Source builds fall back to `dev`.
 
 - **One GitHub App, multiple accounts and organizations.** New instance-owned GitHub Apps are installable on any GitHub account that explicitly approves them, and the Git page now has **Add account or organization** plus one configurable row per installation. Sohwe stores each installation separately, combines their granted repositories, chooses clone/status credentials by repository owner, and audits authenticated installation callbacks as `github.install` without credential material. Webhooks must now pass both the App-wide HMAC check and name an installation previously connected by an authenticated Sohwe admin, so making the App installable by multiple accounts does not let an unsolicited installation trigger a deploy. **Schema migration:** the new `github_installations` table is populated from the previous scalar installation before `github_apps.installation_id` and `installed_at` are dropped; the upgrade path was verified with an existing row and has no down-migration. Existing App registrations keep working, but remain owner-only until reconnected because GitHub cannot retroactively apply the new installability choice from Sohwe.

@@ -37,6 +37,9 @@ export function CreateAppDialog({
   const [cBuildMode, setCBuildMode] = useState<BuildMode>("auto");
   const [cBuildCmd, setCBuildCmd] = useState("");
   const [cStartCmd, setCStartCmd] = useState("");
+  const [cRuntimeCmd, setCRuntimeCmd] = useState("");
+  const [cDockerfilePath, setCDockerfilePath] = useState("Dockerfile");
+  const [cDockerTarget, setCDockerTarget] = useState("");
   const [cDomain, setCDomain] = useState("");
   const [cAutoDeploy, setCAutoDeploy] = useState(false);
   const [repoSearch, setRepoSearch] = useState("");
@@ -93,6 +96,9 @@ export function CreateAppDialog({
         buildMode: cBuildMode,
         buildCmd: cBuildCmd || undefined,
         startCmd: cStartCmd || undefined,
+        runtimeCmd: cRuntimeCmd || undefined,
+        dockerfilePath: cDockerfilePath,
+        dockerTarget: cDockerTarget || undefined,
         // Normalized the same way the Domains tab does, so a pasted URL works
         // here too rather than being rejected as a malformed hostname.
         domain: cDomain.trim() ? normalizeHostname(cDomain) : undefined,
@@ -110,6 +116,9 @@ export function CreateAppDialog({
       setCBuildMode("auto");
       setCBuildCmd("");
       setCStartCmd("");
+      setCRuntimeCmd("");
+      setCDockerfilePath("Dockerfile");
+      setCDockerTarget("");
       setCDomain("");
       setCAutoDeploy(false);
       setRepoSearch("");
@@ -276,6 +285,31 @@ export function CreateAppDialog({
               </Field>
             </div>
           ) : null}
+          {cBuildMode !== "nixpacks" ? (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Dockerfile path">
+                <Input
+                  value={cDockerfilePath}
+                  onChange={(e) => setCDockerfilePath(e.target.value)}
+                  placeholder="Dockerfile or apps/api/Dockerfile"
+                />
+              </Field>
+              <Field label="Docker target (optional)">
+                <Input
+                  value={cDockerTarget}
+                  onChange={(e) => setCDockerTarget(e.target.value)}
+                  placeholder="api, worker, migrate…"
+                />
+              </Field>
+            </div>
+          ) : null}
+          <Field label="Container command override (optional)">
+            <Input
+              value={cRuntimeCmd}
+              onChange={(e) => setCRuntimeCmd(e.target.value)}
+              placeholder="node dist/worker.js"
+            />
+          </Field>
           {githubInstalled ? (
             <label className="flex items-start gap-2 text-sm">
               <input

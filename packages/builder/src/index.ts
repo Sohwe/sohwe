@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { NODE_VERSION_KEY, resolveNodeVersion } from "./node-version";
 
 export type LogHandler = (line: string) => void;
@@ -17,6 +17,10 @@ export type BuildOptions = {
   buildCmd?: string | null;
   /** Optional start command override (nixpacks only). */
   startCmd?: string | null;
+  /** Dockerfile path relative to `contextDir`. Defaults to `Dockerfile`. */
+  dockerfilePath?: string | null;
+  /** Optional named stage from a multi-stage Dockerfile. */
+  dockerTarget?: string | null;
   /** Variables exposed to the build itself. See {@link BuildArgs}. */
   buildArgs?: BuildArgs | null;
   onLogLine: LogHandler;
@@ -45,6 +49,8 @@ export type BuildResult = {
 export type DockerBuildOptions = {
   contextDir: string;
   imageTag: string;
+  dockerfilePath?: string | null;
+  dockerTarget?: string | null;
   buildArgs?: BuildArgs | null;
   onLogLine: LogHandler;
 };
@@ -58,8 +64,68 @@ export type NixpacksBuildOptions = {
   onLogLine: LogHandler;
 };
 
-function hasDockerfile(dir: string): boolean {
-  return existsSync(join(dir, "Dockerfile"));
+const DEFAULT_DOCKERFILE = "Dockerfile";
+const DOCKER_TARGET_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/**
+ * Resolve a repository-relative Dockerfile without allowing it to escape the
+ * cloned build context. The realpath check closes the symlink version of the
+ * same escape; repositories are untrusted input to the worker.
+ */
+export function resolveDockerfilePath(
+  contextDir: string,
+  dockerfilePath?: string | null
+): string {
+  const configured = dockerfilePath?.trim() || DEFAULT_DOCKERFILE;
+  if (configured.includes("\0") || isAbsolute(configured)) {
+    throw new Error("Dockerfile path must be relative to the repository root.");
+  }
+
+  const contextRoot = resolve(contextDir);
+  const candidate = resolve(contextRoot, configured);
+  const fromRoot = relative(contextRoot, candidate);
+  if (fromRoot === ".." || fromRoot.startsWith(`..${sep}`) || isAbsolute(fromRoot)) {
+    throw new Error("Dockerfile path must stay inside the repository root.");
+  }
+
+  if (existsSync(candidate)) {
+    const realRoot = realpathSync(contextRoot);
+    const realCandidate = realpathSync(candidate);
+    const realFromRoot = relative(realRoot, realCandidate);
+    if (
+      realFromRoot === ".." ||
+      realFromRoot.startsWith(`..${sep}`) ||
+      isAbsolute(realFromRoot)
+    ) {
+      throw new Error("Dockerfile path resolves outside the repository root.");
+    }
+    if (!statSync(realCandidate).isFile()) {
+      throw new Error(`Dockerfile path is not a file: ${configured}`);
+    }
+    return realCandidate;
+  }
+
+  return candidate;
+}
+
+/**
+ * Validate a target again at the worker boundary. API validation is not a
+ * substitute here: old rows, restores, or direct database edits are still
+ * untrusted input to a command-line parser.
+ */
+export function resolveDockerTarget(dockerTarget?: string | null): string | null {
+  const target = dockerTarget?.trim();
+  if (!target) return null;
+  if (target.length > 128 || !DOCKER_TARGET_PATTERN.test(target)) {
+    throw new Error(
+      "Docker target may contain only letters, numbers, dots, underscores, and hyphens."
+    );
+  }
+  return target;
+}
+
+function hasDockerfile(dir: string, dockerfilePath?: string | null): boolean {
+  return existsSync(resolveDockerfilePath(dir, dockerfilePath));
 }
 
 function resolveToolCommand(cmd: string): string {
@@ -148,9 +214,18 @@ function runTool(
 export function dockerBuildArgv(
   contextDir: string,
   imageTag: string,
-  buildArgs?: BuildArgs | null
+  buildArgs?: BuildArgs | null,
+  opts: { dockerfilePath?: string | null; dockerTarget?: string | null } = {}
 ): string[] {
   const args = ["build", "-t", imageTag];
+  const configuredPath = opts.dockerfilePath?.trim();
+  if (configuredPath && configuredPath !== DEFAULT_DOCKERFILE) {
+    args.push("--file", resolveDockerfilePath(contextDir, configuredPath));
+  }
+  const dockerTarget = resolveDockerTarget(opts.dockerTarget);
+  if (dockerTarget) {
+    args.push("--target", dockerTarget);
+  }
   for (const key of Object.keys(buildArgs ?? {})) {
     args.push("--build-arg", key);
   }
@@ -186,22 +261,38 @@ export function nixpacksArgv(
 }
 
 /**
- * Build a Docker image from a Dockerfile at `contextDir/Dockerfile`.
+ * Build a Docker image from a repository-relative Dockerfile while retaining
+ * the repository root as its build context.
  * Streams stdout/stderr to `onLogLine`.
  */
 export async function dockerBuild(opts: DockerBuildOptions): Promise<void> {
-  const { contextDir, imageTag, buildArgs, onLogLine } = opts;
-  if (!hasDockerfile(contextDir)) {
+  const {
+    contextDir,
+    imageTag,
+    dockerfilePath,
+    dockerTarget,
+    buildArgs,
+    onLogLine
+  } = opts;
+  if (!hasDockerfile(contextDir, dockerfilePath)) {
+    const configured = dockerfilePath?.trim() || DEFAULT_DOCKERFILE;
     throw new Error(
-      "No Dockerfile in repository root. Switch build mode to auto/nixpacks or add a Dockerfile."
+      `Dockerfile not found at ${configured}. Switch build mode to auto/nixpacks or correct the Dockerfile path.`
     );
   }
-  await runTool("docker", dockerBuildArgv(contextDir, imageTag, buildArgs), {
-    onLogLine,
-    tool: "docker build",
-    env: buildArgs,
-    secrets: Object.values(buildArgs ?? {})
-  });
+  await runTool(
+    "docker",
+    dockerBuildArgv(contextDir, imageTag, buildArgs, {
+      dockerfilePath,
+      dockerTarget
+    }),
+    {
+      onLogLine,
+      tool: "docker build",
+      env: buildArgs,
+      secrets: Object.values(buildArgs ?? {})
+    }
+  );
 }
 
 /**
@@ -234,16 +325,27 @@ export async function nixpacksBuild(opts: NixpacksBuildOptions): Promise<void> {
  * - `auto`: Dockerfile wins if present, otherwise Nixpacks.
  */
 export async function buildAppImage(opts: BuildOptions): Promise<BuildResult> {
-  const { contextDir, imageTag, mode, buildCmd, startCmd, buildArgs, onLogLine } =
-    opts;
-  const hasDf = hasDockerfile(contextDir);
+  const {
+    contextDir,
+    imageTag,
+    mode,
+    buildCmd,
+    startCmd,
+    dockerfilePath,
+    dockerTarget,
+    buildArgs,
+    onLogLine
+  } = opts;
+  const hasDf = hasDockerfile(contextDir, dockerfilePath);
+  const configuredDockerfile = dockerfilePath?.trim() || DEFAULT_DOCKERFILE;
+  const configuredTarget = resolveDockerTarget(dockerTarget);
 
   const useDockerfile =
     mode === "dockerfile" || (mode === "auto" && hasDf);
 
   if (mode === "dockerfile" && !hasDf) {
     throw new Error(
-      "Build mode is set to 'dockerfile' but no Dockerfile was found at the repo root."
+      `Build mode is set to 'dockerfile' but ${configuredDockerfile} was not found in the repository.`
     );
   }
 
@@ -261,13 +363,24 @@ export async function buildAppImage(opts: BuildOptions): Promise<BuildResult> {
   }
 
   if (useDockerfile) {
-    onLogLine(`[sohwe] Engine: docker build (Dockerfile detected)`);
-    if (buildCmd || startCmd) {
+    onLogLine(
+      `[sohwe] Engine: docker build (${configuredDockerfile}${
+        configuredTarget ? `, target ${configuredTarget}` : ""
+      })`
+    );
+    if (buildCmd) {
       onLogLine(
-        `[sohwe] Note: build-cmd/start-cmd overrides are ignored in Dockerfile mode.`
+        `[sohwe] Note: build-cmd override is ignored in Dockerfile mode.`
       );
     }
-    await dockerBuild({ contextDir, imageTag, buildArgs, onLogLine });
+    await dockerBuild({
+      contextDir,
+      imageTag,
+      dockerfilePath,
+      dockerTarget,
+      buildArgs,
+      onLogLine
+    });
     return { imageTag, engine: "dockerfile" };
   }
 

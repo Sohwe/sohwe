@@ -135,6 +135,32 @@ export function wwwCompanion(hostname: string): string | null {
   return isApexHostname(hostname) ? `www.${hostname}` : null;
 }
 
+/** Dockerfile location inside the cloned repository build context. */
+export const DockerfilePathSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(512)
+  .refine(
+    (path) =>
+      !path.startsWith("/") &&
+      !path.includes("\\") &&
+      !path.includes("\0") &&
+      !path.split("/").includes(".."),
+    "Dockerfile path must stay inside the repository, for example apps/api/Dockerfile"
+  );
+
+/** Named stage accepted by Docker's `--target` option. */
+export const DockerTargetSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(128)
+  .regex(
+    /^[A-Za-z0-9][A-Za-z0-9._-]*$/,
+    "Docker target may contain letters, numbers, dots, underscores, and hyphens"
+  );
+
 export const CreateApplicationSchema = z.object({
   name: z.string().min(1),
   slug: z.string().regex(/^[a-z0-9-]+$/),
@@ -144,6 +170,9 @@ export const CreateApplicationSchema = z.object({
   buildMode: z.enum(["auto", "dockerfile", "nixpacks"]).default("auto"),
   buildCmd: z.string().optional(),
   startCmd: z.string().optional(),
+  runtimeCmd: z.string().max(4096).optional(),
+  dockerfilePath: DockerfilePathSchema.default("Dockerfile"),
+  dockerTarget: DockerTargetSchema.optional(),
   domain: OptionalDomain,
   /** Deploy on every push to `gitBranch` (Phase 5; needs a connected GitHub App). */
   autoDeploy: z.boolean().default(false)
@@ -167,6 +196,9 @@ export const UpdateApplicationSchema = z
     buildMode: z.enum(["auto", "dockerfile", "nixpacks"]).optional(),
     buildCmd: z.string().nullable().optional(),
     startCmd: z.string().nullable().optional(),
+    runtimeCmd: z.string().max(4096).nullable().optional(),
+    dockerfilePath: DockerfilePathSchema.optional(),
+    dockerTarget: DockerTargetSchema.nullable().optional(),
     memoryLimitMb: z
       .union([
         z.null(),
@@ -185,6 +217,146 @@ export const RollbackBodySchema = z.object({
   sourceDeploymentId: z.string().uuid()
 });
 export type RollbackBody = z.infer<typeof RollbackBodySchema>;
+
+// --- Phase 9: projects and multi-service releases --------------------------
+
+export const SERVICE_KINDS = ["http", "worker", "release"] as const;
+export const ServiceKindSchema = z.enum(SERVICE_KINDS);
+export type ServiceKind = z.infer<typeof ServiceKindSchema>;
+
+/** A package/workspace location, resolved from the repository root. */
+export const ServiceDirectorySchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(512)
+  .refine(
+    (path) =>
+      !path.startsWith("/") &&
+      !path.includes("\\") &&
+      !path.includes("\0") &&
+      !path.split("/").includes(".."),
+    "Service directory must stay inside the repository"
+  );
+
+const ProjectServiceFields = {
+  name: z.string().trim().min(1).max(100),
+  slug: z.string().min(1).max(50).regex(/^[a-z0-9-]+$/),
+  kind: ServiceKindSchema,
+  buildMode: z.enum(["auto", "dockerfile", "nixpacks"]).default("dockerfile"),
+  buildCmd: z.string().max(4096).optional(),
+  startCmd: z.string().max(4096).optional(),
+  runtimeCmd: z.string().max(4096).optional(),
+  serviceDirectory: ServiceDirectorySchema.default("."),
+  workspaceSelector: z.string().trim().min(1).max(256).optional(),
+  dockerfilePath: DockerfilePathSchema.default("Dockerfile"),
+  dockerTarget: DockerTargetSchema.optional(),
+  /** Explicitly share one built image among services with the same group. */
+  imageGroup: z.string().trim().min(1).max(100).optional(),
+  port: z.coerce.number().int().min(1).max(65535).optional(),
+  domains: z.array(DomainSchema).max(20).default([]),
+  memoryLimitMb: z.coerce.number().int().min(16).max(65536).optional(),
+  cpuLimit: z.coerce.number().min(0.1).max(64).optional(),
+  restartPolicy: z.enum(["no", "on-failure", "unless-stopped", "always"]).default("unless-stopped")
+};
+
+export const CreateServiceSchema = z
+  .object(ProjectServiceFields)
+  .superRefine((service, ctx) => {
+    if (service.kind === "http" && service.port === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["port"],
+        message: "HTTP services require a port"
+      });
+    }
+    if (service.kind !== "http" && service.domains.length > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["domains"],
+        message: "Only HTTP services may have domains"
+      });
+    }
+    if (service.kind === "release" && service.restartPolicy !== "no") {
+      // Keep the input ergonomic: callers may omit it, but an explicit
+      // long-running policy for a one-shot job is almost certainly a mistake.
+      if (service.restartPolicy !== "unless-stopped") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["restartPolicy"],
+          message: "Release services cannot restart"
+        });
+      }
+    }
+  });
+export type CreateServiceInput = z.infer<typeof CreateServiceSchema>;
+
+export const CreateProjectSchema = z
+  .object({
+    name: z.string().trim().min(1).max(100),
+    slug: z.string().min(1).max(50).regex(/^[a-z0-9-]+$/),
+    gitRepo: z.string().url(),
+    gitBranch: z.string().trim().min(1).default("main"),
+    autoDeploy: z.boolean().default(false),
+    services: z.array(CreateServiceSchema).min(1).max(32)
+  })
+  .superRefine((project, ctx) => {
+    const slugs = new Set<string>();
+    let releases = 0;
+    project.services.forEach((service, index) => {
+      if (slugs.has(service.slug)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["services", index, "slug"],
+          message: "Service slugs must be unique inside a project"
+        });
+      }
+      slugs.add(service.slug);
+      if (service.kind === "release") releases += 1;
+    });
+    if (releases > 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["services"],
+        message: "A project may have only one release service"
+      });
+    }
+  });
+export type CreateProjectInput = z.infer<typeof CreateProjectSchema>;
+
+export const UpdateServiceSchema = z.object({
+  name: z.string().trim().min(1).max(100).optional(),
+  buildMode: z.enum(["auto", "dockerfile", "nixpacks"]).optional(),
+  buildCmd: z.string().max(4096).nullable().optional(),
+  startCmd: z.string().max(4096).nullable().optional(),
+  runtimeCmd: z.string().max(4096).nullable().optional(),
+  serviceDirectory: ServiceDirectorySchema.optional(),
+  workspaceSelector: z.string().trim().min(1).max(256).nullable().optional(),
+  dockerfilePath: DockerfilePathSchema.optional(),
+  dockerTarget: DockerTargetSchema.nullable().optional(),
+  imageGroup: z.string().trim().min(1).max(100).nullable().optional(),
+  port: z.coerce.number().int().min(1).max(65535).nullable().optional(),
+  memoryLimitMb: z.coerce.number().int().min(16).max(65536).nullable().optional(),
+  cpuLimit: z.coerce.number().min(0.1).max(64).nullable().optional(),
+  restartPolicy: z.enum(["no", "on-failure", "unless-stopped", "always"]).optional()
+});
+export type UpdateServiceInput = z.infer<typeof UpdateServiceSchema>;
+
+export const ProjectRollbackBodySchema = z.object({
+  sourceReleaseId: z.string().uuid()
+});
+export type ProjectRollbackBody = z.infer<typeof ProjectRollbackBodySchema>;
+
+export const ServiceLogsQuerySchema = z.object({
+  serviceId: z.string().uuid().optional(),
+  releaseId: z.string().uuid().optional(),
+  stream: z.enum(["stdout", "stderr", "system"]).optional(),
+  level: z.enum(["debug", "info", "warn", "error"]).optional(),
+  after: z.coerce.bigint().nonnegative().optional(),
+  before: z.coerce.bigint().positive().optional(),
+  limit: z.coerce.number().int().min(1).max(1000).default(200)
+});
+export type ServiceLogsQuery = z.infer<typeof ServiceLogsQuerySchema>;
 
 /** Query for container filesystem browser (Phase 3 preview — running container paths). */
 export const FsPathQuerySchema = z.object({
@@ -566,6 +738,11 @@ export function appDockerVolumeName(
 export function appInternalNetworkName(appId: string): string {
   return `sohwe_app_${appId}_net`;
 }
+
+/** Private bridge shared by every service and dependency in one project. */
+export function projectInternalNetworkName(projectId: string): string {
+  return `sohwe_project_${projectId}_net`;
+}
 // --- Phase 7: Managed datastores --------------------------------------------
 
 export const DATASTORE_KINDS = ["postgres", "redis"] as const;
@@ -612,6 +789,17 @@ export const CreateDatastoreBindingSchema = z.object({
 });
 export type CreateDatastoreBindingInput = z.infer<
   typeof CreateDatastoreBindingSchema
+>;
+
+export const CreateProjectDatastoreBindingSchema = z.object({
+  projectId: z.string().uuid(),
+  /** Empty/omitted selects every service in the project. */
+  serviceIds: z.array(z.string().uuid()).max(32).default([]),
+  /** Defaults to DATABASE_URL (postgres) / REDIS_URL (redis). */
+  envKey: EnvKeySchema.optional()
+});
+export type CreateProjectDatastoreBindingInput = z.infer<
+  typeof CreateProjectDatastoreBindingSchema
 >;
 
 /** Toggle Railway-style public access (a published host port) for a datastore. */

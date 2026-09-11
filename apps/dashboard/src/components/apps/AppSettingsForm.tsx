@@ -18,6 +18,9 @@ export function AppSettingsForm({ app, onDelete }: { app: AppRow; onDelete?: () 
   const [buildMode, setBuildMode] = useState<BuildMode>((app.buildMode as BuildMode) ?? "auto");
   const [buildCmd, setBuildCmd] = useState(app.buildCmd ?? "");
   const [startCmd, setStartCmd] = useState(app.startCmd ?? "");
+  const [runtimeCmd, setRuntimeCmd] = useState(app.runtimeCmd ?? "");
+  const [dockerfilePath, setDockerfilePath] = useState(app.dockerfilePath ?? "Dockerfile");
+  const [dockerTarget, setDockerTarget] = useState(app.dockerTarget ?? "");
   const [port, setPort] = useState(app.port);
   const [branch, setBranch] = useState(app.gitBranch);
   const [memMb, setMemMb] = useState(app.memoryLimitMb != null ? String(app.memoryLimitMb) : "");
@@ -30,6 +33,9 @@ export function AppSettingsForm({ app, onDelete }: { app: AppRow; onDelete?: () 
         buildMode,
         buildCmd: buildCmd ? buildCmd : null,
         startCmd: startCmd ? startCmd : null,
+        runtimeCmd: runtimeCmd ? runtimeCmd : null,
+        dockerfilePath,
+        dockerTarget: dockerTarget ? dockerTarget : null,
         port,
         gitBranch: branch,
         memoryLimitMb: memMb.trim() === "" ? null : Number(memMb),
@@ -99,6 +105,31 @@ export function AppSettingsForm({ app, onDelete }: { app: AppRow; onDelete?: () 
                 <Input value={startCmd} onChange={(e) => setStartCmd(e.target.value)} placeholder="(auto)" />
               </Field>
             </div>
+            {buildMode !== "nixpacks" ? (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field label="Dockerfile path">
+                  <Input
+                    value={dockerfilePath}
+                    onChange={(e) => setDockerfilePath(e.target.value)}
+                    placeholder="Dockerfile or apps/api/Dockerfile"
+                  />
+                </Field>
+                <Field label="Docker target (optional)">
+                  <Input
+                    value={dockerTarget}
+                    onChange={(e) => setDockerTarget(e.target.value)}
+                    placeholder="api, worker, migrate…"
+                  />
+                </Field>
+              </div>
+            ) : null}
+            <Field label="Container command override (optional)">
+              <Input
+                value={runtimeCmd}
+                onChange={(e) => setRuntimeCmd(e.target.value)}
+                placeholder="Use the image CMD"
+              />
+            </Field>
             <div className="grid gap-3 sm:grid-cols-2">
               <Field label="Container port">
                 <Input

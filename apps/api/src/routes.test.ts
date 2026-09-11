@@ -59,6 +59,7 @@ let loadApiConfig: typeof import("./env").loadApiConfig;
 /** Tables truncated between tests, children before parents. */
 const TABLES = [
   "dns_provider_credentials",
+  "project_datastore_bindings",
   "datastore_bindings",
   "datastores",
   "audit_logs",
@@ -70,6 +71,12 @@ const TABLES = [
   "github_installations",
   "github_apps",
   "alert_destinations",
+  "service_logs",
+  "service_deployments",
+  "project_releases",
+  "service_domains",
+  "services",
+  "projects",
   "volumes",
   "deployments",
   "applications",
@@ -168,6 +175,165 @@ describe("API routes", { skip }, () => {
     });
     return `sohwe_session=${session.id}`;
   }
+
+  describe("projects and services", () => {
+    const fleet = {
+      name: "FleetOptics",
+      slug: "fleetoptics",
+      gitRepo: "https://github.com/acme/FleetOptics-Backend",
+      services: [
+        { name: "API", slug: "api", kind: "http", port: 3000, dockerTarget: "api" },
+        { name: "Worker", slug: "worker", kind: "worker", dockerTarget: "worker" },
+        { name: "Migrate", slug: "migrate", kind: "release", dockerTarget: "migrate" }
+      ]
+    };
+
+    it("creates the FleetOptics topology without creating legacy applications", async () => {
+      const cookie = await signIn();
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        headers: { cookie },
+        payload: fleet
+      });
+      assert.equal(response.statusCode, 200, response.body);
+      const body = response.json() as { services: { kind: string; port: number | null }[] };
+      assert.deepEqual(body.services.map((service) => service.kind).sort(), [
+        "http",
+        "release",
+        "worker"
+      ]);
+      assert.equal(body.services[1]?.port, null);
+      assert.equal(body.services[2]?.port, null);
+      assert.equal(await prisma.application.count(), 0);
+      assert.equal(await prisma.project.count(), 1);
+    });
+
+    it("stores shared variables encrypted and returns keys only", async () => {
+      const cookie = await signIn();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        headers: { cookie },
+        payload: fleet
+      });
+      const project = created.json() as { id: string };
+      const response = await app.inject({
+        method: "PUT",
+        url: `/api/projects/${project.id}/variables`,
+        headers: { cookie },
+        payload: { vars: { S3_SECRET_KEY: "never-return-this" } }
+      });
+      assert.equal(response.statusCode, 200, response.body);
+      assert.deepEqual(response.json(), { keys: ["S3_SECRET_KEY"] });
+      assert.equal(response.body.includes("never-return-this"), false);
+      const row = await prisma.project.findUniqueOrThrow({ where: { id: project.id } });
+      assert.ok(row.envVarsEncrypted);
+      assert.equal(row.envVarsEncrypted.toString().includes("never-return-this"), false);
+    });
+
+    it("keeps projects organization-scoped", async () => {
+      const ownerCookie = await signIn();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        headers: { cookie: ownerCookie },
+        payload: fleet
+      });
+      const project = created.json() as { id: string };
+      const otherOrg = await prisma.organization.create({
+        data: { name: "Other", slug: "other" }
+      });
+      const owner = await prisma.user.findUniqueOrThrow({ where: { email: OWNER.email } });
+      const outsider = await prisma.user.create({
+        data: {
+          email: "outsider@example.test",
+          passwordHash: owner.passwordHash,
+          role: "owner",
+          organizationId: otherOrg.id
+        }
+      });
+      const session = await prisma.session.create({
+        data: { userId: outsider.id, expiresAt: new Date(Date.now() + 60_000) }
+      });
+      const response = await app.inject({
+        method: "GET",
+        url: `/api/projects/${project.id}`,
+        headers: { cookie: `sohwe_session=${session.id}` }
+      });
+      assert.equal(response.statusCode, 404);
+    });
+
+    it("creates one coordinated release with one deployment per service", async () => {
+      const cookie = await signIn();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        headers: { cookie },
+        payload: fleet
+      });
+      const project = created.json() as { id: string };
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/projects/${project.id}/deploy`,
+        headers: { cookie }
+      });
+      assert.equal(response.statusCode, 202, response.body);
+      const release = await prisma.projectRelease.findFirstOrThrow({
+        where: { projectId: project.id },
+        include: { serviceDeployments: true }
+      });
+      assert.equal(release.status, "pending");
+      assert.equal(release.serviceDeployments.length, 3);
+      assert.equal(new Set(release.serviceDeployments.map((d) => d.serviceId)).size, 3);
+    });
+
+    it("binds one datastore consistently to selected project services", async () => {
+      const cookie = await signIn();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        headers: { cookie },
+        payload: fleet
+      });
+      const project = created.json() as {
+        id: string;
+        services: { id: string; kind: string }[];
+      };
+      const datastore = await prisma.datastore.create({
+        data: {
+          organizationId: (await prisma.user.findUniqueOrThrow({
+            where: { email: OWNER.email }
+          })).organizationId,
+          kind: "postgres",
+          name: "Fleet database",
+          slug: "fleet-db",
+          engineVersion: "16",
+          status: "running",
+          credentialsEncrypted: encryptJson({
+            username: "sohwe",
+            password: "secret",
+            database: "fleet"
+          })
+        }
+      });
+      const selected = project.services
+        .filter((service) => service.kind !== "worker")
+        .map((service) => service.id);
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/datastores/${datastore.id}/project-bindings`,
+        headers: { cookie },
+        payload: { projectId: project.id, serviceIds: selected }
+      });
+      assert.equal(response.statusCode, 201, response.body);
+      const binding = await prisma.projectDatastoreBinding.findFirstOrThrow({
+        where: { projectId: project.id }
+      });
+      assert.equal(binding.envKey, "DATABASE_URL");
+      assert.deepEqual(binding.serviceIds.sort(), selected.sort());
+    });
+  });
 
   describe("health and config", () => {
     it("reports health without authentication", async () => {
@@ -383,6 +549,41 @@ describe("API routes", { skip }, () => {
       const rows = list.json() as { id: string }[];
       assert.equal(rows.length, 1);
       assert.equal(rows[0]?.id, created.id);
+    });
+
+    it("creates, returns, and updates Docker monorepo settings", async () => {
+      const cookie = await signIn();
+      const created = await createApp(cookie, {
+        dockerfilePath: "apps/api/Dockerfile",
+        dockerTarget: "api",
+        runtimeCmd: "node dist/server.js"
+      });
+
+      const patched = await app.inject({
+        method: "PATCH",
+        url: `/api/applications/${created.id}`,
+        headers: { cookie },
+        payload: {
+          dockerTarget: "worker",
+          runtimeCmd: "node dist/worker.js"
+        }
+      });
+      assert.equal(patched.statusCode, 200, patched.body);
+      const body = patched.json() as {
+        dockerfilePath: string;
+        dockerTarget: string | null;
+        runtimeCmd: string | null;
+      };
+      assert.equal(body.dockerfilePath, "apps/api/Dockerfile");
+      assert.equal(body.dockerTarget, "worker");
+      assert.equal(body.runtimeCmd, "node dist/worker.js");
+
+      const row = await prisma.application.findUniqueOrThrow({
+        where: { id: created.id }
+      });
+      assert.equal(row.dockerfilePath, "apps/api/Dockerfile");
+      assert.equal(row.dockerTarget, "worker");
+      assert.equal(row.runtimeCmd, "node dist/worker.js");
     });
 
     it("derives repoFullName from a GitHub remote", async () => {
@@ -2142,6 +2343,9 @@ describe("API routes", { skip }, () => {
             buildMode: "auto",
             buildCmd: null,
             startCmd: null,
+            runtimeCmd: "node dist/worker.js",
+            dockerfilePath: "apps/api/Dockerfile",
+            dockerTarget: "worker",
             port: 3000,
             domain: null,
             domains: [],
@@ -2230,6 +2434,9 @@ describe("API routes", { skip }, () => {
         decryptJson(Buffer.from(restoredApp.buildArgsEncrypted!)),
         { NIXPACKS_NODE_VERSION: "22" }
       );
+      assert.equal(restoredApp.runtimeCmd, "node dist/worker.js");
+      assert.equal(restoredApp.dockerfilePath, "apps/api/Dockerfile");
+      assert.equal(restoredApp.dockerTarget, "worker");
       assert.equal(await prisma.datastoreBinding.count(), 1);
     });
 
@@ -2294,6 +2501,12 @@ describe("API routes", { skip }, () => {
       const result = apply.json() as { created: number; datastoresCreated: number };
       assert.equal(result.created, 1);
       assert.equal(result.datastoresCreated, 0);
+      const legacy = await prisma.application.findFirstOrThrow({
+        where: { slug: "legacy" }
+      });
+      assert.equal(legacy.runtimeCmd, null);
+      assert.equal(legacy.dockerfilePath, "Dockerfile");
+      assert.equal(legacy.dockerTarget, null);
     });
   });
 

@@ -25,8 +25,13 @@ export const BUNDLE_FORMAT = "sohwe-backup" as const;
  *   app answers on, not just the primary one. `domain` stays as the primary so
  *   a v4 bundle still carries the field older readers expect; the bump is for
  *   the same signature reason as v3.
+ * - v5: adds per-app `dockerfilePath`, `dockerTarget`, and `runtimeCmd` so a
+ *   restored app builds the same monorepo Dockerfile stage and starts the same
+ *   process as the source app.
+ * - v6: adds projects, services, project datastore bindings, and their
+ *   encrypted variable blocks.
  */
-export const BUNDLE_VERSION = 4 as const;
+export const BUNDLE_VERSION = 6 as const;
 
 // --- Input shapes (plaintext, supplied by the API) -------------------------
 
@@ -51,6 +56,9 @@ export type BundleAppInput = {
   buildMode: string;
   buildCmd: string | null;
   startCmd: string | null;
+  runtimeCmd: string | null;
+  dockerfilePath: string;
+  dockerTarget: string | null;
   port: number;
   /** Primary custom domain, or null when the app has none. */
   domain: string | null;
@@ -77,6 +85,12 @@ export type BundleDatastoreBindingInput = {
   envKeys: string[];
 };
 
+export type BundleProjectDatastoreBindingInput = {
+  projectSlug: string;
+  serviceSlugs: string[];
+  envKey: string;
+};
+
 export type BundleDatastoreInput = {
   kind: string;
   name: string;
@@ -87,6 +101,38 @@ export type BundleDatastoreInput = {
   /** Host-specific; nulled on restore when the port is taken. */
   publicPort: number | null;
   bindings: BundleDatastoreBindingInput[];
+  projectBindings?: BundleProjectDatastoreBindingInput[];
+};
+
+export type BundleServiceInput = {
+  name: string;
+  slug: string;
+  kind: string;
+  buildMode: string;
+  buildCmd: string | null;
+  startCmd: string | null;
+  runtimeCmd: string | null;
+  serviceDirectory: string;
+  workspaceSelector: string | null;
+  dockerfilePath: string;
+  dockerTarget: string | null;
+  imageGroup: string | null;
+  port: number | null;
+  domains: string[];
+  memoryLimitMb: number | null;
+  cpuLimit: number | null;
+  restartPolicy: string;
+  envVars: Record<string, string>;
+  buildArgs: Record<string, string>;
+};
+
+export type BundleProjectInput = {
+  name: string;
+  slug: string;
+  gitRepo: string;
+  gitBranch: string;
+  envVars: Record<string, string>;
+  services: BundleServiceInput[];
 };
 
 export type BuildBundleOptions = {
@@ -116,6 +162,12 @@ const DatastoreBindingEntrySchema = z.object({
   envKeys: z.array(z.string())
 });
 
+const ProjectDatastoreBindingEntrySchema = z.object({
+  projectSlug: z.string(),
+  serviceSlugs: z.array(z.string()),
+  envKey: z.string()
+});
+
 // Config only — no credentials, no data. Restore generates fresh credentials.
 const DatastoreEntrySchema = z.object({
   kind: z.string(),
@@ -125,7 +177,44 @@ const DatastoreEntrySchema = z.object({
   memoryLimitMb: z.number().nullable(),
   cpuLimit: z.number().nullable(),
   publicPort: z.number().nullable(),
-  bindings: z.array(DatastoreBindingEntrySchema)
+  bindings: z.array(DatastoreBindingEntrySchema),
+  projectBindings: z.array(ProjectDatastoreBindingEntrySchema).optional()
+});
+
+const SecretBlockSchema = z.object({
+  keys: z.array(z.string()),
+  ciphertext: z.string()
+});
+
+const ServiceEntrySchema = z.object({
+  name: z.string(),
+  slug: z.string(),
+  kind: z.string(),
+  buildMode: z.string(),
+  buildCmd: z.string().nullable(),
+  startCmd: z.string().nullable(),
+  runtimeCmd: z.string().nullable(),
+  serviceDirectory: z.string(),
+  workspaceSelector: z.string().nullable(),
+  dockerfilePath: z.string(),
+  dockerTarget: z.string().nullable(),
+  imageGroup: z.string().nullable(),
+  port: z.number().nullable(),
+  domains: z.array(z.string()),
+  memoryLimitMb: z.number().nullable(),
+  cpuLimit: z.number().nullable(),
+  restartPolicy: z.string(),
+  env: SecretBlockSchema.optional(),
+  buildArgs: SecretBlockSchema.optional()
+});
+
+const ProjectEntrySchema = z.object({
+  name: z.string(),
+  slug: z.string(),
+  gitRepo: z.string(),
+  gitBranch: z.string(),
+  env: SecretBlockSchema.optional(),
+  services: z.array(ServiceEntrySchema)
 });
 
 const AppEntrySchema = z.object({
@@ -136,6 +225,12 @@ const AppEntrySchema = z.object({
   buildMode: z.string(),
   buildCmd: z.string().nullable(),
   startCmd: z.string().nullable(),
+  /** v5+. Defaults are supplied while parsing older bundles. */
+  runtimeCmd: z.string().nullable().optional(),
+  /** v5+. Repository-relative path; validated by the API when first saved. */
+  dockerfilePath: z.string().optional(),
+  /** v5+. Named stage from a multi-stage Dockerfile. */
+  dockerTarget: z.string().nullable().optional(),
   port: z.number(),
   /** The primary custom domain, or null. Present in every version. */
   domain: z.string().nullable(),
@@ -207,24 +302,47 @@ export const BundleManifestV4Schema = z.object({
   datastores: z.array(DatastoreEntrySchema)
 });
 
+/** v5 is v4 plus Docker build selection and a runtime command override. */
+export const BundleManifestV5Schema = z.object({
+  ...ManifestBase,
+  version: z.literal(5),
+  datastores: z.array(DatastoreEntrySchema)
+});
+
+export const BundleManifestV6Schema = z.object({
+  ...ManifestBase,
+  version: z.literal(6),
+  datastores: z.array(DatastoreEntrySchema),
+  projects: z.array(ProjectEntrySchema)
+});
+
 export const BundleManifestSchema = z.discriminatedUnion("version", [
   BundleManifestV1Schema,
   BundleManifestV2Schema,
   BundleManifestV3Schema,
-  BundleManifestV4Schema
+  BundleManifestV4Schema,
+  BundleManifestV5Schema,
+  BundleManifestV6Schema
 ]);
 
 /** The manifest `buildBundle` emits (always the current version). */
-export type BundleManifest = z.infer<typeof BundleManifestV4Schema>;
+export type BundleManifest = z.infer<typeof BundleManifestV6Schema>;
 /** Any version `parseBundle` accepts. */
 export type AnyBundleManifest = z.infer<typeof BundleManifestSchema>;
 export type BundleAppEntry = z.infer<typeof AppEntrySchema>;
 export type BundleDatastoreEntry = z.infer<typeof DatastoreEntrySchema>;
+export type BundleProjectEntry = z.infer<typeof ProjectEntrySchema>;
+export type BundleServiceEntry = z.infer<typeof ServiceEntrySchema>;
 
 /** App config with env vars and build variables decrypted by `parseBundle`. */
 export type ParsedBundleApp = Omit<
   BundleAppEntry,
-  "env" | "buildArgs" | "domains"
+  | "env"
+  | "buildArgs"
+  | "domains"
+  | "runtimeCmd"
+  | "dockerfilePath"
+  | "dockerTarget"
 > & {
   envVars: Record<string, string>;
   /** Empty for pre-v3 bundles and for exports made without secrets. */
@@ -232,8 +350,11 @@ export type ParsedBundleApp = Omit<
   /**
    * Always present, so restore has one field to read: a pre-v4 bundle's single
    * `domain` is widened into a one-element list here.
-   */
+  */
   domains: string[];
+  runtimeCmd: string | null;
+  dockerfilePath: string;
+  dockerTarget: string | null;
 };
 
 export type ParsedBundle = {
@@ -244,6 +365,17 @@ export type ParsedBundle = {
   apps: ParsedBundleApp[];
   /** Empty for v1 bundles, which predate managed datastores. */
   datastores: BundleDatastoreEntry[];
+  projects: Array<
+    Omit<BundleProjectEntry, "env" | "services"> & {
+      envVars: Record<string, string>;
+      services: Array<
+        Omit<BundleServiceEntry, "env" | "buildArgs"> & {
+          envVars: Record<string, string>;
+          buildArgs: Record<string, string>;
+        }
+      >;
+    }
+  >;
 };
 
 /**
@@ -272,7 +404,8 @@ export function canonicalize(value: unknown): string {
 export function buildBundle(
   apps: BundleAppInput[],
   opts: BuildBundleOptions,
-  datastores: BundleDatastoreInput[] = []
+  datastores: BundleDatastoreInput[] = [],
+  projects: BundleProjectInput[] = []
 ): BundleManifest {
   const salt = randomBundleSalt();
   const key = deriveBundleKey(opts.passphrase, salt);
@@ -286,6 +419,9 @@ export function buildBundle(
       buildMode: a.buildMode,
       buildCmd: a.buildCmd,
       startCmd: a.startCmd,
+      runtimeCmd: a.runtimeCmd,
+      dockerfilePath: a.dockerfilePath,
+      dockerTarget: a.dockerTarget,
       port: a.port,
       domain: a.domain,
       domains: a.domains,
@@ -347,6 +483,73 @@ export function buildBundle(
       bindings: d.bindings.map((b) => ({
         appSlug: b.appSlug,
         envKeys: [...b.envKeys]
+      })),
+      ...((d.projectBindings?.length ?? 0) > 0
+        ? {
+            projectBindings: d.projectBindings!.map((binding) => ({
+              projectSlug: binding.projectSlug,
+              serviceSlugs: [...binding.serviceSlugs],
+              envKey: binding.envKey
+            }))
+          }
+        : {})
+    })),
+    projects: projects.map((project) => ({
+      name: project.name,
+      slug: project.slug,
+      gitRepo: project.gitRepo,
+      gitBranch: project.gitBranch,
+      ...(opts.includeSecrets && Object.keys(project.envVars).length > 0
+        ? {
+            env: {
+              keys: Object.keys(project.envVars).sort(),
+              ciphertext: encryptUtf8(
+                JSON.stringify(project.envVars),
+                key
+              ).toString("base64")
+            }
+          }
+        : {}),
+      services: project.services.map((service) => ({
+        name: service.name,
+        slug: service.slug,
+        kind: service.kind,
+        buildMode: service.buildMode,
+        buildCmd: service.buildCmd,
+        startCmd: service.startCmd,
+        runtimeCmd: service.runtimeCmd,
+        serviceDirectory: service.serviceDirectory,
+        workspaceSelector: service.workspaceSelector,
+        dockerfilePath: service.dockerfilePath,
+        dockerTarget: service.dockerTarget,
+        imageGroup: service.imageGroup,
+        port: service.port,
+        domains: [...service.domains],
+        memoryLimitMb: service.memoryLimitMb,
+        cpuLimit: service.cpuLimit,
+        restartPolicy: service.restartPolicy,
+        ...(opts.includeSecrets && Object.keys(service.envVars).length > 0
+          ? {
+              env: {
+                keys: Object.keys(service.envVars).sort(),
+                ciphertext: encryptUtf8(
+                  JSON.stringify(service.envVars),
+                  key
+                ).toString("base64")
+              }
+            }
+          : {}),
+        ...(opts.includeSecrets && Object.keys(service.buildArgs).length > 0
+          ? {
+              buildArgs: {
+                keys: Object.keys(service.buildArgs).sort(),
+                ciphertext: encryptUtf8(
+                  JSON.stringify(service.buildArgs),
+                  key
+                ).toString("base64")
+              }
+            }
+          : {})
       }))
     }))
   };
@@ -392,14 +595,44 @@ export function parseBundle(raw: unknown, passphrase: string): ParsedBundle {
   };
 
   const apps: ParsedBundleApp[] = manifest.apps.map((a) => {
-    const { env, buildArgs, domains, ...rest } = a;
+    const {
+      env,
+      buildArgs,
+      domains,
+      runtimeCmd,
+      dockerfilePath,
+      dockerTarget,
+      ...rest
+    } = a;
     return {
       ...rest,
       envVars: decryptBlock(env),
       buildArgs: decryptBlock(buildArgs),
-      domains: domains ?? (rest.domain ? [rest.domain] : [])
+      domains: domains ?? (rest.domain ? [rest.domain] : []),
+      runtimeCmd: runtimeCmd ?? null,
+      dockerfilePath: dockerfilePath ?? "Dockerfile",
+      dockerTarget: dockerTarget ?? null
     };
   });
+
+  const projects =
+    manifest.version === 6
+      ? manifest.projects.map((project) => ({
+          name: project.name,
+          slug: project.slug,
+          gitRepo: project.gitRepo,
+          gitBranch: project.gitBranch,
+          envVars: decryptBlock(project.env),
+          services: project.services.map((service) => {
+            const { env, buildArgs, ...config } = service;
+            return {
+              ...config,
+              envVars: decryptBlock(env),
+              buildArgs: decryptBlock(buildArgs)
+            };
+          })
+        }))
+      : [];
 
   return {
     version: manifest.version,
@@ -407,6 +640,7 @@ export function parseBundle(raw: unknown, passphrase: string): ParsedBundle {
     source: manifest.source,
     includesSecrets: manifest.includesSecrets,
     apps,
-    datastores: manifest.version === 1 ? [] : manifest.datastores
+    datastores: manifest.version === 1 ? [] : manifest.datastores,
+    projects
   };
 }

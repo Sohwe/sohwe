@@ -7,6 +7,7 @@ import {
   AuditLogQuerySchema,
   buildDatastoreConnectionUrl,
   CreateApplicationSchema,
+  CreateProjectSchema,
   CreateDatastoreBindingSchema,
   CreateDomainSchema,
   CreateDatastoreSchema,
@@ -21,6 +22,7 @@ import {
   EnvVarsReplaceSchema,
   FsPathQuerySchema,
   isApexHostname,
+  projectInternalNetworkName,
   RoleSchema,
   RollbackBodySchema,
   SetDomainRedirectSchema,
@@ -49,6 +51,8 @@ describe("CreateApplicationSchema", () => {
     assert.equal(out.gitBranch, "main");
     assert.equal(out.port, 3000);
     assert.equal(out.buildMode, "auto");
+    assert.equal(out.dockerfilePath, "Dockerfile");
+    assert.equal(out.dockerTarget, undefined);
     assert.equal(out.autoDeploy, false);
     assert.equal(out.domain, undefined);
   });
@@ -80,6 +84,27 @@ describe("CreateApplicationSchema", () => {
 
   it("rejects an unknown build mode", () => {
     assert.throws(() => CreateApplicationSchema.parse({ ...valid, buildMode: "bazel" }));
+  });
+
+  it("accepts a nested Dockerfile path and target", () => {
+    const out = CreateApplicationSchema.parse({
+      ...valid,
+      dockerfilePath: "apps/api/Dockerfile",
+      dockerTarget: "api-prod"
+    });
+    assert.equal(out.dockerfilePath, "apps/api/Dockerfile");
+    assert.equal(out.dockerTarget, "api-prod");
+  });
+
+  it("rejects Dockerfile traversal, absolute paths, and invalid targets", () => {
+    for (const dockerfilePath of ["../Dockerfile", "/tmp/Dockerfile", "apps\\api\\Dockerfile"]) {
+      assert.throws(() =>
+        CreateApplicationSchema.parse({ ...valid, dockerfilePath })
+      );
+    }
+    for (const dockerTarget of ["", "api target", "--target", "/api"]) {
+      assert.throws(() => CreateApplicationSchema.parse({ ...valid, dockerTarget }));
+    }
   });
 
   describe("domain", () => {
@@ -123,11 +148,15 @@ describe("UpdateApplicationSchema", () => {
     const out = UpdateApplicationSchema.parse({
       buildCmd: null,
       startCmd: null,
+      runtimeCmd: null,
+      dockerTarget: null,
       memoryLimitMb: null,
       cpuLimit: null
     });
     assert.equal(out.buildCmd, null);
+    assert.equal(out.runtimeCmd, null);
     assert.equal(out.memoryLimitMb, null);
+    assert.equal(out.dockerTarget, null);
   });
 
   it("ignores a domain patch — domains have their own routes now", () => {
@@ -266,6 +295,56 @@ describe("RollbackBodySchema", () => {
   });
 });
 
+describe("CreateProjectSchema", () => {
+  const fleet = {
+    name: "FleetOptics",
+    slug: "fleetoptics",
+    gitRepo: "https://github.com/acme/FleetOptics-Backend",
+    services: [
+      { name: "API", slug: "api", kind: "http", port: 3000, dockerTarget: "api" },
+      { name: "Worker", slug: "worker", kind: "worker", dockerTarget: "worker" },
+      { name: "Migrate", slug: "migrate", kind: "release", dockerTarget: "migrate" }
+    ]
+  };
+
+  it("accepts the FleetOptics API, worker, and migration topology", () => {
+    const parsed = CreateProjectSchema.parse(fleet);
+    assert.deepEqual(parsed.services.map((service) => service.kind), [
+      "http",
+      "worker",
+      "release"
+    ]);
+    assert.equal(parsed.services[0]?.dockerfilePath, "Dockerfile");
+  });
+
+  it("requires ports only for routed HTTP services", () => {
+    assert.equal(
+      CreateProjectSchema.safeParse({
+        ...fleet,
+        services: [{ name: "API", slug: "api", kind: "http" }]
+      }).success,
+      false
+    );
+    assert.equal(
+      CreateProjectSchema.safeParse({
+        ...fleet,
+        services: [{ name: "Worker", slug: "worker", kind: "worker" }]
+      }).success,
+      true
+    );
+  });
+
+  it("rejects duplicate service slugs and more than one release job", () => {
+    assert.equal(
+      CreateProjectSchema.safeParse({
+        ...fleet,
+        services: [...fleet.services, { ...fleet.services[2], name: "Other" }]
+      }).success,
+      false
+    );
+  });
+});
+
 describe("Docker naming helpers", () => {
   const appId = "11111111-2222-3333-4444-555555555555";
   const volumeId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
@@ -279,6 +358,7 @@ describe("Docker naming helpers", () => {
 
   it("matches the documented network name", () => {
     assert.equal(appInternalNetworkName(appId), `sohwe_app_${appId}_net`);
+    assert.equal(projectInternalNetworkName(appId), `sohwe_project_${appId}_net`);
   });
 
   it("produces names Docker accepts", () => {

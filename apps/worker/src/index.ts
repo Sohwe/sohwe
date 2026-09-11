@@ -13,8 +13,10 @@ import {
   DEPLOY_QUEUE,
   getConnectionOptionsForBull,
   logChannelName,
+  PROJECT_DEPLOY_QUEUE,
   Worker,
-  type DeployJobData
+  type DeployJobData,
+  type ProjectDeployJobData
 } from "@sohwe/queue";
 import Docker from "dockerode";
 import { startBackupSubsystem, type BackupSubsystem } from "./backups";
@@ -46,6 +48,7 @@ import {
 } from "./github";
 import { createRuntimeLogTailManager } from "./runtime-logs";
 import { createStatsSampler } from "./stats";
+import { createProjectDeployer } from "./project-deploy";
 
 const _here = dirname(fileURLToPath(import.meta.url));
 config({ path: join(_here, "../../../.env") });
@@ -428,6 +431,8 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
         mode: (app.buildMode as BuildMode) ?? "auto",
         buildCmd: app.buildCmd,
         startCmd: app.startCmd,
+        dockerfilePath: app.dockerfilePath,
+        dockerTarget: app.dockerTarget,
         buildArgs: readEncryptedVars(app.buildArgsEncrypted),
         onLogLine: onLog
       });
@@ -543,8 +548,23 @@ const worker = new Worker<DeployJobData>(DEPLOY_QUEUE, async (job) => {
   await runDeploy({ data: job.data });
 }, { connection });
 
+const projectDeployer = createProjectDeployer({
+  docker,
+  publish: (channel, message) => publishRedis.publish(channel, message)
+});
+const projectWorker = new Worker<ProjectDeployJobData>(
+  PROJECT_DEPLOY_QUEUE,
+  async (job) => {
+    await projectDeployer.deploy(job.data);
+  },
+  { connection }
+);
+
 await logTails.startForRunning().catch((e) => {
   console.error("Failed to attach runtime log tails", e);
+});
+await projectDeployer.recover().catch((e) => {
+  console.error("Failed to attach project service log tails", e);
 });
 
 statsSampler.start();
@@ -572,12 +592,20 @@ worker.on("failed", (job, err) => {
 worker.on("error", (err) => {
   console.error("Worker error", err);
 });
+projectWorker.on("failed", (job, err) => {
+  console.error("Project release job failed", job?.id, err);
+});
+projectWorker.on("error", (err) => {
+  console.error("Project release worker error", err);
+});
 
 const shutdown = async () => {
   statsSampler.stop();
   eventWatcher.stop();
   logTails.stopAll();
+  projectDeployer.stop();
   await worker.close();
+  await projectWorker.close();
   if (backups) await backups.close();
   if (datastores) await datastores.close();
   await publishRedis.quit();

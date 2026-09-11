@@ -17,6 +17,7 @@ export {
   encryptSchedulePassphrase,
   gatherBundleApps,
   gatherBundleDatastores,
+  gatherBundleProjects,
   makeBundleFilename,
   runScheduledExport,
   type ScheduledExportResult

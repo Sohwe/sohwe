@@ -39,6 +39,8 @@ export type SpecApp = {
   id: string;
   slug: string;
   port: number;
+  /** Optional shell command replacing the image's configured CMD. */
+  runtimeCmd: string | null;
   /** Custom hostnames, in the order they should appear in the Traefik rule. */
   domains: SpecDomain[];
   memoryLimitMb: number | null;
@@ -280,6 +282,9 @@ export function buildContainerSpec(input: {
   return {
     name: containerNameFor(app.slug),
     Image: imageTag,
+    Cmd: app.runtimeCmd?.trim()
+      ? ["/bin/sh", "-lc", app.runtimeCmd.trim()]
+      : undefined,
     Labels: buildTraefikLabels({ app, deploymentId, routing }),
     ExposedPorts: { [`${app.port}/tcp`]: {} },
     Env: envList.length > 0 ? envList : undefined,
