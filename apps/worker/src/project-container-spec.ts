@@ -17,6 +17,11 @@ export type ProjectServiceSpec = {
   memoryLimitMb: number | null;
   cpuLimit: number | null;
   restartPolicy: string;
+  healthCheckCmd: string | null;
+  healthCheckIntervalSeconds: number;
+  healthCheckTimeoutSeconds: number;
+  healthCheckRetries: number;
+  healthCheckStartPeriodSeconds: number;
   domains: { hostname: string }[];
 };
 
@@ -124,8 +129,19 @@ export function buildProjectServiceContainerSpec(input: {
     ExposedPorts:
       isHttp && service.port ? { [`${service.port}/tcp`]: {} } : undefined,
     Env: envList.length > 0 ? envList : undefined,
+    Healthcheck: service.healthCheckCmd
+      ? {
+          Test: ["CMD-SHELL", service.healthCheckCmd],
+          Interval: service.healthCheckIntervalSeconds * 1_000_000_000,
+          Timeout: service.healthCheckTimeoutSeconds * 1_000_000_000,
+          Retries: service.healthCheckRetries,
+          StartPeriod: service.healthCheckStartPeriodSeconds * 1_000_000_000
+        }
+      : undefined,
     HostConfig: {
-      NetworkMode: isHttp ? routing.network : privateNetwork,
+      // Every candidate starts privately. A healthy HTTP candidate joins the
+      // Traefik network only at the promotion boundary.
+      NetworkMode: privateNetwork,
       RestartPolicy: {
         Name: restartName as "no" | "on-failure" | "unless-stopped" | "always"
       },
@@ -135,15 +151,10 @@ export function buildProjectServiceContainerSpec(input: {
       },
       ...buildResourceLimits(service)
     },
-    // Non-HTTP services start directly on the private network with a stable
-    // alias. HTTP containers start on Traefik and are attached privately just
-    // after creation, also with this alias.
-    NetworkingConfig: isHttp
-      ? undefined
-      : {
-          EndpointsConfig: {
-            [privateNetwork]: { Aliases: [service.slug] }
-          }
-        }
+    NetworkingConfig: {
+      EndpointsConfig: {
+        [privateNetwork]: { Aliases: [service.slug] }
+      }
+    }
   };
 }

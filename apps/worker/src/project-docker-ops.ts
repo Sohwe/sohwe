@@ -53,18 +53,13 @@ export async function ensureProjectNetwork(
   return name;
 }
 
-export async function connectHttpServiceToProjectNetwork(
+export async function connectHttpServiceToRoutingNetwork(
   docker: ProjectDocker,
-  projectId: string,
-  containerId: string,
-  serviceSlug: string
+  routingNetwork: string,
+  containerId: string
 ): Promise<void> {
-  const network = await ensureProjectNetwork(docker, projectId);
   try {
-    await docker.getNetwork(network).connect({
-      Container: containerId,
-      EndpointConfig: { Aliases: [serviceSlug] }
-    });
+    await docker.getNetwork(routingNetwork).connect({ Container: containerId });
   } catch (error) {
     if (statusCodeOf(error) !== 403) throw error;
   }

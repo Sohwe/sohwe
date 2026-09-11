@@ -218,11 +218,39 @@ export const RollbackBodySchema = z.object({
 });
 export type RollbackBody = z.infer<typeof RollbackBodySchema>;
 
+/** HTTP env var name (e.g. `NODE_ENV`, `API_KEY_2`). */
+export const EnvKeySchema = z
+  .string()
+  .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "Invalid env var name")
+  .max(128);
+
+const MAX_ENV_VALUE_LEN = 32_768;
+const EnvValuesSchema = z.record(
+  EnvKeySchema,
+  z.string().max(MAX_ENV_VALUE_LEN)
+);
+
 // --- Phase 9: projects and multi-service releases --------------------------
 
 export const SERVICE_KINDS = ["http", "worker", "release"] as const;
 export const ServiceKindSchema = z.enum(SERVICE_KINDS);
 export type ServiceKind = z.infer<typeof ServiceKindSchema>;
+
+export const SERVICE_DEPENDENCY_CONDITIONS = ["started", "healthy"] as const;
+export const ServiceDependencyConditionSchema = z.enum(
+  SERVICE_DEPENDENCY_CONDITIONS
+);
+export type ServiceDependencyCondition = z.infer<
+  typeof ServiceDependencyConditionSchema
+>;
+
+export const ServiceDependencyInputSchema = z.object({
+  serviceSlug: z.string().min(1).max(50).regex(/^[a-z0-9-]+$/),
+  condition: ServiceDependencyConditionSchema.default("healthy")
+});
+export type ServiceDependencyInput = z.infer<
+  typeof ServiceDependencyInputSchema
+>;
 
 /** A package/workspace location, resolved from the repository root. */
 export const ServiceDirectorySchema = z
@@ -257,7 +285,18 @@ const ProjectServiceFields = {
   domains: z.array(DomainSchema).max(20).default([]),
   memoryLimitMb: z.coerce.number().int().min(16).max(65536).optional(),
   cpuLimit: z.coerce.number().min(0.1).max(64).optional(),
-  restartPolicy: z.enum(["no", "on-failure", "unless-stopped", "always"]).default("unless-stopped")
+  restartPolicy: z.enum(["no", "on-failure", "unless-stopped", "always"]).default("unless-stopped"),
+  dependsOn: z.array(ServiceDependencyInputSchema).max(32).default([]),
+  /** Optional Docker health command, executed inside the service container. */
+  healthCheckCmd: z.string().trim().min(1).max(4096).optional(),
+  healthCheckIntervalSeconds: z.coerce.number().int().min(1).max(300).default(10),
+  healthCheckTimeoutSeconds: z.coerce.number().int().min(1).max(60).default(5),
+  healthCheckRetries: z.coerce.number().int().min(1).max(30).default(3),
+  healthCheckStartPeriodSeconds: z.coerce.number().int().min(0).max(600).default(2),
+  /** Runtime values encrypted before this service is persisted. */
+  envVars: EnvValuesSchema.default({}),
+  /** Image-visible build arguments encrypted before this service is persisted. */
+  buildArgs: EnvValuesSchema.default({})
 };
 
 export const CreateServiceSchema = z
@@ -288,6 +327,31 @@ export const CreateServiceSchema = z
         });
       }
     }
+    if (service.kind === "release" && service.dependsOn.length > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["dependsOn"],
+        message: "Release services run before runtime services and cannot depend on them"
+      });
+    }
+    const seenDependencies = new Set<string>();
+    service.dependsOn.forEach((dependency, index) => {
+      if (seenDependencies.has(dependency.serviceSlug)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["dependsOn", index, "serviceSlug"],
+          message: "A service dependency may be declared only once"
+        });
+      }
+      seenDependencies.add(dependency.serviceSlug);
+      if (dependency.serviceSlug === service.slug) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["dependsOn", index, "serviceSlug"],
+          message: "A service cannot depend on itself"
+        });
+      }
+    });
   });
 export type CreateServiceInput = z.infer<typeof CreateServiceSchema>;
 
@@ -298,6 +362,8 @@ export const CreateProjectSchema = z
     gitRepo: z.string().url(),
     gitBranch: z.string().trim().min(1).default("main"),
     autoDeploy: z.boolean().default(false),
+    /** Runtime values shared by all services in this project. */
+    envVars: EnvValuesSchema.default({}),
     services: z.array(CreateServiceSchema).min(1).max(32)
   })
   .superRefine((project, ctx) => {
@@ -321,6 +387,53 @@ export const CreateProjectSchema = z
         message: "A project may have only one release service"
       });
     }
+
+    const bySlug = new Map(project.services.map((service) => [service.slug, service]));
+    project.services.forEach((service, serviceIndex) => {
+      service.dependsOn.forEach((dependency, dependencyIndex) => {
+        const target = bySlug.get(dependency.serviceSlug);
+        if (!target) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["services", serviceIndex, "dependsOn", dependencyIndex, "serviceSlug"],
+            message: `Unknown service dependency: ${dependency.serviceSlug}`
+          });
+        } else if (target.kind === "release") {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["services", serviceIndex, "dependsOn", dependencyIndex, "serviceSlug"],
+            message: "Runtime services cannot depend on a one-shot release service"
+          });
+        }
+      });
+    });
+
+    const visiting = new Set<string>();
+    const visited = new Set<string>();
+    const visit = (slug: string): boolean => {
+      if (visiting.has(slug)) return true;
+      if (visited.has(slug)) return false;
+      visiting.add(slug);
+      const service = bySlug.get(slug);
+      for (const dependency of service?.dependsOn ?? []) {
+        if (bySlug.has(dependency.serviceSlug) && visit(dependency.serviceSlug)) {
+          return true;
+        }
+      }
+      visiting.delete(slug);
+      visited.add(slug);
+      return false;
+    };
+    for (const service of project.services) {
+      if (visit(service.slug)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["services"],
+          message: "Service dependencies must not contain a cycle"
+        });
+        break;
+      }
+    }
   });
 export type CreateProjectInput = z.infer<typeof CreateProjectSchema>;
 
@@ -338,7 +451,13 @@ export const UpdateServiceSchema = z.object({
   port: z.coerce.number().int().min(1).max(65535).nullable().optional(),
   memoryLimitMb: z.coerce.number().int().min(16).max(65536).nullable().optional(),
   cpuLimit: z.coerce.number().min(0.1).max(64).nullable().optional(),
-  restartPolicy: z.enum(["no", "on-failure", "unless-stopped", "always"]).optional()
+  restartPolicy: z.enum(["no", "on-failure", "unless-stopped", "always"]).optional(),
+  dependsOn: z.array(ServiceDependencyInputSchema).max(32).optional(),
+  healthCheckCmd: z.string().trim().min(1).max(4096).nullable().optional(),
+  healthCheckIntervalSeconds: z.coerce.number().int().min(1).max(300).optional(),
+  healthCheckTimeoutSeconds: z.coerce.number().int().min(1).max(60).optional(),
+  healthCheckRetries: z.coerce.number().int().min(1).max(30).optional(),
+  healthCheckStartPeriodSeconds: z.coerce.number().int().min(0).max(600).optional()
 });
 export type UpdateServiceInput = z.infer<typeof UpdateServiceSchema>;
 
@@ -367,16 +486,8 @@ export const FsPathQuerySchema = z.object({
 });
 export type FsPathQuery = z.infer<typeof FsPathQuerySchema>;
 
-/** HTTP env var name (e.g. `NODE_ENV`, `API_KEY_2`). */
-export const EnvKeySchema = z
-  .string()
-  .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "Invalid env var name")
-  .max(128);
-
-const MAX_ENV_VALUE_LEN = 32_768;
-
 export const EnvVarsReplaceSchema = z.object({
-  vars: z.record(EnvKeySchema, z.string().max(MAX_ENV_VALUE_LEN))
+  vars: EnvValuesSchema
 });
 export type EnvVarsReplace = z.infer<typeof EnvVarsReplaceSchema>;
 
@@ -403,7 +514,7 @@ export type EnvQuery = z.infer<typeof EnvQuerySchema>;
  * surfaces can diverge (limits, validation) without touching each other.
  */
 export const BuildArgsReplaceSchema = z.object({
-  vars: z.record(EnvKeySchema, z.string().max(MAX_ENV_VALUE_LEN))
+  vars: EnvValuesSchema
 });
 export type BuildArgsReplace = z.infer<typeof BuildArgsReplaceSchema>;
 

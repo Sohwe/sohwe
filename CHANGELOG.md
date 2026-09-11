@@ -22,13 +22,22 @@ write-ups.
   warns that migrations are forward-only. Existing Applications retain their
   original single-container API and deploy path.
 
+- **Dependency-ordered, health-gated project starts.** Services can require a
+  sibling to be started or healthy before they launch. Optional health commands
+  become Docker health checks with configurable interval, timeout, retries, and
+  start period. Candidate HTTP containers start only on the private project
+  network and join Traefik after the entire release is ready. The dashboard now
+  composes arbitrary service topologies, including dependency conditions,
+  health checks, resource limits, domains, image groups, commands, and encrypted
+  project/service variables; named repositories remain acceptance fixtures only.
+
 - **Private project networking and project datastore bindings.** Project
   services share an isolated bridge with stable service-slug DNS aliases; only
   HTTP services also join Traefik. Managed Postgres/Redis can be bound once to
   all or selected services, and its encrypted connection URL is resolved at
   deploy time. Shared project variables and service overrides are encrypted at
-  rest. The dashboard now has a Projects view with a FleetOptics-ready
-  API/worker/migration form.
+  rest. The dashboard now has a generic Projects view for composing and
+  releasing HTTP services, private workers, and one-shot jobs.
 
 - **Per-service project logs.** HTTP, worker, and release-job stdout/stderr are
   stored with project, service, release, deployment, container, source stream,

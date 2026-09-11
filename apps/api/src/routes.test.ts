@@ -75,6 +75,7 @@ const TABLES = [
   "service_deployments",
   "project_releases",
   "service_domains",
+  "service_dependencies",
   "services",
   "projects",
   "volumes",
@@ -194,9 +195,28 @@ describe("API routes", { skip }, () => {
         method: "POST",
         url: "/api/projects",
         headers: { cookie },
-        payload: fleet
+        payload: {
+          ...fleet,
+          envVars: { PROJECT_SECRET: "project-create-secret" },
+          services: fleet.services.map((service, index) =>
+            index === 0
+              ? {
+                  ...service,
+                  envVars: { SERVICE_SECRET: "service-create-secret" },
+                  buildArgs: { BUILD_SECRET: "build-create-secret" }
+                }
+              : service
+          )
+        }
       });
       assert.equal(response.statusCode, 200, response.body);
+      for (const secret of [
+        "project-create-secret",
+        "service-create-secret",
+        "build-create-secret"
+      ]) {
+        assert.equal(response.body.includes(secret), false);
+      }
       const body = response.json() as { services: { kind: string; port: number | null }[] };
       assert.deepEqual(body.services.map((service) => service.kind).sort(), [
         "http",
@@ -207,6 +227,111 @@ describe("API routes", { skip }, () => {
       assert.equal(body.services[2]?.port, null);
       assert.equal(await prisma.application.count(), 0);
       assert.equal(await prisma.project.count(), 1);
+      const stored = await prisma.project.findFirstOrThrow({
+        where: { slug: "fleetoptics" },
+        select: {
+          envVarsEncrypted: true,
+          services: {
+            where: { slug: "api" },
+            select: { envVarsEncrypted: true, buildArgsEncrypted: true }
+          }
+        }
+      });
+      assert.deepEqual(decryptJson(stored.envVarsEncrypted!), {
+        PROJECT_SECRET: "project-create-secret"
+      });
+      assert.deepEqual(decryptJson(stored.services[0]!.envVarsEncrypted!), {
+        SERVICE_SECRET: "service-create-secret"
+      });
+      assert.deepEqual(decryptJson(stored.services[0]!.buildArgsEncrypted!), {
+        BUILD_SECRET: "build-create-secret"
+      });
+    });
+
+    it("creates the Chale Check topology with health-gated workers", async () => {
+      const cookie = await signIn();
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        headers: { cookie },
+        payload: {
+          name: "Chale Check",
+          slug: "chale-check",
+          gitRepo: "https://github.com/acme/web-app",
+          services: [
+            {
+              name: "Web",
+              slug: "web",
+              kind: "http",
+              port: 3000,
+              dockerfilePath: "apps/web/Dockerfile",
+              dependsOn: [{ serviceSlug: "api", condition: "started" }]
+            },
+            {
+              name: "API",
+              slug: "api",
+              kind: "http",
+              port: 4000,
+              dockerfilePath: "apps/api/Dockerfile",
+              healthCheckCmd: "node healthcheck.js",
+              healthCheckStartPeriodSeconds: 30
+            },
+            {
+              name: "Worker",
+              slug: "worker",
+              kind: "worker",
+              dockerfilePath: "apps/api/Dockerfile.worker",
+              dependsOn: [{ serviceSlug: "api", condition: "healthy" }]
+            },
+            {
+              name: "Media worker",
+              slug: "media-worker",
+              kind: "worker",
+              dockerfilePath: "apps/api/Dockerfile.worker",
+              memoryLimitMb: 1024,
+              dependsOn: [{ serviceSlug: "api", condition: "healthy" }]
+            },
+            {
+              name: "Migrate",
+              slug: "migrate",
+              kind: "release",
+              restartPolicy: "no",
+              dockerfilePath: "apps/api/Dockerfile"
+            }
+          ]
+        }
+      });
+      assert.equal(response.statusCode, 200, response.body);
+      const body = response.json() as {
+        services: {
+          id: string;
+          slug: string;
+          healthCheckCmd: string | null;
+          dependencies: { condition: string; dependencyService: { slug: string } }[];
+        }[];
+      };
+      const worker = body.services.find((service) => service.slug === "worker")!;
+      const apiService = body.services.find((service) => service.slug === "api")!;
+      assert.equal(worker.dependencies[0]?.condition, "healthy");
+      assert.equal(worker.dependencies[0]?.dependencyService.slug, "api");
+      assert.equal(apiService.healthCheckCmd, "node healthcheck.js");
+      assert.equal(await prisma.serviceDependency.count(), 3);
+
+      const cycle = await app.inject({
+        method: "PATCH",
+        url: `/api/services/${apiService.id}`,
+        headers: { cookie },
+        payload: {
+          dependsOn: [{ serviceSlug: "worker", condition: "healthy" }]
+        }
+      });
+      assert.equal(cycle.statusCode, 400, cycle.body);
+      const deletion = await app.inject({
+        method: "DELETE",
+        url: `/api/services/${apiService.id}`,
+        headers: { cookie }
+      });
+      assert.equal(deletion.statusCode, 409, deletion.body);
     });
 
     it("stores shared variables encrypted and returns keys only", async () => {

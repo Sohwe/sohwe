@@ -47,6 +47,14 @@ const OPTS: BuildBundleOptions = {
   createdAtIso: "2026-01-01T00:00:00.000Z"
 };
 
+const DEFAULT_SERVICE_HEALTH = {
+  healthCheckCmd: null,
+  healthCheckIntervalSeconds: 10,
+  healthCheckTimeoutSeconds: 5,
+  healthCheckRetries: 3,
+  healthCheckStartPeriodSeconds: 2
+};
+
 const FLEET_PROJECT: BundleProjectInput = {
   name: "FleetOptics",
   slug: "fleetoptics",
@@ -72,6 +80,8 @@ const FLEET_PROJECT: BundleProjectInput = {
       memoryLimitMb: 512,
       cpuLimit: 1,
       restartPolicy: "unless-stopped",
+      dependencies: [],
+      ...DEFAULT_SERVICE_HEALTH,
       envVars: { API_ONLY: "secret" },
       buildArgs: {}
     },
@@ -93,6 +103,8 @@ const FLEET_PROJECT: BundleProjectInput = {
       memoryLimitMb: 512,
       cpuLimit: 1,
       restartPolicy: "unless-stopped",
+      dependencies: [{ serviceSlug: "api", condition: "healthy" }],
+      ...DEFAULT_SERVICE_HEALTH,
       envVars: {},
       buildArgs: {}
     },
@@ -114,6 +126,8 @@ const FLEET_PROJECT: BundleProjectInput = {
       memoryLimitMb: null,
       cpuLimit: null,
       restartPolicy: "no",
+      dependencies: [],
+      ...DEFAULT_SERVICE_HEALTH,
       envVars: {},
       buildArgs: {}
     }
@@ -721,5 +735,8 @@ describe("v6 projects and services", () => {
     assert.deepEqual(parsed.projects[0]?.services[0]?.envVars, {
       API_ONLY: "secret"
     });
+    assert.deepEqual(parsed.projects[0]?.services[1]?.dependencies, [
+      { serviceSlug: "api", condition: "healthy" }
+    ]);
   });
 });

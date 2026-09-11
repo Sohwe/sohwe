@@ -904,6 +904,12 @@ export async function registerBackupRoutes(app: FastifyInstance) {
               memoryLimitMb: service.memoryLimitMb,
               cpuLimit: service.cpuLimit,
               restartPolicy: service.kind === "release" ? "no" : service.restartPolicy,
+              healthCheckCmd: service.healthCheckCmd,
+              healthCheckIntervalSeconds: service.healthCheckIntervalSeconds,
+              healthCheckTimeoutSeconds: service.healthCheckTimeoutSeconds,
+              healthCheckRetries: service.healthCheckRetries,
+              healthCheckStartPeriodSeconds:
+                service.healthCheckStartPeriodSeconds,
               envVarsEncrypted:
                 Object.keys(service.envVars).length > 0
                   ? encryptJson(service.envVars)
@@ -960,11 +966,26 @@ export async function registerBackupRoutes(app: FastifyInstance) {
             usedProjectSlugs.add(slug);
             projectIdBySlug.set(slug, restored.id);
           }
+          const restoredServiceIds = new Map(
+            restored.services.map((service) => [service.slug, service.id])
+          );
+          const dependencyRows = project.services.flatMap((service) =>
+            service.dependencies.flatMap((dependency) => {
+              const serviceId = restoredServiceIds.get(service.slug);
+              const dependencyServiceId = restoredServiceIds.get(
+                dependency.serviceSlug
+              );
+              return serviceId && dependencyServiceId
+                ? [{ serviceId, dependencyServiceId, condition: dependency.condition }]
+                : [];
+            })
+          );
+          if (dependencyRows.length > 0) {
+            await tx.serviceDependency.createMany({ data: dependencyRows });
+          }
           projectByBundleSlug.set(project.slug, {
             id: restored.id,
-            serviceIdBySlug: new Map(
-              restored.services.map((service) => [service.slug, service.id])
-            )
+            serviceIdBySlug: restoredServiceIds
           });
         }
 

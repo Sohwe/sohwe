@@ -315,6 +315,32 @@ describe("CreateProjectSchema", () => {
       "release"
     ]);
     assert.equal(parsed.services[0]?.dockerfilePath, "Dockerfile");
+    assert.deepEqual(parsed.envVars, {});
+    assert.deepEqual(parsed.services[0]?.envVars, {});
+    assert.deepEqual(parsed.services[0]?.buildArgs, {});
+  });
+
+  it("accepts generic project, service, and build variables", () => {
+    const parsed = CreateProjectSchema.parse({
+      ...fleet,
+      envVars: { NODE_ENV: "production" },
+      services: fleet.services.map((service, index) =>
+        index === 0
+          ? {
+              ...service,
+              envVars: { INTERNAL_URL: "http://worker:3000" },
+              buildArgs: { PUBLIC_URL: "https://example.com" }
+            }
+          : service
+      )
+    });
+    assert.deepEqual(parsed.envVars, { NODE_ENV: "production" });
+    assert.deepEqual(parsed.services[0]?.envVars, {
+      INTERNAL_URL: "http://worker:3000"
+    });
+    assert.deepEqual(parsed.services[0]?.buildArgs, {
+      PUBLIC_URL: "https://example.com"
+    });
   });
 
   it("requires ports only for routed HTTP services", () => {
@@ -340,6 +366,88 @@ describe("CreateProjectSchema", () => {
         ...fleet,
         services: [...fleet.services, { ...fleet.services[2], name: "Other" }]
       }).success,
+      false
+    );
+  });
+
+  it("accepts Chale Check health-gated workers", () => {
+    const parsed = CreateProjectSchema.parse({
+      name: "Chale Check",
+      slug: "chale-check",
+      gitRepo: "https://github.com/acme/web-app",
+      services: [
+        {
+          name: "API",
+          slug: "api",
+          kind: "http",
+          port: 4000,
+          dockerfilePath: "apps/api/Dockerfile",
+          healthCheckCmd:
+            "node -e \"require('http').get('http://localhost:4000/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))\""
+        },
+        {
+          name: "Worker",
+          slug: "worker",
+          kind: "worker",
+          dockerfilePath: "apps/api/Dockerfile.worker",
+          dependsOn: [{ serviceSlug: "api", condition: "healthy" }]
+        },
+        {
+          name: "Web",
+          slug: "web",
+          kind: "http",
+          port: 3000,
+          dockerfilePath: "apps/web/Dockerfile",
+          dependsOn: [{ serviceSlug: "api", condition: "started" }]
+        }
+      ]
+    });
+    assert.equal(parsed.services[1]?.dependsOn[0]?.condition, "healthy");
+    assert.equal(parsed.services[0]?.healthCheckRetries, 3);
+  });
+
+  it("rejects missing, self, release, duplicate, and cyclic dependencies", () => {
+    const project = (services: unknown[]) => ({ ...fleet, services });
+    const api = { name: "API", slug: "api", kind: "http", port: 4000 };
+    const worker = { name: "Worker", slug: "worker", kind: "worker" };
+    assert.equal(
+      CreateProjectSchema.safeParse(
+        project([{ ...worker, dependsOn: [{ serviceSlug: "missing" }] }])
+      ).success,
+      false
+    );
+    assert.equal(
+      CreateProjectSchema.safeParse(
+        project([{ ...worker, dependsOn: [{ serviceSlug: "worker" }] }])
+      ).success,
+      false
+    );
+    assert.equal(
+      CreateProjectSchema.safeParse(
+        project([
+          api,
+          { ...worker, dependsOn: [{ serviceSlug: "api" }, { serviceSlug: "api" }] }
+        ])
+      ).success,
+      false
+    );
+    assert.equal(
+      CreateProjectSchema.safeParse(
+        project([
+          { ...api, dependsOn: [{ serviceSlug: "worker" }] },
+          { ...worker, dependsOn: [{ serviceSlug: "api" }] }
+        ])
+      ).success,
+      false
+    );
+    assert.equal(
+      CreateProjectSchema.safeParse(
+        project([
+          api,
+          { name: "Migrate", slug: "migrate", kind: "release" },
+          { ...worker, dependsOn: [{ serviceSlug: "migrate" }] }
+        ])
+      ).success,
       false
     );
   });

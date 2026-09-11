@@ -155,18 +155,22 @@ commit. A project can contain:
   before a candidate release can start.
 
 All services share a project bridge and resolve one another by service slug.
-Sohwe builds every image first, runs the release job, starts and checks the
-runtime candidates, then moves the project to the new release. Until that final
-promotion boundary, the previous release stays live. Coordinated rollback
-reuses all service images from a successful release; database migrations are
-forward-only.
+Sohwe builds every image first, runs the release job, then starts runtime
+services in dependency order. A dependency can require only that its container
+started or wait for its configurable Docker health command to pass. HTTP
+candidates remain off the Traefik network until the complete release is ready;
+until that promotion boundary, the previous release stays live. Coordinated
+rollback reuses all service images from a successful release; database
+migrations are forward-only.
 
-The first dashboard preset targets FleetOptics: root Dockerfile stages `api`,
-`worker`, and `migrate`. The project API also supports arbitrary service lists,
-per-service Dockerfiles/targets/commands/resource limits, explicit image groups
-for sharing one build, and shared or service-specific encrypted variables.
-Managed Postgres/Redis bindings may target every service or a selected subset.
-External S3/R2 settings belong in encrypted project/service variables.
+The dashboard is a general service-topology composer rather than a collection
+of repository presets. Define any supported service list, including each
+service's directory, Dockerfile/target, build and runtime commands, resource
+limits, health check, dependencies, domains, shared-image group, runtime
+variables, and image-visible build arguments. Shared project variables are
+inherited by every service, with service values taking precedence. Managed
+Postgres/Redis bindings may target every service or a selected subset. External
+S3/R2 settings belong in encrypted project/service variables.
 
 Project service logs are persisted separately from build logs, tagged by
 service and release, and available as both bounded history and authenticated

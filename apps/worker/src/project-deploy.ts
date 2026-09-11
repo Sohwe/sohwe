@@ -23,7 +23,7 @@ import type Docker from "dockerode";
 import { LogSink } from "./build-log";
 import { resolveRoutingConfig } from "./container-spec";
 import {
-  connectHttpServiceToProjectNetwork,
+  connectHttpServiceToRoutingNetwork,
   ensureProjectNetwork,
   stopAndRemoveProjectContainers
 } from "./project-docker-ops";
@@ -40,7 +40,6 @@ import {
 
 const MAX_COMMIT_MESSAGE = 2000;
 const MAX_PERSISTED_LOGS_PER_PROJECT = 10_000;
-const CANDIDATE_READY_TIMEOUT_MS = 30_000;
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -49,29 +48,85 @@ function delay(ms: number): Promise<void> {
 /** Honor image HEALTHCHECK when present; otherwise require short process stability. */
 async function waitForCandidateReady(
   container: Docker.Container,
-  serviceSlug: string
+  service: {
+    slug: string;
+    healthCheckCmd: string | null;
+    healthCheckIntervalSeconds: number;
+    healthCheckTimeoutSeconds: number;
+    healthCheckRetries: number;
+    healthCheckStartPeriodSeconds: number;
+  }
 ): Promise<void> {
-  const deadline = Date.now() + CANDIDATE_READY_TIMEOUT_MS;
+  const stabilityMs = Math.max(0, service.healthCheckStartPeriodSeconds) * 1_000;
+  const healthBudgetMs = service.healthCheckCmd
+    ? stabilityMs +
+      service.healthCheckIntervalSeconds * service.healthCheckRetries * 1_000 +
+      service.healthCheckTimeoutSeconds * 1_000 +
+      5_000
+    : Math.max(30_000, stabilityMs + 5_000);
+  const deadline = Date.now() + healthBudgetMs;
   let observedWithoutHealthAt: number | null = null;
   for (;;) {
     const info = await container.inspect();
     if (!info.State?.Running) {
-      throw new Error(`Service ${serviceSlug} stopped before it became ready`);
+      throw new Error(`Service ${service.slug} stopped before it became ready`);
     }
     const health = info.State.Health?.Status;
     if (health === "healthy") return;
     if (health === "unhealthy") {
-      throw new Error(`Service ${serviceSlug} failed its container health check`);
+      throw new Error(`Service ${service.slug} failed its container health check`);
     }
     if (!health) {
       observedWithoutHealthAt ??= Date.now();
-      if (Date.now() - observedWithoutHealthAt >= 2_000) return;
+      if (Date.now() - observedWithoutHealthAt >= stabilityMs) return;
     }
     if (Date.now() >= deadline) {
-      throw new Error(`Service ${serviceSlug} did not become ready within 30s`);
+      throw new Error(
+        `Service ${service.slug} did not become ready within ${Math.ceil(healthBudgetMs / 1_000)}s`
+      );
     }
     await delay(500);
   }
+}
+
+type OrderedService = {
+  id: string;
+  slug: string;
+  kind: string;
+  dependencies: {
+    condition: string;
+    dependencyService: { id: string; slug: string; kind: string };
+  }[];
+};
+
+/** Stable topological order; persisted order breaks ties for predictable starts. */
+export function orderRuntimeServices<T extends OrderedService>(services: T[]): T[] {
+  const runtime = services.filter((service) => service.kind !== "release");
+  const byId = new Map(runtime.map((service) => [service.id, service]));
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const ordered: T[] = [];
+  const visit = (service: T) => {
+    if (visited.has(service.id)) return;
+    if (visiting.has(service.id)) {
+      throw new Error(`Service dependency cycle includes ${service.slug}`);
+    }
+    visiting.add(service.id);
+    for (const dependency of service.dependencies) {
+      const target = byId.get(dependency.dependencyService.id);
+      if (!target) {
+        throw new Error(
+          `Service ${service.slug} depends on unavailable service ${dependency.dependencyService.slug}`
+        );
+      }
+      visit(target);
+    }
+    visiting.delete(service.id);
+    visited.add(service.id);
+    ordered.push(service);
+  };
+  runtime.forEach(visit);
+  return ordered;
 }
 
 function readVars(value: Buffer | Uint8Array | null | undefined): Record<string, string> {
@@ -242,7 +297,17 @@ export function createProjectDeployer(deps: {
       include: {
         services: {
           orderBy: [{ kind: "asc" }, { createdAt: "asc" }],
-          include: { domains: { orderBy: { createdAt: "asc" } } }
+          include: {
+            domains: { orderBy: { createdAt: "asc" } },
+            dependencies: {
+              orderBy: { createdAt: "asc" },
+              include: {
+                dependencyService: {
+                  select: { id: true, slug: true, kind: true }
+                }
+              }
+            }
+          }
         },
         datastoreBindings: { include: { datastore: true } }
       }
@@ -534,14 +599,6 @@ export function createProjectDeployer(deps: {
               routing
             })
           );
-          if (service.kind === "http") {
-            await connectHttpServiceToProjectNetwork(
-              deps.docker,
-              project.id,
-              container.id,
-              service.slug
-            );
-          }
           candidates.push({
             service,
             deploymentId: deployment.id,
@@ -553,7 +610,42 @@ export function createProjectDeployer(deps: {
           });
         }
 
-        for (const candidate of candidates) {
+        const candidateByService = new Map(
+          candidates.map((candidate) => [candidate.service.id, candidate])
+        );
+        const ready = new Set<string>();
+        const ensureReady = async (candidate: (typeof candidates)[number]) => {
+          if (ready.has(candidate.service.id)) return;
+          await waitForCandidateReady(candidate.container, candidate.service);
+          ready.add(candidate.service.id);
+          await systemLog(
+            {
+              projectId: project.id,
+              serviceId: candidate.service.id,
+              releaseId: release.id,
+              serviceDeploymentId: candidate.deploymentId,
+              containerId: candidate.container.id,
+              restartNumber: 0
+            },
+            "[sohwe] Service is ready"
+          );
+        };
+
+        for (const service of orderRuntimeServices(project.services)) {
+          const candidate = candidateByService.get(service.id)!;
+          for (const dependency of service.dependencies) {
+            const dependencyCandidate = candidateByService.get(
+              dependency.dependencyService.id
+            );
+            if (!dependencyCandidate) {
+              throw new Error(
+                `Service ${service.slug} depends on unavailable service ${dependency.dependencyService.slug}`
+              );
+            }
+            if (dependency.condition === "healthy") {
+              await ensureReady(dependencyCandidate);
+            }
+          }
           const since = Math.floor(Date.now() / 1000) - 1;
           await candidate.container.start();
           await serviceLogs.start(
@@ -573,8 +665,7 @@ export function createProjectDeployer(deps: {
             data: {
               status: "running",
               containerId: candidate.container.id,
-              startedAt: new Date(),
-              finishedAt: new Date()
+              startedAt: new Date()
             }
           });
           await systemLog(
@@ -589,10 +680,21 @@ export function createProjectDeployer(deps: {
             "[sohwe] Service started"
           );
         }
+        await Promise.all(candidates.map(ensureReady));
+
+        // Traefik cannot see candidates while they are being checked. Attach
+        // routed services only after the whole release is ready, then retire
+        // the old containers below.
         await Promise.all(
-          candidates.map((candidate) =>
-            waitForCandidateReady(candidate.container, candidate.service.slug)
-          )
+          candidates
+            .filter((candidate) => candidate.service.kind === "http")
+            .map((candidate) =>
+              connectHttpServiceToRoutingNetwork(
+                deps.docker,
+                routing.network,
+                candidate.container.id
+              )
+            )
         );
       } catch (error) {
         for (const candidate of candidates) {

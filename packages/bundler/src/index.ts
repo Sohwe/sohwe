@@ -122,6 +122,15 @@ export type BundleServiceInput = {
   memoryLimitMb: number | null;
   cpuLimit: number | null;
   restartPolicy: string;
+  dependencies: {
+    serviceSlug: string;
+    condition: "started" | "healthy";
+  }[];
+  healthCheckCmd: string | null;
+  healthCheckIntervalSeconds: number;
+  healthCheckTimeoutSeconds: number;
+  healthCheckRetries: number;
+  healthCheckStartPeriodSeconds: number;
   envVars: Record<string, string>;
   buildArgs: Record<string, string>;
 };
@@ -204,6 +213,19 @@ const ServiceEntrySchema = z.object({
   memoryLimitMb: z.number().nullable(),
   cpuLimit: z.number().nullable(),
   restartPolicy: z.string(),
+  dependencies: z
+    .array(
+      z.object({
+        serviceSlug: z.string(),
+        condition: z.enum(["started", "healthy"])
+      })
+    )
+    .default([]),
+  healthCheckCmd: z.string().nullable().default(null),
+  healthCheckIntervalSeconds: z.number().int().default(10),
+  healthCheckTimeoutSeconds: z.number().int().default(5),
+  healthCheckRetries: z.number().int().default(3),
+  healthCheckStartPeriodSeconds: z.number().int().default(2),
   env: SecretBlockSchema.optional(),
   buildArgs: SecretBlockSchema.optional()
 });
@@ -528,6 +550,15 @@ export function buildBundle(
         memoryLimitMb: service.memoryLimitMb,
         cpuLimit: service.cpuLimit,
         restartPolicy: service.restartPolicy,
+        dependencies: service.dependencies.map((dependency) => ({
+          serviceSlug: dependency.serviceSlug,
+          condition: dependency.condition
+        })),
+        healthCheckCmd: service.healthCheckCmd,
+        healthCheckIntervalSeconds: service.healthCheckIntervalSeconds,
+        healthCheckTimeoutSeconds: service.healthCheckTimeoutSeconds,
+        healthCheckRetries: service.healthCheckRetries,
+        healthCheckStartPeriodSeconds: service.healthCheckStartPeriodSeconds,
         ...(opts.includeSecrets && Object.keys(service.envVars).length > 0
           ? {
               env: {

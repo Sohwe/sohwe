@@ -96,7 +96,13 @@ export async function gatherBundleProjects(
     where: { organizationId },
     include: {
       services: {
-        include: { domains: { orderBy: { createdAt: "asc" } } },
+        include: {
+          domains: { orderBy: { createdAt: "asc" } },
+          dependencies: {
+            orderBy: { createdAt: "asc" },
+            include: { dependencyService: { select: { slug: true } } }
+          }
+        },
         orderBy: { createdAt: "asc" }
       }
     },
@@ -126,6 +132,15 @@ export async function gatherBundleProjects(
       memoryLimitMb: service.memoryLimitMb,
       cpuLimit: service.cpuLimit == null ? null : Number(service.cpuLimit),
       restartPolicy: service.restartPolicy,
+      dependencies: service.dependencies.map((dependency) => ({
+        serviceSlug: dependency.dependencyService.slug,
+        condition: dependency.condition === "started" ? "started" as const : "healthy" as const
+      })),
+      healthCheckCmd: service.healthCheckCmd,
+      healthCheckIntervalSeconds: service.healthCheckIntervalSeconds,
+      healthCheckTimeoutSeconds: service.healthCheckTimeoutSeconds,
+      healthCheckRetries: service.healthCheckRetries,
+      healthCheckStartPeriodSeconds: service.healthCheckStartPeriodSeconds,
       envVars: includeSecrets ? readVars(service.envVarsEncrypted) : {},
       buildArgs: includeSecrets ? readVars(service.buildArgsEncrypted) : {}
     }))

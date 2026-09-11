@@ -100,6 +100,20 @@ export type ProjectService = {
   memoryLimitMb: number | null;
   cpuLimit: number | null;
   restartPolicy: string;
+  healthCheckCmd: string | null;
+  healthCheckIntervalSeconds: number;
+  healthCheckTimeoutSeconds: number;
+  healthCheckRetries: number;
+  healthCheckStartPeriodSeconds: number;
+  dependencies: {
+    condition: "started" | "healthy";
+    dependencyService: {
+      id: string;
+      name: string;
+      slug: string;
+      kind: ServiceKind;
+    };
+  }[];
   domains: { id: string; hostname: string; isPrimary: boolean }[];
 };
 

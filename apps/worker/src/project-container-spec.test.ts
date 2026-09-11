@@ -7,6 +7,7 @@ import {
   projectServiceContainerName,
   type ProjectServiceSpec
 } from "./project-container-spec";
+import { orderRuntimeServices } from "./project-deploy";
 
 const PROJECT = {
   id: "11111111-2222-3333-4444-555555555555",
@@ -31,6 +32,11 @@ function service(overrides: Partial<ProjectServiceSpec>): ProjectServiceSpec {
     memoryLimitMb: null,
     cpuLimit: null,
     restartPolicy: "unless-stopped",
+    healthCheckCmd: null,
+    healthCheckIntervalSeconds: 10,
+    healthCheckTimeoutSeconds: 5,
+    healthCheckRetries: 3,
+    healthCheckStartPeriodSeconds: 2,
     domains: [],
     ...overrides
   };
@@ -51,7 +57,7 @@ function spec(value: ProjectServiceSpec) {
 describe("project service container specs", () => {
   it("routes only HTTP services and labels every identity dimension", () => {
     const result = spec(service({}));
-    assert.equal(result.HostConfig?.NetworkMode, "sohwe_proxy");
+    assert.equal(result.HostConfig?.NetworkMode, projectInternalNetworkName(PROJECT.id));
     assert.equal(result.Labels?.["traefik.enable"], "true");
     assert.equal(result.Labels?.["sohwe.project"], PROJECT.id);
     assert.equal(result.Labels?.["sohwe.service-kind"], "http");
@@ -96,5 +102,65 @@ describe("project service container specs", () => {
       Type: "json-file",
       Config: { "max-size": "10m", "max-file": "3" }
     });
+  });
+
+  it("installs a configurable Docker health check", () => {
+    const result = spec(
+      service({
+        healthCheckCmd: "node healthcheck.js",
+        healthCheckIntervalSeconds: 7,
+        healthCheckTimeoutSeconds: 3,
+        healthCheckRetries: 5,
+        healthCheckStartPeriodSeconds: 20
+      })
+    );
+    assert.deepEqual(result.Healthcheck, {
+      Test: ["CMD-SHELL", "node healthcheck.js"],
+      Interval: 7_000_000_000,
+      Timeout: 3_000_000_000,
+      Retries: 5,
+      StartPeriod: 20_000_000_000
+    });
+  });
+});
+
+describe("project service dependency order", () => {
+  const orderedService = (
+    id: string,
+    kind: string,
+    dependencies: { id: string; slug: string; kind: string }[] = []
+  ) => ({
+    id,
+    slug: id,
+    kind,
+    dependencies: dependencies.map((dependency) => ({
+      condition: "healthy",
+      dependencyService: dependency
+    }))
+  });
+
+  it("starts API before Chale Check web and workers", () => {
+    const api = orderedService("api", "http");
+    const web = orderedService("web", "http", [api]);
+    const worker = orderedService("worker", "worker", [api]);
+    const migrate = orderedService("migrate", "release");
+    assert.deepEqual(
+      orderRuntimeServices([worker, migrate, web, api]).map((item) => item.id),
+      ["api", "worker", "web"]
+    );
+  });
+
+  it("rejects cycles and dependencies on release jobs", () => {
+    const a = orderedService("a", "worker", [
+      { id: "b", slug: "b", kind: "worker" }
+    ]);
+    const b = orderedService("b", "worker", [
+      { id: "a", slug: "a", kind: "worker" }
+    ]);
+    assert.throws(() => orderRuntimeServices([a, b]), /cycle/);
+
+    const release = orderedService("migrate", "release");
+    const worker = orderedService("worker", "worker", [release]);
+    assert.throws(() => orderRuntimeServices([release, worker]), /unavailable/);
   });
 });

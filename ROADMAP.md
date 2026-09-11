@@ -539,7 +539,7 @@ separate settings layered on top of that root context.
       are healthy and before new API/worker containers start. Preserve its
       separate logs and exit status.
 - [x] Do not replace the current release when a build or release job fails.
-- [ ] Start services in dependency order and gate HTTP promotion on configurable
+- [x] Start services in dependency order and gate HTTP promotion on configurable
       liveness/readiness checks; workers need process/container health without
       an HTTP probe.
 - [x] Record one project release with per-service deployment states and a shared
@@ -606,6 +606,16 @@ separate settings layered on top of that root context.
       run web, API, email/maintenance worker, and memory-limited media worker
       from one commit; bind Postgres/Redis and external R2; preserve the
       API-before-worker migration/health ordering.
+      Local fixture evidence on 2026-09-11 (`dev` at `794540c`): all three
+      production images build, including pnpm 10.33.2, the glibc media package,
+      and the web build argument; API `/health`, web, email worker, and media
+      worker boot in disposable containers. Fresh-database acceptance is
+      blocked in the fixture itself: migration
+      `1784300000001_live_activity_presets_icon_details` runs before the table
+      creator `1783887427000003_live_activity_presets`, so the one-shot release
+      correctly fails and must not be promoted. Keep this item open until that
+      repository migration order is repaired and the full Sohwe-hosted release
+      is exercised with real bindings.
 - [ ] `qqueue`: pnpm 9 + Turborepo; deploy static web, API, and unrouted worker;
       run Prisma migration once; bind Postgres/Redis and external S3 or managed
       MinIO; serve web and API routes through Sohwe rather than its bundled
@@ -626,7 +636,9 @@ dashboard/API without editing the repositories solely to satisfy Sohwe. Repo
 changes that are ordinary production configuration (application secrets,
 public URLs, or choosing external object storage) are allowed; flattening a
 monorepo, merging workers into an HTTP process, or moving Dockerfiles to the
-root is not.
+root is not. These repositories are acceptance evidence, not named presets or
+special cases in Sohwe: the same project/service composer and API must describe
+them and unrelated repositories without repository-specific code paths.
 
 ### Long Term - Multi-Host Kubernetes Runtime
 

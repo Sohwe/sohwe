@@ -48,6 +48,20 @@ const serviceSelect = {
   memoryLimitMb: true,
   cpuLimit: true,
   restartPolicy: true,
+  healthCheckCmd: true,
+  healthCheckIntervalSeconds: true,
+  healthCheckTimeoutSeconds: true,
+  healthCheckRetries: true,
+  healthCheckStartPeriodSeconds: true,
+  dependencies: {
+    orderBy: { createdAt: "asc" as const },
+    select: {
+      condition: true,
+      dependencyService: {
+        select: { id: true, name: true, slug: true, kind: true }
+      }
+    }
+  },
   domains: {
     orderBy: [{ isPrimary: "desc" as const }, { createdAt: "asc" as const }],
     select: { id: true, hostname: true, isPrimary: true, createdAt: true }
@@ -109,6 +123,67 @@ function projectSelect(releaseTake = 20) {
   };
 }
 
+type DependencyGraphService = {
+  id: string;
+  slug: string;
+  kind: string;
+  dependencies: { dependencyServiceId: string }[];
+};
+
+function validateDependencyChange(
+  services: DependencyGraphService[],
+  serviceId: string,
+  dependencies: { serviceSlug: string; condition: "started" | "healthy" }[]
+): { error?: string; rows?: { dependencyServiceId: string; condition: string }[] } {
+  const current = services.find((service) => service.id === serviceId);
+  if (!current) return { error: "Service not found" };
+  if (current.kind === "release" && dependencies.length > 0) {
+    return { error: "Release services cannot depend on runtime services" };
+  }
+  const bySlug = new Map(services.map((service) => [service.slug, service]));
+  const rows: { dependencyServiceId: string; condition: string }[] = [];
+  const seen = new Set<string>();
+  for (const dependency of dependencies) {
+    const target = bySlug.get(dependency.serviceSlug);
+    if (!target) return { error: `Unknown service dependency: ${dependency.serviceSlug}` };
+    if (target.id === serviceId) return { error: "A service cannot depend on itself" };
+    if (target.kind === "release") {
+      return { error: "Runtime services cannot depend on a one-shot release service" };
+    }
+    if (seen.has(target.id)) {
+      return { error: `Service ${dependency.serviceSlug} is listed more than once` };
+    }
+    seen.add(target.id);
+    rows.push({ dependencyServiceId: target.id, condition: dependency.condition });
+  }
+
+  const edges = new Map(
+    services.map((service) => [
+      service.id,
+      service.id === serviceId
+        ? rows.map((row) => row.dependencyServiceId)
+        : service.dependencies.map((dependency) => dependency.dependencyServiceId)
+    ])
+  );
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const visit = (id: string): boolean => {
+    if (visiting.has(id)) return true;
+    if (visited.has(id)) return false;
+    visiting.add(id);
+    for (const dependencyId of edges.get(id) ?? []) {
+      if (visit(dependencyId)) return true;
+    }
+    visiting.delete(id);
+    visited.add(id);
+    return false;
+  };
+  if (services.some((service) => visit(service.id))) {
+    return { error: "Service dependencies must not contain a cycle" };
+  }
+  return { rows };
+}
+
 function serializeLog(row: {
   id: bigint;
   projectId: string;
@@ -158,7 +233,8 @@ export async function registerProjectRoutes(app: FastifyInstance) {
     "/api/projects",
     {
       preHandler: [requireRole("admin")],
-      schema: { body: CreateProjectSchema }
+      schema: { body: CreateProjectSchema },
+      logLevel: "silent"
     },
     async (req, reply) => {
       const user = req.user!;
@@ -189,17 +265,28 @@ export async function registerProjectRoutes(app: FastifyInstance) {
       }
 
       try {
-        const row = await prisma.project.create({
-          data: {
-            organizationId: user.organizationId,
-            name: body.name,
-            slug: body.slug,
-            gitRepo: body.gitRepo,
-            gitBranch: body.gitBranch,
-            repoFullName: fullName,
-            autoDeploy: body.autoDeploy,
-            services: {
-              create: body.services.map((service) => ({
+        const row = await prisma.$transaction(async (tx) => {
+          const createdProject = await tx.project.create({
+            data: {
+              organizationId: user.organizationId,
+              name: body.name,
+              slug: body.slug,
+              gitRepo: body.gitRepo,
+              gitBranch: body.gitBranch,
+              repoFullName: fullName,
+              autoDeploy: body.autoDeploy,
+              envVarsEncrypted:
+                Object.keys(body.envVars).length > 0
+                  ? encryptJson(body.envVars)
+                  : null
+            },
+            select: { id: true }
+          });
+          const serviceIds = new Map<string, string>();
+          for (const service of body.services) {
+            const createdService = await tx.service.create({
+              data: {
+                projectId: createdProject.id,
                 name: service.name,
                 slug: service.slug,
                 kind: service.kind,
@@ -217,16 +304,45 @@ export async function registerProjectRoutes(app: FastifyInstance) {
                 cpuLimit: service.cpuLimit ?? null,
                 restartPolicy:
                   service.kind === "release" ? "no" : service.restartPolicy,
+                healthCheckCmd: service.healthCheckCmd ?? null,
+                healthCheckIntervalSeconds: service.healthCheckIntervalSeconds,
+                healthCheckTimeoutSeconds: service.healthCheckTimeoutSeconds,
+                healthCheckRetries: service.healthCheckRetries,
+                healthCheckStartPeriodSeconds:
+                  service.healthCheckStartPeriodSeconds,
+                envVarsEncrypted:
+                  Object.keys(service.envVars).length > 0
+                    ? encryptJson(service.envVars)
+                    : null,
+                buildArgsEncrypted:
+                  Object.keys(service.buildArgs).length > 0
+                    ? encryptJson(service.buildArgs)
+                    : null,
                 domains: {
                   create: service.domains.map((hostname, index) => ({
                     hostname,
                     isPrimary: index === 0
                   }))
                 }
-              }))
-            }
-          },
-          select: projectSelect()
+              },
+              select: { id: true }
+            });
+            serviceIds.set(service.slug, createdService.id);
+          }
+          const dependencies = body.services.flatMap((service) =>
+            service.dependsOn.map((dependency) => ({
+              serviceId: serviceIds.get(service.slug)!,
+              dependencyServiceId: serviceIds.get(dependency.serviceSlug)!,
+              condition: dependency.condition
+            }))
+          );
+          if (dependencies.length > 0) {
+            await tx.serviceDependency.createMany({ data: dependencies });
+          }
+          return tx.project.findUniqueOrThrow({
+            where: { id: createdProject.id },
+            select: projectSelect()
+          });
         });
         await recordAudit(req, {
           action: "project.create",
@@ -238,8 +354,11 @@ export async function registerProjectRoutes(app: FastifyInstance) {
             gitBranch: body.gitBranch,
             services: body.services.map((service) => ({
               slug: service.slug,
-              kind: service.kind
-            }))
+              kind: service.kind,
+              variableKeys: Object.keys(service.envVars).sort(),
+              buildArgKeys: Object.keys(service.buildArgs).sort()
+            })),
+            variableKeys: Object.keys(body.envVars).sort()
           }
         });
         return row;
@@ -293,7 +412,21 @@ export async function registerProjectRoutes(app: FastifyInstance) {
           id: serviceId,
           project: { organizationId: req.user!.organizationId }
         },
-        include: { project: { select: { slug: true } } }
+        include: {
+          project: {
+            select: {
+              slug: true,
+              services: {
+                select: {
+                  id: true,
+                  slug: true,
+                  kind: true,
+                  dependencies: { select: { dependencyServiceId: true } }
+                }
+              }
+            }
+          }
+        }
       });
       if (!service) return reply.notFound();
       if (service.kind === "http" && body.port === null) {
@@ -302,13 +435,35 @@ export async function registerProjectRoutes(app: FastifyInstance) {
       if (service.kind === "release" && body.restartPolicy && body.restartPolicy !== "no") {
         return reply.badRequest("Release services cannot restart");
       }
+      const dependencyChange = body.dependsOn
+        ? validateDependencyChange(
+            service.project.services,
+            service.id,
+            body.dependsOn
+          )
+        : null;
+      if (dependencyChange?.error) return reply.badRequest(dependencyChange.error);
+      const { dependsOn: _dependsOn, ...servicePatch } = body;
       const data = Object.fromEntries(
-        Object.entries(body).map(([key, value]) => [key, value === "" ? null : value])
+        Object.entries(servicePatch).map(([key, value]) => [key, value === "" ? null : value])
       );
-      const updated = await prisma.service.update({
-        where: { id: service.id },
-        data,
-        select: serviceSelect
+      const updated = await prisma.$transaction(async (tx) => {
+        if (dependencyChange?.rows) {
+          await tx.serviceDependency.deleteMany({ where: { serviceId: service.id } });
+          if (dependencyChange.rows.length > 0) {
+            await tx.serviceDependency.createMany({
+              data: dependencyChange.rows.map((dependency) => ({
+                serviceId: service.id,
+                ...dependency
+              }))
+            });
+          }
+        }
+        return tx.service.update({
+          where: { id: service.id },
+          data,
+          select: serviceSelect
+        });
       });
       await recordAudit(req, {
         action: "service.update",
@@ -325,7 +480,8 @@ export async function registerProjectRoutes(app: FastifyInstance) {
     "/api/projects/:id/services",
     {
       preHandler: [requireRole("admin")],
-      schema: { params: IdParam, body: CreateServiceSchema }
+      schema: { params: IdParam, body: CreateServiceSchema },
+      logLevel: "silent"
     },
     async (req, reply) => {
       const { id } = IdParam.parse(req.params);
@@ -333,7 +489,14 @@ export async function registerProjectRoutes(app: FastifyInstance) {
       const project = await prisma.project.findFirst({
         where: { id, organizationId: req.user!.organizationId },
         include: {
-          services: { select: { id: true, kind: true } },
+          services: {
+            select: {
+              id: true,
+              slug: true,
+              kind: true,
+              dependencies: { select: { dependencyServiceId: true } }
+            }
+          },
           releases: {
             where: { status: { in: ["pending", "building", "releasing", "deploying"] } },
             select: { id: true }
@@ -350,6 +513,24 @@ export async function registerProjectRoutes(app: FastifyInstance) {
       ) {
         return reply.conflict("A project may have only one release service");
       }
+      const dependencyRows: { dependencyServiceId: string; condition: string }[] = [];
+      for (const dependency of body.dependsOn) {
+        const target = project.services.find(
+          (service) => service.slug === dependency.serviceSlug
+        );
+        if (!target) {
+          return reply.badRequest(`Unknown service dependency: ${dependency.serviceSlug}`);
+        }
+        if (target.kind === "release") {
+          return reply.badRequest(
+            "Runtime services cannot depend on a one-shot release service"
+          );
+        }
+        dependencyRows.push({
+          dependencyServiceId: target.id,
+          condition: dependency.condition
+        });
+      }
       for (const hostname of body.domains) {
         const [appOwner, projectOwner] = await Promise.all([
           prisma.domain.findUnique({ where: { hostname }, select: { id: true } }),
@@ -358,40 +539,73 @@ export async function registerProjectRoutes(app: FastifyInstance) {
         if (appOwner || projectOwner) return reply.conflict(`${hostname} is already in use`);
       }
       try {
-        const service = await prisma.service.create({
-          data: {
-            projectId: project.id,
-            name: body.name,
-            slug: body.slug,
-            kind: body.kind,
-            buildMode: body.buildMode,
-            buildCmd: body.buildCmd ?? null,
-            startCmd: body.startCmd ?? null,
-            runtimeCmd: body.runtimeCmd ?? null,
-            serviceDirectory: body.serviceDirectory,
-            workspaceSelector: body.workspaceSelector ?? null,
-            dockerfilePath: body.dockerfilePath,
-            dockerTarget: body.dockerTarget ?? null,
-            imageGroup: body.imageGroup ?? null,
-            port: body.kind === "http" ? body.port : null,
-            memoryLimitMb: body.memoryLimitMb ?? null,
-            cpuLimit: body.cpuLimit ?? null,
-            restartPolicy: body.kind === "release" ? "no" : body.restartPolicy,
-            domains: {
-              create: body.domains.map((hostname, index) => ({
-                hostname,
-                isPrimary: index === 0
+        const service = await prisma.$transaction(async (tx) => {
+          const created = await tx.service.create({
+            data: {
+              projectId: project.id,
+              name: body.name,
+              slug: body.slug,
+              kind: body.kind,
+              buildMode: body.buildMode,
+              buildCmd: body.buildCmd ?? null,
+              startCmd: body.startCmd ?? null,
+              runtimeCmd: body.runtimeCmd ?? null,
+              serviceDirectory: body.serviceDirectory,
+              workspaceSelector: body.workspaceSelector ?? null,
+              dockerfilePath: body.dockerfilePath,
+              dockerTarget: body.dockerTarget ?? null,
+              imageGroup: body.imageGroup ?? null,
+              port: body.kind === "http" ? body.port : null,
+              memoryLimitMb: body.memoryLimitMb ?? null,
+              cpuLimit: body.cpuLimit ?? null,
+              restartPolicy: body.kind === "release" ? "no" : body.restartPolicy,
+              healthCheckCmd: body.healthCheckCmd ?? null,
+              healthCheckIntervalSeconds: body.healthCheckIntervalSeconds,
+              healthCheckTimeoutSeconds: body.healthCheckTimeoutSeconds,
+              healthCheckRetries: body.healthCheckRetries,
+              healthCheckStartPeriodSeconds:
+                body.healthCheckStartPeriodSeconds,
+              envVarsEncrypted:
+                Object.keys(body.envVars).length > 0
+                  ? encryptJson(body.envVars)
+                  : null,
+              buildArgsEncrypted:
+                Object.keys(body.buildArgs).length > 0
+                  ? encryptJson(body.buildArgs)
+                  : null,
+              domains: {
+                create: body.domains.map((hostname, index) => ({
+                  hostname,
+                  isPrimary: index === 0
+                }))
+              }
+            },
+            select: { id: true }
+          });
+          if (dependencyRows.length > 0) {
+            await tx.serviceDependency.createMany({
+              data: dependencyRows.map((dependency) => ({
+                serviceId: created.id,
+                ...dependency
               }))
-            }
-          },
-          select: serviceSelect
+            });
+          }
+          return tx.service.findUniqueOrThrow({
+            where: { id: created.id },
+            select: serviceSelect
+          });
         });
         await recordAudit(req, {
           action: "service.create",
           targetType: "service",
           targetId: service.id,
           targetLabel: `${project.slug}/${service.slug}`,
-          metadata: { projectId: project.id, kind: service.kind }
+          metadata: {
+            projectId: project.id,
+            kind: service.kind,
+            variableKeys: Object.keys(body.envVars).sort(),
+            buildArgKeys: Object.keys(body.buildArgs).sort()
+          }
         });
         return reply.status(201).send(service);
       } catch (error) {
@@ -414,6 +628,9 @@ export async function registerProjectRoutes(app: FastifyInstance) {
           project: { organizationId: req.user!.organizationId }
         },
         include: {
+          dependents: {
+            select: { service: { select: { slug: true } } }
+          },
           project: {
             select: {
               id: true,
@@ -435,6 +652,13 @@ export async function registerProjectRoutes(app: FastifyInstance) {
       }
       if (service.project.releases.length > 0) {
         return reply.conflict("Services cannot change while a release is in progress");
+      }
+      if (service.dependents.length > 0) {
+        return reply.conflict(
+          `Remove dependencies from ${service.dependents
+            .map((dependency) => dependency.service.slug)
+            .join(", ")} before deleting this service`
+        );
       }
       await prisma.service.delete({ where: { id: service.id } });
       await recordAudit(req, {

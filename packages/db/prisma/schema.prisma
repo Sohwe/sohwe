@@ -64,36 +64,56 @@ model Project {
 // before a release is promoted. A project may have at most one release service
 // (enforced by the API; PostgreSQL migration adds the partial unique index).
 model Service {
-  id                 String              @id @default(uuid())
-  projectId          String              @map("project_id")
-  project            Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  name               String
-  slug               String
-  kind               String // http | worker | release
-  buildMode          String              @default("dockerfile") @map("build_mode")
-  buildCmd           String?             @map("build_command")
-  startCmd           String?             @map("start_command")
-  runtimeCmd         String?             @map("runtime_command")
-  serviceDirectory   String              @default(".") @map("service_directory")
-  workspaceSelector  String?             @map("workspace_selector")
-  dockerfilePath     String              @default("Dockerfile") @map("dockerfile_path")
-  dockerTarget       String?             @map("docker_target")
-  imageGroup         String?             @map("image_group")
-  port               Int?
-  envVarsEncrypted   Bytes?              @map("env_vars_encrypted")
-  buildArgsEncrypted Bytes?              @map("build_args_encrypted")
-  memoryLimitMb      Int?                @map("memory_limit_mb")
-  cpuLimit           Float?              @map("cpu_limit")
-  restartPolicy      String              @default("unless-stopped") @map("restart_policy")
-  domains            ServiceDomain[]
-  deployments        ServiceDeployment[]
-  logs               ServiceLog[]
-  createdAt          DateTime            @default(now()) @map("created_at")
-  updatedAt          DateTime            @updatedAt @map("updated_at")
+  id                            String              @id @default(uuid())
+  projectId                     String              @map("project_id")
+  project                       Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name                          String
+  slug                          String
+  kind                          String // http | worker | release
+  buildMode                     String              @default("dockerfile") @map("build_mode")
+  buildCmd                      String?             @map("build_command")
+  startCmd                      String?             @map("start_command")
+  runtimeCmd                    String?             @map("runtime_command")
+  serviceDirectory              String              @default(".") @map("service_directory")
+  workspaceSelector             String?             @map("workspace_selector")
+  dockerfilePath                String              @default("Dockerfile") @map("dockerfile_path")
+  dockerTarget                  String?             @map("docker_target")
+  imageGroup                    String?             @map("image_group")
+  port                          Int?
+  envVarsEncrypted              Bytes?              @map("env_vars_encrypted")
+  buildArgsEncrypted            Bytes?              @map("build_args_encrypted")
+  memoryLimitMb                 Int?                @map("memory_limit_mb")
+  cpuLimit                      Float?              @map("cpu_limit")
+  restartPolicy                 String              @default("unless-stopped") @map("restart_policy")
+  healthCheckCmd                String?             @map("health_check_command") @db.Text
+  healthCheckIntervalSeconds    Int                 @default(10) @map("health_check_interval_seconds")
+  healthCheckTimeoutSeconds     Int                 @default(5) @map("health_check_timeout_seconds")
+  healthCheckRetries            Int                 @default(3) @map("health_check_retries")
+  healthCheckStartPeriodSeconds Int                 @default(2) @map("health_check_start_period_seconds")
+  domains                       ServiceDomain[]
+  dependencies                  ServiceDependency[] @relation("DependentService")
+  dependents                    ServiceDependency[] @relation("DependencyService")
+  deployments                   ServiceDeployment[]
+  logs                          ServiceLog[]
+  createdAt                     DateTime            @default(now()) @map("created_at")
+  updatedAt                     DateTime            @updatedAt @map("updated_at")
 
   @@unique([projectId, slug])
   @@index([projectId, kind])
   @@map("services")
+}
+
+model ServiceDependency {
+  serviceId           String   @map("service_id")
+  service             Service  @relation("DependentService", fields: [serviceId], references: [id], onDelete: Cascade)
+  dependencyServiceId String   @map("dependency_service_id")
+  dependencyService   Service  @relation("DependencyService", fields: [dependencyServiceId], references: [id], onDelete: Restrict)
+  condition           String   @default("healthy") // started | healthy
+  createdAt           DateTime @default(now()) @map("created_at")
+
+  @@id([serviceId, dependencyServiceId])
+  @@index([dependencyServiceId])
+  @@map("service_dependencies")
 }
 
 model ServiceDomain {
