@@ -26,7 +26,10 @@ import {
   RoleSchema,
   RollbackBodySchema,
   SetDomainRedirectSchema,
+  ServiceDomainsReplaceSchema,
   UpdateApplicationSchema,
+  UpdateProjectSchema,
+  UpdateDatastoreResourcesSchema,
   UpdateMemberRoleSchema,
   VolumeCreateSchema,
   wwwCompanion
@@ -453,6 +456,28 @@ describe("CreateProjectSchema", () => {
   });
 });
 
+describe("project updates", () => {
+  it("validates mutable project settings without allowing identity changes", () => {
+    assert.deepEqual(UpdateProjectSchema.parse({ name: "Chale Check", autoDeploy: false }), {
+      name: "Chale Check",
+      autoDeploy: false
+    });
+    assert.equal(UpdateProjectSchema.safeParse({ gitBranch: "" }).success, false);
+    assert.equal(UpdateProjectSchema.safeParse({ slug: "renamed" }).success, false);
+  });
+
+  it("normalizes and validates replacement service domains", () => {
+    assert.deepEqual(
+      ServiceDomainsReplaceSchema.parse({ domains: ["app.example.com"] }),
+      { domains: ["app.example.com"] }
+    );
+    assert.equal(
+      ServiceDomainsReplaceSchema.safeParse({ domains: ["not a hostname"] }).success,
+      false
+    );
+  });
+});
+
 describe("Docker naming helpers", () => {
   const appId = "11111111-2222-3333-4444-555555555555";
   const volumeId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
@@ -667,6 +692,21 @@ describe("CreateDatastoreSchema", () => {
       CreateDatastoreSchema.safeParse({ ...valid, cpuLimit: 100 }).success,
       false
     );
+  });
+});
+
+describe("UpdateDatastoreResourcesSchema", () => {
+  it("sets and clears independently bounded resource limits", () => {
+    assert.deepEqual(
+      UpdateDatastoreResourcesSchema.parse({ memoryLimitMb: "512", cpuLimit: null }),
+      { memoryLimitMb: 512, cpuLimit: null }
+    );
+    assert.equal(UpdateDatastoreResourcesSchema.safeParse({}).success, false);
+    assert.equal(
+      UpdateDatastoreResourcesSchema.safeParse({ memoryLimitMb: 8 }).success,
+      false
+    );
+    assert.equal(UpdateDatastoreResourcesSchema.safeParse({ cpuLimit: 65 }).success, false);
   });
 });
 

@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CreateProjectSchema, normalizeHostname } from "@sohwe/types";
-import { Boxes, Plus, Rocket, RotateCcw, Trash2 } from "lucide-react";
+import { Boxes, Plus, Rocket, RotateCcw, Settings, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/common/PageHeader";
 import { Field } from "@/components/common/Field";
+import { EditProjectDialog } from "@/components/projects/EditProjectDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -742,9 +743,10 @@ function ProjectLogs({ project }: { project: ProjectRow }) {
   );
 }
 
-function ProjectCard({ project }: { project: ProjectRow }) {
+function ProjectCard({ project, canEdit }: { project: ProjectRow; canEdit: boolean }) {
   const client = useQueryClient();
   const [logs, setLogs] = useState(false);
+  const [editing, setEditing] = useState(false);
   const deploy = useMutation({
     mutationFn: () => api(`/api/projects/${project.id}/deploy`, { method: "POST" }),
     onSuccess: () => {
@@ -804,11 +806,19 @@ function ProjectCard({ project }: { project: ProjectRow }) {
           <Button size="sm" variant="ghost" onClick={() => setLogs((value) => !value)}>
             {logs ? "Hide logs" : "Service logs"}
           </Button>
+          {canEdit ? (
+            <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
+              <Settings className="mr-2 h-4 w-4" /> Configure
+            </Button>
+          ) : null}
         </div>
         {project.releases[0]?.errorMessage ? (
           <p className="mt-3 text-sm text-destructive">{project.releases[0].errorMessage}</p>
         ) : null}
         {logs ? <ProjectLogs project={project} /> : null}
+        {editing ? (
+          <EditProjectDialog project={project} open={editing} onOpenChange={setEditing} />
+        ) : null}
       </CardContent>
     </Card>
   );
@@ -848,7 +858,7 @@ export function ProjectsPage() {
       ) : null}
       <div className="grid gap-4 xl:grid-cols-2">
         {projects.data?.map((project) => (
-          <ProjectCard key={project.id} project={project} />
+          <ProjectCard key={project.id} project={project} canEdit={isAdmin(me)} />
         ))}
       </div>
     </div>

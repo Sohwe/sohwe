@@ -7,7 +7,8 @@ import {
   projectServiceContainerName,
   type ProjectServiceSpec
 } from "./project-container-spec";
-import { orderRuntimeServices } from "./project-deploy";
+import { orderRuntimeServices, waitForCandidateReady } from "./project-deploy";
+import { disconnectUnboundProjectDatastores } from "./project-docker-ops";
 
 const PROJECT = {
   id: "11111111-2222-3333-4444-555555555555",
@@ -162,5 +163,45 @@ describe("project service dependency order", () => {
     const release = orderedService("migrate", "release");
     const worker = orderedService("worker", "worker", [release]);
     assert.throws(() => orderRuntimeServices([release, worker]), /unavailable/);
+  });
+
+  it("does not promote a crash-looping service without a health check", async () => {
+    const container = {
+      inspect: async () => ({ State: { Running: true }, RestartCount: 1 })
+    };
+    await assert.rejects(
+      waitForCandidateReady(container as never, {
+        slug: "worker",
+        healthCheckCmd: null,
+        healthCheckIntervalSeconds: 10,
+        healthCheckTimeoutSeconds: 5,
+        healthCheckRetries: 3,
+        healthCheckStartPeriodSeconds: 2
+      }),
+      /restarted before it became ready/
+    );
+  });
+});
+
+describe("project datastore network reconciliation", () => {
+  it("disconnects only datastores no longer bound to the project", async () => {
+    const disconnected: string[] = [];
+    const docker = {
+      listContainers: async () => [
+        { Id: "keep", Labels: { "sohwe.datastore": "ds-keep" } },
+        { Id: "remove", Labels: { "sohwe.datastore": "ds-remove" } }
+      ],
+      getNetwork: () => ({
+        disconnect: async ({ Container }: { Container: string }) => {
+          disconnected.push(Container);
+        }
+      })
+    };
+    await disconnectUnboundProjectDatastores(
+      docker as never,
+      PROJECT.id,
+      new Set(["ds-keep"])
+    );
+    assert.deepEqual(disconnected, ["remove"]);
   });
 });

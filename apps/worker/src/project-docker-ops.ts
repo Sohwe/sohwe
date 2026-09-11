@@ -1,4 +1,4 @@
-import { projectInternalNetworkName } from "@sohwe/types";
+import { DATASTORE_LABEL, projectInternalNetworkName } from "@sohwe/types";
 
 type ProjectDocker = {
   createNetwork(opts: {
@@ -12,6 +12,7 @@ type ProjectDocker = {
       Container: string;
       EndpointConfig?: { Aliases?: string[] };
     }): Promise<unknown>;
+    disconnect(opts: { Container: string; Force: boolean }): Promise<unknown>;
   };
   listContainers(opts: {
     all: true;
@@ -27,6 +28,32 @@ function statusCodeOf(error: unknown): number | undefined {
   return error && typeof error === "object" && "statusCode" in error
     ? Number((error as { statusCode?: number }).statusCode)
     : undefined;
+}
+
+/** Detach datastores whose bindings were removed, but only after a new
+ * release has replaced every container that could still depend on them. */
+export async function disconnectUnboundProjectDatastores(
+  docker: ProjectDocker,
+  projectId: string,
+  boundDatastoreIds: ReadonlySet<string>
+): Promise<void> {
+  const rows = await docker.listContainers({
+    all: true,
+    filters: { label: [DATASTORE_LABEL] }
+  });
+  const network = docker.getNetwork(projectInternalNetworkName(projectId));
+  for (const row of rows) {
+    const datastoreId = row.Labels?.[DATASTORE_LABEL];
+    if (!datastoreId || boundDatastoreIds.has(datastoreId)) continue;
+    try {
+      await network.disconnect({ Container: row.Id, Force: true });
+    } catch (error) {
+      // 403 means it was not attached; 404 means the network/container was
+      // removed concurrently. Both already satisfy the desired state.
+      const status = statusCodeOf(error);
+      if (status !== 403 && status !== 404) throw error;
+    }
+  }
 }
 
 export async function ensureProjectNetwork(

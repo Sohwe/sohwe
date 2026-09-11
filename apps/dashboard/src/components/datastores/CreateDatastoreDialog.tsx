@@ -45,12 +45,16 @@ export function CreateDatastoreDialog({
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
   const [engineVersion, setEngineVersion] = useState("16");
+  const [memoryLimitMb, setMemoryLimitMb] = useState("");
+  const [cpuLimit, setCpuLimit] = useState("");
 
   const reset = () => {
     setKind("postgres");
     setName("");
     setSlug("");
     setEngineVersion("16");
+    setMemoryLimitMb("");
+    setCpuLimit("");
   };
 
   const createMut = useMutation({
@@ -61,7 +65,9 @@ export function CreateDatastoreDialog({
           kind,
           name: name.trim(),
           slug: slug.trim(),
-          engineVersion
+          engineVersion,
+          memoryLimitMb: memoryLimitMb.trim() ? Number(memoryLimitMb) : undefined,
+          cpuLimit: cpuLimit.trim() ? Number(cpuLimit) : undefined
         })
       }),
     onSuccess: (ds) => {
@@ -152,6 +158,29 @@ export function CreateDatastoreDialog({
               </SelectContent>
             </Select>
           </Field>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Memory limit, MB (optional)">
+              <Input
+                type="number"
+                min={16}
+                max={65536}
+                value={memoryLimitMb}
+                onChange={(event) => setMemoryLimitMb(event.target.value)}
+                placeholder="Unlimited"
+              />
+            </Field>
+            <Field label="CPU limit (optional)">
+              <Input
+                type="number"
+                min={0.1}
+                max={64}
+                step={0.1}
+                value={cpuLimit}
+                onChange={(event) => setCpuLimit(event.target.value)}
+                placeholder="Unlimited"
+              />
+            </Field>
+          </div>
         </div>
 
         <DialogFooter>

@@ -40,6 +40,7 @@ export type AuditAction =
   | "application.update"
   | "application.delete"
   | "project.create"
+  | "project.update"
   | "project.delete"
   | "project.release"
   | "project.rollback"
@@ -97,6 +98,7 @@ export const AUDIT_ACTIONS: readonly AuditAction[] = [
   "application.update",
   "application.delete",
   "project.create",
+  "project.update",
   "project.delete",
   "project.release",
   "project.rollback",

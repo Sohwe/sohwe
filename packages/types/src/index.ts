@@ -437,6 +437,18 @@ export const CreateProjectSchema = z
   });
 export type CreateProjectInput = z.infer<typeof CreateProjectSchema>;
 
+/** Mutable project-level source settings. Project slugs remain stable because
+ * they form part of container, network, and routing identity. */
+export const UpdateProjectSchema = z
+  .object({
+    name: z.string().trim().min(1).max(100).optional(),
+    gitRepo: z.string().url().optional(),
+    gitBranch: z.string().trim().min(1).optional(),
+    autoDeploy: z.boolean().optional()
+  })
+  .strict();
+export type UpdateProjectInput = z.infer<typeof UpdateProjectSchema>;
+
 export const UpdateServiceSchema = z.object({
   name: z.string().trim().min(1).max(100).optional(),
   buildMode: z.enum(["auto", "dockerfile", "nixpacks"]).optional(),
@@ -460,6 +472,13 @@ export const UpdateServiceSchema = z.object({
   healthCheckStartPeriodSeconds: z.coerce.number().int().min(0).max(600).optional()
 });
 export type UpdateServiceInput = z.infer<typeof UpdateServiceSchema>;
+
+export const ServiceDomainsReplaceSchema = z.object({
+  domains: z.array(DomainSchema).max(20)
+});
+export type ServiceDomainsReplaceInput = z.infer<
+  typeof ServiceDomainsReplaceSchema
+>;
 
 export const ProjectRollbackBodySchema = z.object({
   sourceReleaseId: z.string().uuid()
@@ -892,6 +911,21 @@ export const CreateDatastoreSchema = z.object({
   cpuLimit: z.coerce.number().min(0.1).max(64).optional()
 });
 export type CreateDatastoreInput = z.infer<typeof CreateDatastoreSchema>;
+
+/** Resource limits can be changed independently of engine/container identity.
+ * Null restores Docker's unlimited value. */
+export const UpdateDatastoreResourcesSchema = z
+  .object({
+    memoryLimitMb: z.coerce.number().int().min(16).max(65536).nullable().optional(),
+    cpuLimit: z.coerce.number().min(0.1).max(64).nullable().optional()
+  })
+  .refine(
+    (body) => body.memoryLimitMb !== undefined || body.cpuLimit !== undefined,
+    "Provide a memory or CPU limit"
+  );
+export type UpdateDatastoreResourcesInput = z.infer<
+  typeof UpdateDatastoreResourcesSchema
+>;
 
 export const CreateDatastoreBindingSchema = z.object({
   applicationId: z.string().uuid(),

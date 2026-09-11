@@ -5,6 +5,7 @@ import { ArrowLeft, Eye, EyeOff, Globe, KeyRound, Play, Trash2 } from "lucide-re
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { CopyButton } from "@/components/common/CopyButton";
+import { Field } from "@/components/common/Field";
 import { PageHeader } from "@/components/common/PageHeader";
 import { Button } from "@/components/ui/button";
 import {
@@ -14,6 +15,7 @@ import {
   CardHeader,
   CardTitle
 } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { api, apiGet } from "@/lib/api";
 import type { DatastoreConnection, DatastoreDetail } from "@/lib/types";
 import { BindingsManager } from "@/components/datastores/BindingsManager";
@@ -184,7 +186,7 @@ export function DatastoreDetailPage() {
         <CardHeader>
           <CardTitle className="text-base">Connection</CardTitle>
           <CardDescription>
-            Bound apps reach this datastore privately at{" "}
+            Bound apps and project services reach this datastore privately at{" "}
             <span className="font-mono">{`sohwe-ds-${ds.slug}`}</span>. Revealing
             the credentials is recorded in the audit log.
           </CardDescription>
@@ -226,6 +228,8 @@ export function DatastoreDetailPage() {
           )}
         </CardContent>
       </Card>
+
+      <DatastoreResourcesCard datastore={ds} onSaved={invalidate} />
 
       <Card>
         <CardHeader>
@@ -291,6 +295,77 @@ export function DatastoreDetailPage() {
         onConfirm={() => deleteMut.mutate()}
       />
     </div>
+  );
+}
+
+function DatastoreResourcesCard({
+  datastore,
+  onSaved
+}: {
+  datastore: DatastoreDetail;
+  onSaved: () => void;
+}) {
+  const [memoryLimitMb, setMemoryLimitMb] = useState(
+    datastore.memoryLimitMb == null ? "" : String(datastore.memoryLimitMb)
+  );
+  const [cpuLimit, setCpuLimit] = useState(
+    datastore.cpuLimit == null ? "" : String(datastore.cpuLimit)
+  );
+  const update = useMutation({
+    mutationFn: () =>
+      api(`/api/datastores/${datastore.id}/resources`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          memoryLimitMb: memoryLimitMb.trim() ? Number(memoryLimitMb) : null,
+          cpuLimit: cpuLimit.trim() ? Number(cpuLimit) : null
+        })
+      }),
+    onSuccess: () => {
+      onSaved();
+      toast.success("Datastore resource limits updated");
+    },
+    onError: (error) =>
+      toast.error(error instanceof Error ? error.message : "Failed to update resources")
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Resources</CardTitle>
+        <CardDescription>
+          Limits apply immediately to a running container and to every future provision. Leave a
+          field empty for unlimited.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Memory limit, MB">
+            <Input
+              type="number"
+              min={16}
+              max={65536}
+              value={memoryLimitMb}
+              onChange={(event) => setMemoryLimitMb(event.target.value)}
+              placeholder="Unlimited"
+            />
+          </Field>
+          <Field label="CPU limit">
+            <Input
+              type="number"
+              min={0.1}
+              max={64}
+              step={0.1}
+              value={cpuLimit}
+              onChange={(event) => setCpuLimit(event.target.value)}
+              placeholder="Unlimited"
+            />
+          </Field>
+        </div>
+        <Button type="button" disabled={update.isPending} onClick={() => update.mutate()}>
+          {update.isPending ? "Saving…" : "Save resource limits"}
+        </Button>
+      </CardContent>
+    </Card>
   );
 }
 

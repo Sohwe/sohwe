@@ -10,11 +10,15 @@ import {
   projectLogChannelName
 } from "@sohwe/queue";
 import {
+  BuildArgsPatchSchema,
   CreateProjectSchema,
   CreateServiceSchema,
+  EnvVarsPatchSchema,
   EnvVarsReplaceSchema,
   ProjectRollbackBodySchema,
+  ServiceDomainsReplaceSchema,
   ServiceLogsQuerySchema,
+  UpdateProjectSchema,
   UpdateServiceSchema,
   projectInternalNetworkName
 } from "@sohwe/types";
@@ -23,6 +27,7 @@ import { recordAudit } from "../audit";
 import { isUniqueViolation } from "../prisma-errors";
 import { requireRole } from "../rbac";
 import { autoDeployBlocker } from "./applications";
+import { applyVarPatch, encodeVarBlob, readVarBlob } from "./variable-store";
 
 const IdParam = z.object({ id: z.string().uuid() });
 const ServiceParam = z.object({ serviceId: z.string().uuid() });
@@ -115,6 +120,19 @@ function projectSelect(releaseTake = 20) {
     createdAt: true,
     updatedAt: true,
     services: { orderBy: { createdAt: "asc" as const }, select: serviceSelect },
+    datastoreBindings: {
+      orderBy: { createdAt: "asc" as const },
+      select: {
+        id: true,
+        datastoreId: true,
+        envKey: true,
+        serviceIds: true,
+        createdAt: true,
+        datastore: {
+          select: { id: true, name: true, slug: true, kind: true, status: true }
+        }
+      }
+    },
     releases: {
       orderBy: { createdAt: "desc" as const },
       take: releaseTake,
@@ -399,6 +417,61 @@ export async function registerProjectRoutes(app: FastifyInstance) {
   );
 
   app.patch(
+    "/api/projects/:id",
+    {
+      preHandler: [requireRole("admin")],
+      schema: { params: IdParam, body: UpdateProjectSchema }
+    },
+    async (req, reply) => {
+      const { id } = IdParam.parse(req.params);
+      const body = UpdateProjectSchema.parse(req.body);
+      const project = await prisma.project.findFirst({
+        where: { id, organizationId: req.user!.organizationId },
+        select: {
+          id: true,
+          slug: true,
+          gitRepo: true,
+          repoFullName: true,
+          autoDeploy: true,
+          releases: {
+            where: { status: { in: ["pending", "building", "releasing", "deploying"] } },
+            select: { id: true }
+          }
+        }
+      });
+      if (!project) return reply.notFound();
+      if (project.releases.length > 0) {
+        return reply.conflict("Project settings cannot change while a release is in progress");
+      }
+
+      const gitRepo = body.gitRepo ?? project.gitRepo;
+      const ref = parseGitHubRepoUrl(gitRepo);
+      const fullName = ref ? repoFullName(ref) : null;
+      if (body.autoDeploy ?? project.autoDeploy) {
+        const blocker = await autoDeployBlocker(req.user!.organizationId, fullName);
+        if (blocker) return reply.badRequest(blocker);
+      }
+
+      const row = await prisma.project.update({
+        where: { id: project.id },
+        data: {
+          ...body,
+          ...(body.gitRepo !== undefined ? { repoFullName: fullName } : {})
+        },
+        select: projectSelect()
+      });
+      await recordAudit(req, {
+        action: "project.update",
+        targetType: "project",
+        targetId: project.id,
+        targetLabel: project.slug,
+        metadata: { fields: Object.keys(body).sort() }
+      });
+      return row;
+    }
+  );
+
+  app.patch(
     "/api/services/:serviceId",
     {
       preHandler: [requireRole("admin")],
@@ -423,12 +496,19 @@ export async function registerProjectRoutes(app: FastifyInstance) {
                   kind: true,
                   dependencies: { select: { dependencyServiceId: true } }
                 }
+              },
+              releases: {
+                where: { status: { in: ["pending", "building", "releasing", "deploying"] } },
+                select: { id: true }
               }
             }
           }
         }
       });
       if (!service) return reply.notFound();
+      if (service.project.releases.length > 0) {
+        return reply.conflict("Service settings cannot change while a release is in progress");
+      }
       if (service.kind === "http" && body.port === null) {
         return reply.badRequest("HTTP services require a port");
       }
@@ -473,6 +553,85 @@ export async function registerProjectRoutes(app: FastifyInstance) {
         metadata: { fields: Object.keys(body).sort() }
       });
       return updated;
+    }
+  );
+
+  app.put(
+    "/api/services/:serviceId/domains",
+    {
+      preHandler: [requireRole("admin")],
+      schema: { params: ServiceParam, body: ServiceDomainsReplaceSchema }
+    },
+    async (req, reply) => {
+      const { serviceId } = ServiceParam.parse(req.params);
+      const { domains } = ServiceDomainsReplaceSchema.parse(req.body);
+      if (new Set(domains).size !== domains.length) {
+        return reply.conflict("A domain may be listed only once");
+      }
+      const service = await prisma.service.findFirst({
+        where: {
+          id: serviceId,
+          project: { organizationId: req.user!.organizationId }
+        },
+        select: {
+          id: true,
+          slug: true,
+          kind: true,
+          project: {
+            select: {
+              slug: true,
+              releases: {
+                where: { status: { in: ["pending", "building", "releasing", "deploying"] } },
+                select: { id: true }
+              }
+            }
+          }
+        }
+      });
+      if (!service) return reply.notFound();
+      if (service.kind !== "http" && domains.length > 0) {
+        return reply.badRequest("Only HTTP services may have domains");
+      }
+      if (service.project.releases.length > 0) {
+        return reply.conflict("Service domains cannot change while a release is in progress");
+      }
+      if (domains.length > 0) {
+        const [appOwner, serviceOwner] = await Promise.all([
+          prisma.domain.findFirst({
+            where: { hostname: { in: domains } },
+            select: { hostname: true }
+          }),
+          prisma.serviceDomain.findFirst({
+            where: { hostname: { in: domains }, serviceId: { not: service.id } },
+            select: { hostname: true }
+          })
+        ]);
+        const taken = appOwner?.hostname ?? serviceOwner?.hostname;
+        if (taken) return reply.conflict(`${taken} is already in use`);
+      }
+      await prisma.$transaction(async (tx) => {
+        await tx.serviceDomain.deleteMany({ where: { serviceId: service.id } });
+        if (domains.length > 0) {
+          await tx.serviceDomain.createMany({
+            data: domains.map((hostname, index) => ({
+              serviceId: service.id,
+              hostname,
+              isPrimary: index === 0
+            }))
+          });
+        }
+      });
+      await recordAudit(req, {
+        action: "service.update",
+        targetType: "service",
+        targetId: service.id,
+        targetLabel: `${service.project.slug}/${service.slug}`,
+        metadata: { domains }
+      });
+      return prisma.service.findUniqueOrThrow({
+        where: { id: service.id },
+        select: serviceSelect
+      });
     }
   );
 
@@ -707,6 +866,49 @@ export async function registerProjectRoutes(app: FastifyInstance) {
     }
   );
 
+  app.patch(
+    "/api/projects/:id/variables",
+    {
+      preHandler: [requireRole("admin")],
+      schema: { params: IdParam, body: EnvVarsPatchSchema },
+      logLevel: "silent"
+    },
+    async (req, reply) => {
+      const { id } = IdParam.parse(req.params);
+      const { set, unset } = EnvVarsPatchSchema.parse(req.body);
+      if ((!set || Object.keys(set).length === 0) && (!unset || unset.length === 0)) {
+        return reply.badRequest("Provide set and/or unset");
+      }
+      const project = await prisma.project.findFirst({
+        where: { id, organizationId: req.user!.organizationId },
+        select: { id: true, slug: true, envVarsEncrypted: true }
+      });
+      if (!project) return reply.notFound();
+      let before: Record<string, string>;
+      try {
+        before = readVarBlob(project.envVarsEncrypted);
+      } catch {
+        return reply.status(500).send({ message: "Failed to read project variables" });
+      }
+      const vars = applyVarPatch(before, set, unset);
+      await prisma.project.update({
+        where: { id: project.id },
+        data: { envVarsEncrypted: encodeVarBlob(vars) }
+      });
+      await recordAudit(req, {
+        action: "project.variables.update",
+        targetType: "project",
+        targetId: project.id,
+        targetLabel: project.slug,
+        metadata: {
+          setKeys: Object.keys(set ?? {}).sort(),
+          unsetKeys: [...(unset ?? [])].sort()
+        }
+      });
+      return { keys: Object.keys(vars).sort() };
+    }
+  );
+
   app.put(
     "/api/services/:serviceId/variables",
     {
@@ -738,6 +940,57 @@ export async function registerProjectRoutes(app: FastifyInstance) {
         targetId: service.id,
         targetLabel: `${service.project.slug}/${service.slug}`,
         metadata: { keys: Object.keys(vars).sort(), count: Object.keys(vars).length }
+      });
+      return { keys: Object.keys(vars).sort() };
+    }
+  );
+
+  app.patch(
+    "/api/services/:serviceId/variables",
+    {
+      preHandler: [requireRole("admin")],
+      schema: { params: ServiceParam, body: EnvVarsPatchSchema },
+      logLevel: "silent"
+    },
+    async (req, reply) => {
+      const { serviceId } = ServiceParam.parse(req.params);
+      const { set, unset } = EnvVarsPatchSchema.parse(req.body);
+      if ((!set || Object.keys(set).length === 0) && (!unset || unset.length === 0)) {
+        return reply.badRequest("Provide set and/or unset");
+      }
+      const service = await prisma.service.findFirst({
+        where: {
+          id: serviceId,
+          project: { organizationId: req.user!.organizationId }
+        },
+        select: {
+          id: true,
+          slug: true,
+          envVarsEncrypted: true,
+          project: { select: { slug: true } }
+        }
+      });
+      if (!service) return reply.notFound();
+      let before: Record<string, string>;
+      try {
+        before = readVarBlob(service.envVarsEncrypted);
+      } catch {
+        return reply.status(500).send({ message: "Failed to read service variables" });
+      }
+      const vars = applyVarPatch(before, set, unset);
+      await prisma.service.update({
+        where: { id: service.id },
+        data: { envVarsEncrypted: encodeVarBlob(vars) }
+      });
+      await recordAudit(req, {
+        action: "service.variables.update",
+        targetType: "service",
+        targetId: service.id,
+        targetLabel: `${service.project.slug}/${service.slug}`,
+        metadata: {
+          setKeys: Object.keys(set ?? {}).sort(),
+          unsetKeys: [...(unset ?? [])].sort()
+        }
       });
       return { keys: Object.keys(vars).sort() };
     }
@@ -777,6 +1030,57 @@ export async function registerProjectRoutes(app: FastifyInstance) {
           serviceId: service.id,
           keys: Object.keys(vars).sort(),
           count: Object.keys(vars).length
+        }
+      });
+      return { keys: Object.keys(vars).sort() };
+    }
+  );
+
+  app.patch(
+    "/api/services/:serviceId/build-args",
+    {
+      preHandler: [requireRole("admin")],
+      schema: { params: ServiceParam, body: BuildArgsPatchSchema },
+      logLevel: "silent"
+    },
+    async (req, reply) => {
+      const { serviceId } = ServiceParam.parse(req.params);
+      const { set, unset } = BuildArgsPatchSchema.parse(req.body);
+      if ((!set || Object.keys(set).length === 0) && (!unset || unset.length === 0)) {
+        return reply.badRequest("Provide set and/or unset");
+      }
+      const service = await prisma.service.findFirst({
+        where: {
+          id: serviceId,
+          project: { organizationId: req.user!.organizationId }
+        },
+        select: {
+          id: true,
+          slug: true,
+          buildArgsEncrypted: true,
+          project: { select: { slug: true } }
+        }
+      });
+      if (!service) return reply.notFound();
+      let before: Record<string, string>;
+      try {
+        before = readVarBlob(service.buildArgsEncrypted);
+      } catch {
+        return reply.status(500).send({ message: "Failed to read service build arguments" });
+      }
+      const vars = applyVarPatch(before, set, unset);
+      await prisma.service.update({
+        where: { id: service.id },
+        data: { buildArgsEncrypted: encodeVarBlob(vars) }
+      });
+      await recordAudit(req, {
+        action: "build_args.update",
+        targetType: "service",
+        targetId: service.id,
+        targetLabel: `${service.project.slug}/${service.slug}`,
+        metadata: {
+          setKeys: Object.keys(set ?? {}).sort(),
+          unsetKeys: [...(unset ?? [])].sort()
         }
       });
       return { keys: Object.keys(vars).sort() };

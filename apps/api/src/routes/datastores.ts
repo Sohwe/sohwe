@@ -12,6 +12,7 @@ import {
   DATASTORE_PUBLIC_PORT_MAX,
   DATASTORE_PUBLIC_PORT_MIN,
   DatastorePublicAccessSchema,
+  UpdateDatastoreResourcesSchema,
   datastoreContainerName,
   datastoreDefaultEnvKey,
   datastoreEngineVersions,
@@ -335,6 +336,67 @@ export async function registerDatastoreRoutes(
           createdAt: binding.createdAt
         }))
       };
+    }
+  );
+
+  app.patch(
+    "/api/datastores/:id/resources",
+    {
+      preHandler: [requireRole("admin")],
+      schema: { params: IdParam, body: UpdateDatastoreResourcesSchema }
+    },
+    async (req, reply) => {
+      const u = req.user!;
+      const { id } = IdParam.parse(req.params);
+      const body = UpdateDatastoreResourcesSchema.parse(req.body);
+      const row = await prisma.datastore.findFirst({
+        where: { id, organizationId: u.organizationId }
+      });
+      if (!row) return reply.notFound();
+      if (row.status === "provisioning" || row.status === "deleting") {
+        return reply.conflict(
+          `Cannot change resources while datastore status is "${row.status}"`
+        );
+      }
+
+      const memoryLimitMb = body.memoryLimitMb ??
+        (body.memoryLimitMb === null ? null : row.memoryLimitMb);
+      const cpuLimit = body.cpuLimit ?? (body.cpuLimit === null ? null : row.cpuLimit);
+      const container = docker.getContainer(datastoreContainerName(row.slug));
+      try {
+        const info = await container.inspect();
+        if (info.Config?.Labels?.[DATASTORE_LABEL] !== row.id) {
+          return reply.conflict("The datastore container identity does not match its record");
+        }
+        await container.update({
+          Memory: memoryLimitMb == null ? 0 : memoryLimitMb * 1024 * 1024,
+          NanoCpus: cpuLimit == null ? 0 : Math.round(Number(cpuLimit) * 1_000_000_000)
+        });
+      } catch (error) {
+        const statusCode =
+          error && typeof error === "object" && "statusCode" in error
+            ? Number((error as { statusCode?: number }).statusCode)
+            : undefined;
+        if (statusCode !== 404) throw error;
+        if (row.status === "running") {
+          return reply.conflict("The running datastore container could not be found");
+        }
+        // An idle/error datastore has no live container to update. Persist the
+        // limits now and the next provision will apply them.
+      }
+
+      const updated = await prisma.datastore.update({
+        where: { id: row.id },
+        data: { memoryLimitMb, cpuLimit }
+      });
+      await recordAudit(req, {
+        action: "datastore.update",
+        targetType: "datastore",
+        targetId: row.id,
+        targetLabel: row.slug,
+        metadata: { memoryLimitMb, cpuLimit }
+      });
+      return serializeDatastore(updated);
     }
   );
 
@@ -766,12 +828,9 @@ export async function registerDatastoreRoutes(
       });
       if (!binding) return reply.notFound();
       await prisma.projectDatastoreBinding.delete({ where: { id: binding.id } });
-      await connectDatastoreToProject(
-        ds.id,
-        ds.slug,
-        binding.project.id,
-        false
-      );
+      // Keep the current release connected until its replacement is promoted.
+      // The project deployer reconciles stale datastore network attachments at
+      // that promotion boundary, matching the "next release" env semantics.
       await recordAudit(req, {
         action: "datastore.unbind",
         targetType: "datastore",
@@ -782,7 +841,7 @@ export async function registerDatastoreRoutes(
           mode: "project-datastore-injection"
         }
       });
-      return { ok: true };
+      return { ok: true, note: "Takes effect on the project's next release" };
     }
   );
 

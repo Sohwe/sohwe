@@ -151,9 +151,25 @@ export type ProjectRow = {
   status: string;
   currentReleaseId: string | null;
   services: ProjectService[];
+  datastoreBindings: ProjectDatastoreBinding[];
   releases: ProjectRelease[];
   createdAt: string;
   updatedAt: string;
+};
+
+export type ProjectDatastoreBinding = {
+  id: string;
+  datastoreId: string;
+  envKey: string;
+  serviceIds: string[];
+  createdAt: string;
+  datastore: {
+    id: string;
+    name: string;
+    slug: string;
+    kind: "postgres" | "redis";
+    status: string;
+  };
 };
 
 export type AppStats =
@@ -462,6 +478,17 @@ export type DatastoreBinding = {
 export type DatastoreDetail = Datastore & {
   containerState: string;
   bindings: DatastoreBinding[];
+  projectBindings: ProjectDatastoreBindingSummary[];
+};
+
+export type ProjectDatastoreBindingSummary = {
+  id: string;
+  projectId: string;
+  projectName: string;
+  projectSlug: string;
+  envKey: string;
+  serviceIds: string[];
+  createdAt: string;
 };
 
 // --- Phase 8: Custom domain DNS assist ---------------------------------------

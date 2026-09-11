@@ -24,6 +24,7 @@ import { LogSink } from "./build-log";
 import { resolveRoutingConfig } from "./container-spec";
 import {
   connectHttpServiceToRoutingNetwork,
+  disconnectUnboundProjectDatastores,
   ensureProjectNetwork,
   stopAndRemoveProjectContainers
 } from "./project-docker-ops";
@@ -46,7 +47,7 @@ function delay(ms: number): Promise<void> {
 }
 
 /** Honor image HEALTHCHECK when present; otherwise require short process stability. */
-async function waitForCandidateReady(
+export async function waitForCandidateReady(
   container: Docker.Container,
   service: {
     slug: string;
@@ -70,6 +71,12 @@ async function waitForCandidateReady(
     const info = await container.inspect();
     if (!info.State?.Running) {
       throw new Error(`Service ${service.slug} stopped before it became ready`);
+    }
+    // A restart policy can make a crash-looping process appear Running again
+    // between polls. A fresh candidate starts with RestartCount=0, so any
+    // restart before promotion means this release is not healthy.
+    if ((info.RestartCount ?? 0) > 0) {
+      throw new Error(`Service ${service.slug} restarted before it became ready`);
     }
     const health = info.State.Health?.Status;
     if (health === "healthy") return;
@@ -341,6 +348,13 @@ export function createProjectDeployer(deps: {
           }
         })
       ]);
+      // Unbinding is release-coordinated: only detach stale datastore
+      // endpoints after the replacement services have been promoted.
+      await disconnectUnboundProjectDatastores(
+        deps.docker,
+        project.id,
+        new Set(project.datastoreBindings.map((binding) => binding.datastoreId))
+      ).catch(() => {});
 
       const builtImages = new Map<string, string>();
       if (promoteFromReleaseId) {

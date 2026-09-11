@@ -40,7 +40,7 @@ export function DatastoresPage() {
     <div className="space-y-6">
       <PageHeader
         title="Datastores"
-        description="Managed Postgres and Redis on this host. Private by default — bind a datastore to apps to inject its connection URL."
+        description="Managed Postgres and Redis on this host. Private by default — bind a datastore to apps or project services to inject its connection URL."
         actions={
           <Button type="button" onClick={() => setCreateOpen(true)}>
             <Plus className="mr-2 h-4 w-4" />
@@ -84,6 +84,8 @@ export function DatastoresPage() {
                         <p className="truncate text-sm font-medium">{d.name}</p>
                         <p className="font-mono text-xs text-muted-foreground">
                           {d.kind}:{d.engineVersion} · /{d.slug}
+                          {d.memoryLimitMb != null ? ` · ${d.memoryLimitMb} MB` : " · unlimited memory"}
+                          {d.cpuLimit != null ? ` · ${d.cpuLimit} CPU` : " · unlimited CPU"}
                           {d.publicPort != null ? ` · public :${d.publicPort}` : ""}
                         </p>
                       </div>
