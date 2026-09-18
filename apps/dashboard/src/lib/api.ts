@@ -96,3 +96,25 @@ export async function downloadPost(
   a.remove();
   URL.revokeObjectURL(url);
 }
+
+/** Upload a binary file without wrapping it in multipart form data. This keeps
+ * large database dumps byte-for-byte identical to what PostgreSQL produced. */
+export async function uploadBinary<T>(
+  path: string,
+  file: Blob,
+  headers: Record<string, string> = {}
+): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: "PUT",
+    credentials: "include",
+    headers: { "Content-Type": "application/octet-stream", ...headers },
+    body: file
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(errMessage(body, res.statusText));
+  }
+  const text = await res.text();
+  if (!text) return undefined as T;
+  return JSON.parse(text) as T;
+}

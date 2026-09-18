@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
-import { ArrowLeft, Eye, EyeOff, Globe, KeyRound, Play, Trash2 } from "lucide-react";
+import { ArrowLeft, Download, Eye, EyeOff, Globe, KeyRound, Play, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { CopyButton } from "@/components/common/CopyButton";
@@ -16,13 +16,15 @@ import {
   CardTitle
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { api, apiGet } from "@/lib/api";
+import { api, apiGet, downloadPost, uploadBinary } from "@/lib/api";
 import type { DatastoreConnection, DatastoreDetail } from "@/lib/types";
 import { BindingsManager } from "@/components/datastores/BindingsManager";
 import {
   DatastoreKindBadge,
   DatastoreStatusBadge
 } from "@/components/datastores/DatastoreStatusBadge";
+
+const MAX_POSTGRES_DUMP_BYTES = 512 * 1024 * 1024;
 
 export function DatastoreDetailPage() {
   const { datastoreId } = useParams({ strict: false }) as { datastoreId: string };
@@ -44,6 +46,9 @@ export function DatastoreDetailPage() {
   const [rotateOpen, setRotateOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [publicOpen, setPublicOpen] = useState(false);
+  const [restoreOpen, setRestoreOpen] = useState(false);
+  const [restoreFile, setRestoreFile] = useState<File | null>(null);
+  const restoreInput = useRef<HTMLInputElement>(null);
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["datastore", datastoreId] });
@@ -103,6 +108,36 @@ export function DatastoreDetailPage() {
     }
   });
 
+  const backupMut = useMutation({
+    mutationFn: () =>
+      downloadPost(
+        `/api/datastores/${datastoreId}/postgres/dump`,
+        {},
+        `${q.data?.slug ?? "postgres"}.dump`
+      ),
+    onSuccess: () => toast.success("PostgreSQL dump downloaded"),
+    onError: (e) =>
+      toast.error(e instanceof Error ? e.message : "Failed to create PostgreSQL dump")
+  });
+
+  const restoreMut = useMutation({
+    mutationFn: async () => {
+      if (!restoreFile || !q.data) throw new Error("Choose a PostgreSQL dump first");
+      return uploadBinary<{ ok: true; sizeBytes: number }>(
+        `/api/datastores/${datastoreId}/postgres/restore`,
+        restoreFile,
+        { "X-Sohwe-Confirm-Reset": q.data.slug }
+      );
+    },
+    onSuccess: () => {
+      const filename = restoreFile?.name;
+      setRestoreFile(null);
+      toast.success(filename ? `Restored ${filename}` : "PostgreSQL dump restored");
+    },
+    onError: (e) =>
+      toast.error(e instanceof Error ? e.message : "Failed to restore PostgreSQL dump")
+  });
+
   const revealConnection = async () => {
     try {
       const c = await apiGet<DatastoreConnection>(
@@ -154,7 +189,7 @@ export function DatastoreDetailPage() {
                 <Button
                   type="button"
                   variant="outline"
-                  disabled={rotateMut.isPending}
+                  disabled={rotateMut.isPending || backupMut.isPending || restoreMut.isPending}
                   onClick={() => setRotateOpen(true)}
                 >
                   <KeyRound className="mr-2 h-4 w-4" />
@@ -164,7 +199,12 @@ export function DatastoreDetailPage() {
               <Button
                 type="button"
                 variant="destructive"
-                disabled={ds.status === "deleting" || deleteMut.isPending}
+                disabled={
+                  ds.status === "deleting" ||
+                  deleteMut.isPending ||
+                  backupMut.isPending ||
+                  restoreMut.isPending
+                }
                 onClick={() => setDeleteOpen(true)}
               >
                 <Trash2 className="mr-2 h-4 w-4" />
@@ -231,6 +271,60 @@ export function DatastoreDetailPage() {
 
       <DatastoreResourcesCard datastore={ds} onSaved={invalidate} />
 
+      {ds.kind === "postgres" ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Backup and restore</CardTitle>
+            <CardDescription>
+              Download a portable PostgreSQL custom-format dump, or restore one into this
+              datastore. A restore validates the dump first, then resets the database and replaces
+              all of its contents.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={ds.status !== "running" || backupMut.isPending || restoreMut.isPending}
+              onClick={() => backupMut.mutate()}
+            >
+              <Download className="mr-2 h-4 w-4" />
+              {backupMut.isPending ? "Creating dump…" : "Backup and download"}
+            </Button>
+            <input
+              ref={restoreInput}
+              className="hidden"
+              type="file"
+              accept=".dump,.backup,application/octet-stream"
+              onChange={(event) => {
+                const file = event.target.files?.[0] ?? null;
+                event.target.value = "";
+                if (!file) return;
+                if (file.size > MAX_POSTGRES_DUMP_BYTES) {
+                  toast.error("PostgreSQL dumps must be 512 MB or smaller");
+                  return;
+                }
+                setRestoreFile(file);
+                setRestoreOpen(true);
+              }}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              disabled={ds.status !== "running" || backupMut.isPending || restoreMut.isPending}
+              onClick={() => restoreInput.current?.click()}
+            >
+              <Upload className="mr-2 h-4 w-4" />
+              {restoreMut.isPending ? "Restoring…" : "Upload and restore"}
+            </Button>
+            <p className="w-full text-xs text-muted-foreground">
+              Maximum dump size: 512 MB. Existing connections are terminated during restore and
+              apps may need to reconnect.
+            </p>
+          </CardContent>
+        </Card>
+      ) : null}
+
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Networking</CardTitle>
@@ -247,6 +341,8 @@ export function DatastoreDetailPage() {
             className="w-fit"
             disabled={
               publicMut.isPending ||
+              backupMut.isPending ||
+              restoreMut.isPending ||
               ds.status === "provisioning" ||
               ds.status === "deleting"
             }
@@ -269,6 +365,15 @@ export function DatastoreDetailPage() {
 
       <BindingsManager datastore={ds} />
 
+      <ConfirmDialog
+        open={restoreOpen}
+        onOpenChange={setRestoreOpen}
+        title="Reset and restore PostgreSQL"
+        description={`Restore "${restoreFile?.name ?? "this dump"}" into "${ds.name}"? This terminates active database connections, deletes every existing database object, and replaces the data with the uploaded dump. This cannot be undone.`}
+        confirmLabel="Reset and restore"
+        variant="destructive"
+        onConfirm={() => restoreMut.mutate()}
+      />
       <ConfirmDialog
         open={publicOpen}
         onOpenChange={setPublicOpen}

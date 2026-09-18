@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CreateProjectSchema, normalizeHostname } from "@sohwe/types";
-import { Boxes, Plus, Rocket, RotateCcw, Settings, Trash2 } from "lucide-react";
+import { Boxes, FileJson, Plus, Rocket, RotateCcw, Settings, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/common/PageHeader";
 import { Field } from "@/components/common/Field";
@@ -58,6 +58,37 @@ type ServiceDraft = {
   envVars: string;
   buildArgs: string;
 };
+
+const PROJECT_JSON_TEMPLATE = JSON.stringify(
+  {
+    name: "My monorepo",
+    slug: "my-monorepo",
+    gitRepo: "https://github.com/your-org/your-repo.git",
+    gitBranch: "main",
+    autoDeploy: false,
+    envVars: { NODE_ENV: "production" },
+    services: [
+      {
+        name: "API",
+        slug: "api",
+        kind: "http",
+        buildMode: "nixpacks",
+        serviceDirectory: "apps/api",
+        workspaceSelector: "@your-org/api",
+        dockerfilePath: "Dockerfile",
+        buildCmd: "pnpm --filter @your-org/api build",
+        runtimeCmd: "pnpm --filter @your-org/api start",
+        port: 3000,
+        domains: [],
+        dependsOn: [],
+        envVars: {},
+        buildArgs: {}
+      }
+    ]
+  },
+  null,
+  2
+);
 
 let nextServiceKey = 0;
 
@@ -123,6 +154,23 @@ function variableLines(value: string): Record<string, string> {
     vars[key] = line.slice(separator + 1);
   });
   return vars;
+}
+
+function projectConfigError(error: unknown): string {
+  if (error && typeof error === "object" && "issues" in error) {
+    const issues = (error as { issues?: unknown }).issues;
+    if (Array.isArray(issues)) {
+      const messages = issues.slice(0, 4).flatMap((issue) => {
+        if (!issue || typeof issue !== "object" || !("message" in issue)) return [];
+        const message = String((issue as { message: unknown }).message);
+        const rawPath = "path" in issue ? (issue as { path?: unknown }).path : undefined;
+        const path = Array.isArray(rawPath) ? rawPath.map(String).join(".") : "";
+        return [path ? `${path}: ${message}` : message];
+      });
+      if (messages.length > 0) return messages.join("; ");
+    }
+  }
+  return error instanceof Error ? error.message : "Invalid project configuration";
 }
 
 function serviceInput(service: ServiceDraft) {
@@ -191,6 +239,9 @@ function CreateProjectDialog({
   const [autoDeploy, setAutoDeploy] = useState(false);
   const [projectVariables, setProjectVariables] = useState("");
   const [services, setServices] = useState<ServiceDraft[]>(() => [makeServiceDraft()]);
+  const [inputMode, setInputMode] = useState<"form" | "json">("form");
+  const [jsonConfig, setJsonConfig] = useState(PROJECT_JSON_TEMPLATE);
+  const jsonFileInput = useRef<HTMLInputElement>(null);
 
   function updateService(key: string, patch: Partial<ServiceDraft>) {
     setServices((current) =>
@@ -200,15 +251,19 @@ function CreateProjectDialog({
 
   const create = useMutation({
     mutationFn: async () => {
-      const payload = CreateProjectSchema.parse({
-        name,
-        slug,
-        gitRepo: repo,
-        gitBranch: branch,
-        autoDeploy,
-        envVars: variableLines(projectVariables),
-        services: services.map(serviceInput)
-      });
+      const payload = CreateProjectSchema.parse(
+        inputMode === "json"
+          ? (JSON.parse(jsonConfig) as unknown)
+          : {
+              name,
+              slug,
+              gitRepo: repo,
+              gitBranch: branch,
+              autoDeploy,
+              envVars: variableLines(projectVariables),
+              services: services.map(serviceInput)
+            }
+      );
       return api<ProjectRow>("/api/projects", {
         method: "POST",
         body: JSON.stringify(payload)
@@ -223,11 +278,12 @@ function CreateProjectDialog({
       setAutoDeploy(false);
       setProjectVariables("");
       setServices([makeServiceDraft()]);
+      setInputMode("form");
+      setJsonConfig(PROJECT_JSON_TEMPLATE);
       onOpenChange(false);
       toast.success("Project created");
     },
-    onError: (error) =>
-      toast.error(error instanceof Error ? error.message : "Could not create project")
+    onError: (error) => toast.error(projectConfigError(error))
   });
 
   return (
@@ -240,6 +296,24 @@ function CreateProjectDialog({
             and released on one private project network.
           </DialogDescription>
         </DialogHeader>
+        <div className="flex w-fit rounded-md border p-1">
+          <Button
+            type="button"
+            size="sm"
+            variant={inputMode === "form" ? "secondary" : "ghost"}
+            onClick={() => setInputMode("form")}
+          >
+            Form
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant={inputMode === "json" ? "secondary" : "ghost"}
+            onClick={() => setInputMode("json")}
+          >
+            <FileJson className="mr-1 h-4 w-4" /> JSON
+          </Button>
+        </div>
         <form
           className="space-y-4"
           onSubmit={(event) => {
@@ -247,6 +321,8 @@ function CreateProjectDialog({
             create.mutate();
           }}
         >
+          {inputMode === "form" ? (
+            <>
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Project name">
               <Input value={name} onChange={(e) => setName(e.target.value)} required />
@@ -674,6 +750,55 @@ function CreateProjectDialog({
               );
             })}
           </div>
+            </>
+          ) : (
+            <div className="space-y-3">
+              <Field label="Project configuration JSON">
+                <Textarea
+                  className="min-h-[420px] font-mono text-xs"
+                  value={jsonConfig}
+                  onChange={(event) => setJsonConfig(event.target.value)}
+                  spellCheck={false}
+                  aria-label="Project configuration JSON"
+                />
+              </Field>
+              <div className="flex flex-wrap items-center gap-3">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => jsonFileInput.current?.click()}
+                >
+                  <Upload className="mr-1 h-4 w-4" /> Upload JSON file
+                </Button>
+                <input
+                  ref={jsonFileInput}
+                  className="hidden"
+                  type="file"
+                  accept="application/json,.json"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    event.target.value = "";
+                    if (!file) return;
+                    void file
+                      .text()
+                      .then((text) => {
+                        const parsed = JSON.parse(text) as unknown;
+                        const validated = CreateProjectSchema.parse(parsed);
+                        setJsonConfig(JSON.stringify(validated, null, 2));
+                        toast.success(`Loaded ${file.name}`);
+                      })
+                      .catch((error: unknown) => toast.error(projectConfigError(error)));
+                  }}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Paste or upload the full project object. It uses the same validation as the form,
+                  including pnpm workspace selectors, commands, dependencies, variables, and build
+                  arguments.
+                </p>
+              </div>
+            </div>
+          )}
           <Button type="submit" disabled={create.isPending}>
             {create.isPending ? "Creating…" : "Create project"}
           </Button>

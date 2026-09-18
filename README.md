@@ -172,6 +172,12 @@ inherited by every service, with service values taking precedence. Managed
 Postgres/Redis bindings may target every service or a selected subset. External
 S3/R2 settings belong in encrypted project/service variables.
 
+For larger pnpm monorepos, the **New project** dialog also has a JSON mode.
+Paste the complete project object or upload a `.json` file instead of filling
+every service field individually. The editor starts with a pnpm workspace
+example and uses the same validation and defaults as the visual form before
+anything is created.
+
 Project service logs are persisted separately from build logs, tagged by
 service and release, and available as both bounded history and authenticated
 live SSE. Worker restart recovery reattaches to running service containers;
@@ -197,6 +203,13 @@ Docker publishes the port past ufw-style host firewalls — so treat it as a
 convenience to switch off when you are done. Password rotation updates every
 bound app's injected URL (redeploy to apply) and invalidates old external
 credentials immediately.
+
+Running PostgreSQL datastores also have **Backup and download** and **Upload
+and restore** actions. Backups are portable custom-format `pg_dump` archives.
+A restore validates the archive before terminating database connections,
+recreating the database, and loading the dump; the confirmation dialog makes
+the destructive reset explicit. Dump uploads and downloads are capped at
+512 MB.
 
 ### Managing the instance
 

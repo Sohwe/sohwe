@@ -1,4 +1,5 @@
-import { randomBytes, randomInt } from "node:crypto";
+import { randomBytes, randomInt, randomUUID } from "node:crypto";
+import { PassThrough, type Readable, type Writable } from "node:stream";
 import type { FastifyInstance } from "fastify";
 import { prisma } from "@sohwe/db";
 import { decryptJson, encryptJson } from "@sohwe/crypto";
@@ -40,6 +41,84 @@ const ProjectBindingParam = z.object({
   id: z.string().uuid(),
   bindingId: z.string().uuid()
 });
+
+const MAX_POSTGRES_DUMP_BYTES = 512 * 1024 * 1024;
+const activePostgresOperations = new Set<string>();
+
+type ModemDemux = {
+  demuxStream: (stream: Readable, out: Writable, err: Writable) => void;
+};
+
+type ExecResult = { stdout: Buffer; stderr: string; exitCode: number };
+
+/** Run a PostgreSQL client command in its managed container. Keeping the
+ * password in the exec environment (rather than argv) prevents it appearing in
+ * Docker process inspection. stdout stays binary-safe for custom-format dumps. */
+async function execPostgresCommand(
+  container: Docker.Container,
+  cmd: string[],
+  password: string,
+  input?: Buffer
+): Promise<ExecResult> {
+  const exec = await container.exec({
+    Cmd: cmd,
+    Env: [`PGPASSWORD=${password}`],
+    AttachStdin: input !== undefined,
+    AttachStdout: true,
+    AttachStderr: true,
+    Tty: false
+  });
+  const stream = (await exec.start({
+    hijack: true,
+    stdin: input !== undefined
+  })) as Readable & Writable;
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  const outChunks: Buffer[] = [];
+  const errChunks: Buffer[] = [];
+  let outBytes = 0;
+  stdout.on("data", (chunk: Buffer) => {
+    outBytes += chunk.length;
+    if (outBytes <= MAX_POSTGRES_DUMP_BYTES) outChunks.push(chunk);
+  });
+  stderr.on("data", (chunk: Buffer) => errChunks.push(chunk));
+  (container as unknown as { modem: ModemDemux }).modem.demuxStream(
+    stream,
+    stdout,
+    stderr
+  );
+  if (input !== undefined) stream.end(input);
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const finish = () => {
+      if (!settled) {
+        settled = true;
+        resolve();
+      }
+    };
+    stream.on("end", finish);
+    stream.on("close", finish);
+    stream.on("error", reject);
+  });
+  if (outBytes > MAX_POSTGRES_DUMP_BYTES) {
+    throw new Error("PostgreSQL dump exceeds the 512 MB download limit");
+  }
+  const info = await exec.inspect();
+  return {
+    stdout: Buffer.concat(outChunks),
+    stderr: Buffer.concat(errChunks).toString("utf8").trim(),
+    exitCode: info.ExitCode ?? -1
+  };
+}
+
+function postgresCommandError(action: string, result: ExecResult): Error {
+  const detail = result.stderr.slice(0, 2_000);
+  return new Error(
+    detail
+      ? `${action} failed: ${detail}`
+      : `${action} failed (exit ${String(result.exitCode)})`
+  );
+}
 
 // Datastores are secret-adjacent end to end — even the list names what backs
 // an app — and every mutation touches credentials or app env vars, so the
@@ -440,6 +519,9 @@ export async function registerDatastoreRoutes(
         where: { id, organizationId: u.organizationId }
       });
       if (!row) return reply.notFound();
+      if (activePostgresOperations.has(row.id)) {
+        return reply.conflict("A backup or restore is running for this datastore");
+      }
       if (row.status !== "running") {
         return reply
           .status(409)
@@ -470,6 +552,9 @@ export async function registerDatastoreRoutes(
         where: { id, organizationId: u.organizationId }
       });
       if (!row) return reply.notFound();
+      if (activePostgresOperations.has(row.id)) {
+        return reply.conflict("A backup or restore is running for this datastore");
+      }
       if (row.status === "provisioning" || row.status === "deleting") {
         return reply
           .status(409)
@@ -856,6 +941,9 @@ export async function registerDatastoreRoutes(
         include: { bindings: { select: { id: true } } }
       });
       if (!row) return reply.notFound();
+      if (activePostgresOperations.has(row.id)) {
+        return reply.conflict("A backup or restore is running for this datastore");
+      }
 
       await prisma.datastore.update({
         where: { id: row.id },
@@ -872,4 +960,243 @@ export async function registerDatastoreRoutes(
       return reply.status(202).send({ ok: true });
     }
   );
+
+  // Kept in an encapsulated scope so the binary parser cannot change how any
+  // of the dashboard's JSON endpoints interpret request bodies.
+  await app.register(async (scope) => {
+    scope.addContentTypeParser(
+      "application/octet-stream",
+      { parseAs: "buffer", bodyLimit: MAX_POSTGRES_DUMP_BYTES },
+      (_req, body, done) => done(null, body)
+    );
+
+    scope.post(
+      "/api/datastores/:id/postgres/dump",
+      {
+        preHandler: [requireRole("admin")],
+        schema: { params: IdParam },
+        ...secretOpts
+      },
+      async (req, reply) => {
+        const user = req.user!;
+        const { id } = IdParam.parse(req.params);
+        const row = await prisma.datastore.findFirst({
+          where: { id, organizationId: user.organizationId }
+        });
+        if (!row) return reply.notFound();
+        if (row.kind !== "postgres") {
+          return reply.badRequest("Logical dumps are available only for PostgreSQL datastores");
+        }
+        if (row.status !== "running") {
+          return reply.conflict("The PostgreSQL datastore must be running to create a dump");
+        }
+        if (activePostgresOperations.has(row.id)) {
+          return reply.conflict("A backup or restore is already running for this datastore");
+        }
+
+        activePostgresOperations.add(row.id);
+        try {
+          const container = docker.getContainer(datastoreContainerName(row.slug));
+          const info = await container.inspect();
+          if (
+            info.Config?.Labels?.[DATASTORE_LABEL] !== row.id ||
+            info.State?.Running !== true
+          ) {
+            return reply.conflict("The managed PostgreSQL container is not running");
+          }
+          const creds = readCreds(row.credentialsEncrypted);
+          const username = creds.username ?? "sohwe";
+          const database = creds.database ?? "sohwe";
+          const result = await execPostgresCommand(
+            container,
+            [
+              "pg_dump",
+              "--format=custom",
+              "--no-owner",
+              "--no-privileges",
+              "--username",
+              username,
+              database
+            ],
+            creds.password
+          );
+          if (result.exitCode !== 0) throw postgresCommandError("PostgreSQL backup", result);
+
+          const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+          const filename = `${row.slug}-${timestamp}.dump`;
+          await recordAudit(req, {
+            action: "datastore.backup",
+            targetType: "datastore",
+            targetId: row.id,
+            targetLabel: row.slug,
+            metadata: { format: "postgres-custom", sizeBytes: result.stdout.length }
+          });
+          return reply
+            .type("application/octet-stream")
+            .header("Content-Disposition", `attachment; filename="${filename}"`)
+            .header("Content-Length", String(result.stdout.length))
+            .send(result.stdout);
+        } catch (error) {
+          req.log.error({ err: error, datastoreId: row.id }, "PostgreSQL dump failed");
+          return reply.internalServerError(
+            error instanceof Error ? error.message : "PostgreSQL backup failed"
+          );
+        } finally {
+          activePostgresOperations.delete(row.id);
+        }
+      }
+    );
+
+    scope.put(
+      "/api/datastores/:id/postgres/restore",
+      {
+        preHandler: [requireRole("admin")],
+        schema: { params: IdParam },
+        bodyLimit: MAX_POSTGRES_DUMP_BYTES,
+        ...secretOpts
+      },
+      async (req, reply) => {
+        const user = req.user!;
+        const { id } = IdParam.parse(req.params);
+        const row = await prisma.datastore.findFirst({
+          where: { id, organizationId: user.organizationId }
+        });
+        if (!row) return reply.notFound();
+        if (row.kind !== "postgres") {
+          return reply.badRequest("Logical restore is available only for PostgreSQL datastores");
+        }
+        if (row.status !== "running") {
+          return reply.conflict("The PostgreSQL datastore must be running to restore a dump");
+        }
+        const confirmation = req.headers["x-sohwe-confirm-reset"];
+        if (confirmation !== row.slug) {
+          return reply.badRequest(
+            "Restore confirmation is missing or does not match the datastore slug"
+          );
+        }
+        if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+          return reply.badRequest("Upload a non-empty PostgreSQL custom-format dump");
+        }
+        if (req.body.subarray(0, 5).toString("ascii") !== "PGDMP") {
+          return reply.badRequest(
+            "Unsupported dump format. Upload a PostgreSQL custom-format .dump file"
+          );
+        }
+        if (activePostgresOperations.has(row.id)) {
+          return reply.conflict("A backup or restore is already running for this datastore");
+        }
+
+        activePostgresOperations.add(row.id);
+        let container: Docker.Container | null = null;
+        let temporaryPath: string | null = null;
+        try {
+          container = docker.getContainer(datastoreContainerName(row.slug));
+          const info = await container.inspect();
+          if (
+            info.Config?.Labels?.[DATASTORE_LABEL] !== row.id ||
+            info.State?.Running !== true
+          ) {
+            return reply.conflict("The managed PostgreSQL container is not running");
+          }
+          const creds = readCreds(row.credentialsEncrypted);
+          const username = creds.username ?? "sohwe";
+          const database = creds.database ?? "sohwe";
+          temporaryPath = `/tmp/sohwe-restore-${randomUUID()}.dump`;
+
+          const upload = await execPostgresCommand(
+            container,
+            ["sh", "-c", 'umask 077; cat > "$1"', "sohwe-restore", temporaryPath],
+            creds.password,
+            req.body
+          );
+          if (upload.exitCode !== 0) throw postgresCommandError("Dump upload", upload);
+
+          // Validate the complete archive before making the destructive change.
+          const validation = await execPostgresCommand(
+            container,
+            ["pg_restore", "--list", temporaryPath],
+            creds.password
+          );
+          if (validation.exitCode !== 0) {
+            return reply.badRequest(
+              validation.stderr
+                ? `The PostgreSQL dump is invalid or incompatible: ${validation.stderr.slice(0, 1_000)}`
+                : "The PostgreSQL dump is invalid or incompatible"
+            );
+          }
+
+          const drop = await execPostgresCommand(
+            container,
+            [
+              "dropdb",
+              "--if-exists",
+              "--force",
+              "--username",
+              username,
+              "--maintenance-db",
+              "postgres",
+              database
+            ],
+            creds.password
+          );
+          if (drop.exitCode !== 0) throw postgresCommandError("Database reset", drop);
+          const create = await execPostgresCommand(
+            container,
+            [
+              "createdb",
+              "--username",
+              username,
+              "--owner",
+              username,
+              "--maintenance-db",
+              "postgres",
+              database
+            ],
+            creds.password
+          );
+          if (create.exitCode !== 0) throw postgresCommandError("Database creation", create);
+          const restore = await execPostgresCommand(
+            container,
+            [
+              "pg_restore",
+              "--exit-on-error",
+              "--single-transaction",
+              "--no-owner",
+              "--no-privileges",
+              "--username",
+              username,
+              "--dbname",
+              database,
+              temporaryPath
+            ],
+            creds.password
+          );
+          if (restore.exitCode !== 0) throw postgresCommandError("PostgreSQL restore", restore);
+
+          await recordAudit(req, {
+            action: "datastore.restore",
+            targetType: "datastore",
+            targetId: row.id,
+            targetLabel: row.slug,
+            metadata: { format: "postgres-custom", sizeBytes: req.body.length }
+          });
+          return { ok: true, sizeBytes: req.body.length };
+        } catch (error) {
+          req.log.error({ err: error, datastoreId: row.id }, "PostgreSQL restore failed");
+          return reply.internalServerError(
+            error instanceof Error ? error.message : "PostgreSQL restore failed"
+          );
+        } finally {
+          if (container && temporaryPath) {
+            await execPostgresCommand(
+              container,
+              ["rm", "-f", temporaryPath],
+              ""
+            ).catch(() => {});
+          }
+          activePostgresOperations.delete(row.id);
+        }
+      }
+    );
+  });
 }

@@ -73,6 +73,8 @@ export type AuditAction =
   | "datastore.provision"
   | "datastore.rotate_password"
   | "datastore.reveal"
+  | "datastore.backup"
+  | "datastore.restore"
   | "datastore.bind"
   | "datastore.unbind"
   | "dns.credentials.set"
@@ -131,6 +133,8 @@ export const AUDIT_ACTIONS: readonly AuditAction[] = [
   "datastore.provision",
   "datastore.rotate_password",
   "datastore.reveal",
+  "datastore.backup",
+  "datastore.restore",
   "datastore.bind",
   "datastore.unbind",
   "dns.credentials.set",
