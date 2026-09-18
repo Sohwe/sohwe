@@ -1,13 +1,15 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BuildArgsPatchSchema,
+  CreateProjectSchema,
   EnvVarsPatchSchema,
   ServiceDomainsReplaceSchema,
   UpdateProjectSchema,
   UpdateServiceSchema,
   normalizeHostname
 } from "@sohwe/types";
+import { FileJson, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { Field } from "@/components/common/Field";
@@ -60,6 +62,68 @@ type ServiceDraft = {
   variableChanges: string;
   buildArgChanges: string;
 };
+
+function jsonConfigFrom(project: ProjectRow): string {
+  return JSON.stringify(
+    {
+      name: project.name,
+      slug: project.slug,
+      gitRepo: project.gitRepo,
+      gitBranch: project.gitBranch,
+      autoDeploy: project.autoDeploy,
+      envVars: {},
+      services: project.services.map((service) => ({
+        name: service.name,
+        slug: service.slug,
+        kind: service.kind,
+        buildMode: service.buildMode,
+        buildCmd: service.buildCmd ?? undefined,
+        startCmd: service.startCmd ?? undefined,
+        runtimeCmd: service.runtimeCmd ?? undefined,
+        serviceDirectory: service.serviceDirectory,
+        workspaceSelector: service.workspaceSelector ?? undefined,
+        dockerfilePath: service.dockerfilePath,
+        dockerTarget: service.dockerTarget ?? undefined,
+        imageGroup: service.imageGroup ?? undefined,
+        port: service.port ?? undefined,
+        domains: service.domains.map((domain) => domain.hostname),
+        memoryLimitMb: service.memoryLimitMb ?? undefined,
+        cpuLimit: service.cpuLimit ?? undefined,
+        restartPolicy: service.kind === "release" ? "no" : service.restartPolicy,
+        dependsOn: service.dependencies.map((dependency) => ({
+          serviceSlug: dependency.dependencyService.slug,
+          condition: dependency.condition
+        })),
+        healthCheckCmd: service.healthCheckCmd ?? undefined,
+        healthCheckIntervalSeconds: service.healthCheckIntervalSeconds,
+        healthCheckTimeoutSeconds: service.healthCheckTimeoutSeconds,
+        healthCheckRetries: service.healthCheckRetries,
+        healthCheckStartPeriodSeconds: service.healthCheckStartPeriodSeconds,
+        envVars: {},
+        buildArgs: {}
+      }))
+    },
+    null,
+    2
+  );
+}
+
+function jsonConfigError(error: unknown): string {
+  if (error && typeof error === "object" && "issues" in error) {
+    const issues = (error as { issues?: unknown }).issues;
+    if (Array.isArray(issues)) {
+      const messages = issues.slice(0, 4).flatMap((issue) => {
+        if (!issue || typeof issue !== "object" || !("message" in issue)) return [];
+        const message = String((issue as { message: unknown }).message);
+        const rawPath = "path" in issue ? (issue as { path?: unknown }).path : undefined;
+        const path = Array.isArray(rawPath) ? rawPath.map(String).join(".") : "";
+        return [path ? `${path}: ${message}` : message];
+      });
+      if (messages.length > 0) return messages.join("; ");
+    }
+  }
+  return error instanceof Error ? error.message : "Invalid project configuration";
+}
 
 function draftFrom(service: ProjectService): ServiceDraft {
   const dependencies = (condition: "started" | "healthy") =>
@@ -156,6 +220,9 @@ export function EditProjectDialog({
   const [services, setServices] = useState<ServiceDraft[]>(() =>
     project.services.map(draftFrom)
   );
+  const [inputMode, setInputMode] = useState<"form" | "json">("form");
+  const [jsonConfig, setJsonConfig] = useState(() => jsonConfigFrom(project));
+  const jsonFileInput = useRef<HTMLInputElement>(null);
 
   function updateService(id: string, patch: Partial<ServiceDraft>) {
     setServices((current) =>
@@ -163,8 +230,135 @@ export function EditProjectDialog({
     );
   }
 
+  async function importJsonFile(file: File | undefined): Promise<void> {
+    if (!file) return;
+    try {
+      const config = CreateProjectSchema.parse(JSON.parse(await file.text()) as unknown);
+      if (config.slug !== project.slug) {
+        throw new Error(`Project slug must remain "${project.slug}"`);
+      }
+      setJsonConfig(JSON.stringify(config, null, 2));
+      toast.success("Project JSON loaded");
+    } catch (error) {
+      toast.error(jsonConfigError(error));
+    }
+  }
+
+  async function saveJsonConfiguration(): Promise<void> {
+    const config = CreateProjectSchema.parse(JSON.parse(jsonConfig) as unknown);
+    if (config.slug !== project.slug) {
+      throw new Error(
+        `Project slug must remain "${project.slug}" because it identifies the project network`
+      );
+    }
+
+    const currentBySlug = new Map(project.services.map((service) => [service.slug, service]));
+    for (const service of config.services) {
+      const current = currentBySlug.get(service.slug);
+      if (current && current.kind !== service.kind) {
+        throw new Error(
+          `Service ${service.slug} must remain type ${current.kind}; service types cannot be changed in place`
+        );
+      }
+    }
+
+    await api(`/api/projects/${project.id}`, {
+      method: "PATCH",
+      body: JSON.stringify(
+        UpdateProjectSchema.parse({
+          name: config.name,
+          gitRepo: config.gitRepo,
+          gitBranch: config.gitBranch,
+          autoDeploy: config.autoDeploy
+        })
+      )
+    });
+    if (Object.keys(config.envVars).length > 0) {
+      await api(`/api/projects/${project.id}/variables`, {
+        method: "PATCH",
+        body: JSON.stringify(
+          EnvVarsPatchSchema.parse({ set: config.envVars, unset: [] })
+        )
+      });
+    }
+
+    // Add missing services without dependencies first. Once every slug exists,
+    // dependency patches can safely reference services introduced by this same
+    // JSON document.
+    const serviceIds = new Map(
+      project.services.map((service) => [service.slug, service.id])
+    );
+    for (const service of config.services) {
+      if (serviceIds.has(service.slug)) continue;
+      const created = await api<ProjectService>(`/api/projects/${project.id}/services`, {
+        method: "POST",
+        body: JSON.stringify({ ...service, dependsOn: [] })
+      });
+      serviceIds.set(service.slug, created.id);
+    }
+
+    await Promise.all(
+      config.services.map(async (service) => {
+        const serviceId = serviceIds.get(service.slug);
+        if (!serviceId) throw new Error(`Could not resolve service ${service.slug}`);
+        const servicePatch = UpdateServiceSchema.parse({
+          name: service.name,
+          buildMode: service.buildMode,
+          buildCmd: service.buildCmd ?? null,
+          startCmd: service.startCmd ?? null,
+          runtimeCmd: service.runtimeCmd ?? null,
+          serviceDirectory: service.serviceDirectory,
+          workspaceSelector: service.workspaceSelector ?? null,
+          dockerfilePath: service.dockerfilePath,
+          dockerTarget: service.dockerTarget ?? null,
+          imageGroup: service.imageGroup ?? null,
+          port: service.kind === "http" ? service.port : null,
+          memoryLimitMb: service.memoryLimitMb ?? null,
+          cpuLimit: service.cpuLimit ?? null,
+          restartPolicy: service.kind === "release" ? "no" : service.restartPolicy,
+          dependsOn: service.kind === "release" ? [] : service.dependsOn,
+          healthCheckCmd: service.healthCheckCmd ?? null,
+          healthCheckIntervalSeconds: service.healthCheckIntervalSeconds,
+          healthCheckTimeoutSeconds: service.healthCheckTimeoutSeconds,
+          healthCheckRetries: service.healthCheckRetries,
+          healthCheckStartPeriodSeconds: service.healthCheckStartPeriodSeconds
+        });
+        await api(`/api/services/${serviceId}`, {
+          method: "PATCH",
+          body: JSON.stringify(servicePatch)
+        });
+        await api(`/api/services/${serviceId}/domains`, {
+          method: "PUT",
+          body: JSON.stringify(
+            ServiceDomainsReplaceSchema.parse({ domains: service.domains })
+          )
+        });
+        if (Object.keys(service.envVars).length > 0) {
+          await api(`/api/services/${serviceId}/variables`, {
+            method: "PATCH",
+            body: JSON.stringify(
+              EnvVarsPatchSchema.parse({ set: service.envVars, unset: [] })
+            )
+          });
+        }
+        if (Object.keys(service.buildArgs).length > 0) {
+          await api(`/api/services/${serviceId}/build-args`, {
+            method: "PATCH",
+            body: JSON.stringify(
+              BuildArgsPatchSchema.parse({ set: service.buildArgs, unset: [] })
+            )
+          });
+        }
+      })
+    );
+  }
+
   const save = useMutation({
     mutationFn: async () => {
+      if (inputMode === "json") {
+        await saveJsonConfiguration();
+        return;
+      }
       const projectPatch = UpdateProjectSchema.parse({
         name,
         gitRepo: repo,
@@ -261,8 +455,7 @@ export function EditProjectDialog({
       onOpenChange(false);
       toast.success("Project configuration saved");
     },
-    onError: (error) =>
-      toast.error(error instanceof Error ? error.message : "Could not save project")
+    onError: (error) => toast.error(jsonConfigError(error))
   });
 
   return (
@@ -275,6 +468,25 @@ export function EditProjectDialog({
             because they identify the private network and its services.
           </DialogDescription>
         </DialogHeader>
+        <div className="grid grid-cols-2 gap-2 rounded-lg bg-muted p-1">
+          <Button
+            type="button"
+            size="sm"
+            variant={inputMode === "form" ? "default" : "ghost"}
+            onClick={() => setInputMode("form")}
+          >
+            Form
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant={inputMode === "json" ? "default" : "ghost"}
+            onClick={() => setInputMode("json")}
+          >
+            <FileJson className="mr-2 size-4" />
+            JSON
+          </Button>
+        </div>
         <form
           className="space-y-4"
           onSubmit={(event) => {
@@ -282,7 +494,9 @@ export function EditProjectDialog({
             save.mutate();
           }}
         >
-          <div className="grid gap-3 sm:grid-cols-2">
+          {inputMode === "form" ? (
+            <>
+              <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Project name">
               <Input value={name} onChange={(event) => setName(event.target.value)} required />
             </Field>
@@ -584,8 +798,50 @@ export function EditProjectDialog({
                 </div>
               </details>
             ))}
-          </div>
-          <ProjectDatastoreBindings project={project} />
+              </div>
+            </>
+          ) : (
+            <div className="space-y-3">
+              <Field label="Project configuration JSON">
+                <Textarea
+                  className="min-h-[28rem] font-mono text-xs"
+                  value={jsonConfig}
+                  onChange={(event) => setJsonConfig(event.target.value)}
+                  spellCheck={false}
+                />
+              </Field>
+              <div className="flex flex-wrap items-center gap-3">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => jsonFileInput.current?.click()}
+                >
+                  <Upload className="mr-2 size-4" />
+                  Upload JSON file
+                </Button>
+                <input
+                  ref={jsonFileInput}
+                  type="file"
+                  accept="application/json,.json"
+                  className="hidden"
+                  onChange={(event) => {
+                    void importJsonFile(event.target.files?.[0]);
+                    event.target.value = "";
+                  }}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Existing services are matched by slug; new slugs create services.
+                </p>
+              </div>
+              <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">
+                Project and existing service slugs cannot change, and an existing service keeps its
+                type. Services omitted from the JSON are left unchanged. Hidden environment values
+                and build arguments are preserved when their JSON objects are empty; values you add
+                are set or updated.
+              </div>
+            </div>
+          )}
+          {inputMode === "form" ? <ProjectDatastoreBindings project={project} /> : null}
           <div className="flex justify-end gap-2">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel

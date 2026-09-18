@@ -172,11 +172,13 @@ inherited by every service, with service values taking precedence. Managed
 Postgres/Redis bindings may target every service or a selected subset. External
 S3/R2 settings belong in encrypted project/service variables.
 
-For larger pnpm monorepos, the **New project** dialog also has a JSON mode.
-Paste the complete project object or upload a `.json` file instead of filling
-every service field individually. The editor starts with a pnpm workspace
-example and uses the same validation and defaults as the visual form before
-anything is created.
+For larger pnpm monorepos, both the **New project** dialog and an existing
+project's **Settings** dialog have a JSON mode. Paste the complete project
+object or upload a `.json` file instead of filling every service field
+individually. The new-project editor starts with a pnpm workspace example and
+uses the same validation and defaults as the visual form. When updating an
+existing project, services are matched by slug, new slugs create services, and
+omitted services are preserved.
 
 Project service logs are persisted separately from build logs, tagged by
 service and release, and available as both bounded history and authenticated
