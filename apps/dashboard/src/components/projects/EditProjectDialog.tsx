@@ -63,7 +63,40 @@ type ServiceDraft = {
   buildArgChanges: string;
 };
 
-function jsonConfigFrom(project: ProjectRow): string {
+type MaskedVariablePreview = { key: string; preview: string };
+
+type ProjectVariablePreviews = {
+  project: MaskedVariablePreview[];
+  services: {
+    id: string;
+    envVars: MaskedVariablePreview[];
+    buildArgs: MaskedVariablePreview[];
+  }[];
+};
+
+const STORED_VALUE_PREFIX = "<stored:";
+
+function previewMap(items: MaskedVariablePreview[] | undefined): Record<string, string> {
+  return Object.fromEntries(
+    (items ?? []).map(({ key, preview }) => [key, `${STORED_VALUE_PREFIX}${preview}>`])
+  );
+}
+
+function changedValues(values: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(values).filter(
+      ([, value]) => !(value.startsWith(STORED_VALUE_PREFIX) && value.endsWith(">"))
+    )
+  );
+}
+
+function jsonConfigFrom(
+  project: ProjectRow,
+  previews?: ProjectVariablePreviews
+): string {
+  const previewsByService = new Map(
+    (previews?.services ?? []).map((service) => [service.id, service])
+  );
   return JSON.stringify(
     {
       name: project.name,
@@ -71,37 +104,40 @@ function jsonConfigFrom(project: ProjectRow): string {
       gitRepo: project.gitRepo,
       gitBranch: project.gitBranch,
       autoDeploy: project.autoDeploy,
-      envVars: {},
-      services: project.services.map((service) => ({
-        name: service.name,
-        slug: service.slug,
-        kind: service.kind,
-        buildMode: service.buildMode,
-        buildCmd: service.buildCmd ?? undefined,
-        startCmd: service.startCmd ?? undefined,
-        runtimeCmd: service.runtimeCmd ?? undefined,
-        serviceDirectory: service.serviceDirectory,
-        workspaceSelector: service.workspaceSelector ?? undefined,
-        dockerfilePath: service.dockerfilePath,
-        dockerTarget: service.dockerTarget ?? undefined,
-        imageGroup: service.imageGroup ?? undefined,
-        port: service.port ?? undefined,
-        domains: service.domains.map((domain) => domain.hostname),
-        memoryLimitMb: service.memoryLimitMb ?? undefined,
-        cpuLimit: service.cpuLimit ?? undefined,
-        restartPolicy: service.kind === "release" ? "no" : service.restartPolicy,
-        dependsOn: service.dependencies.map((dependency) => ({
-          serviceSlug: dependency.dependencyService.slug,
-          condition: dependency.condition
-        })),
-        healthCheckCmd: service.healthCheckCmd ?? undefined,
-        healthCheckIntervalSeconds: service.healthCheckIntervalSeconds,
-        healthCheckTimeoutSeconds: service.healthCheckTimeoutSeconds,
-        healthCheckRetries: service.healthCheckRetries,
-        healthCheckStartPeriodSeconds: service.healthCheckStartPeriodSeconds,
-        envVars: {},
-        buildArgs: {}
-      }))
+      envVars: previewMap(previews?.project),
+      services: project.services.map((service) => {
+        const stored = previewsByService.get(service.id);
+        return {
+          name: service.name,
+          slug: service.slug,
+          kind: service.kind,
+          buildMode: service.buildMode,
+          buildCmd: service.buildCmd ?? undefined,
+          startCmd: service.startCmd ?? undefined,
+          runtimeCmd: service.runtimeCmd ?? undefined,
+          serviceDirectory: service.serviceDirectory,
+          workspaceSelector: service.workspaceSelector ?? undefined,
+          dockerfilePath: service.dockerfilePath,
+          dockerTarget: service.dockerTarget ?? undefined,
+          imageGroup: service.imageGroup ?? undefined,
+          port: service.port ?? undefined,
+          domains: service.domains.map((domain) => domain.hostname),
+          memoryLimitMb: service.memoryLimitMb ?? undefined,
+          cpuLimit: service.cpuLimit ?? undefined,
+          restartPolicy: service.kind === "release" ? "no" : service.restartPolicy,
+          dependsOn: service.dependencies.map((dependency) => ({
+            serviceSlug: dependency.dependencyService.slug,
+            condition: dependency.condition
+          })),
+          healthCheckCmd: service.healthCheckCmd ?? undefined,
+          healthCheckIntervalSeconds: service.healthCheckIntervalSeconds,
+          healthCheckTimeoutSeconds: service.healthCheckTimeoutSeconds,
+          healthCheckRetries: service.healthCheckRetries,
+          healthCheckStartPeriodSeconds: service.healthCheckStartPeriodSeconds,
+          envVars: previewMap(stored?.envVars),
+          buildArgs: previewMap(stored?.buildArgs)
+        };
+      })
     },
     null,
     2
@@ -222,6 +258,8 @@ export function EditProjectDialog({
   );
   const [inputMode, setInputMode] = useState<"form" | "json">("form");
   const [jsonConfig, setJsonConfig] = useState(() => jsonConfigFrom(project));
+  const [jsonPreviewsLoaded, setJsonPreviewsLoaded] = useState(false);
+  const [jsonPreviewsLoading, setJsonPreviewsLoading] = useState(false);
   const jsonFileInput = useRef<HTMLInputElement>(null);
 
   function updateService(id: string, patch: Partial<ServiceDraft>) {
@@ -241,6 +279,25 @@ export function EditProjectDialog({
       toast.success("Project JSON loaded");
     } catch (error) {
       toast.error(jsonConfigError(error));
+    }
+  }
+
+  async function openJsonEditor(): Promise<void> {
+    setInputMode("json");
+    if (jsonPreviewsLoaded || jsonPreviewsLoading) return;
+    setJsonPreviewsLoading(true);
+    try {
+      const previews = await apiGet<ProjectVariablePreviews>(
+        `/api/projects/${project.id}/variable-previews`
+      );
+      setJsonConfig(jsonConfigFrom(project, previews));
+      setJsonPreviewsLoaded(true);
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Could not load stored variable previews"
+      );
+    } finally {
+      setJsonPreviewsLoading(false);
     }
   }
 
@@ -273,11 +330,12 @@ export function EditProjectDialog({
         })
       )
     });
-    if (Object.keys(config.envVars).length > 0) {
+    const projectEnvChanges = changedValues(config.envVars);
+    if (Object.keys(projectEnvChanges).length > 0) {
       await api(`/api/projects/${project.id}/variables`, {
         method: "PATCH",
         body: JSON.stringify(
-          EnvVarsPatchSchema.parse({ set: config.envVars, unset: [] })
+          EnvVarsPatchSchema.parse({ set: projectEnvChanges, unset: [] })
         )
       });
     }
@@ -290,9 +348,11 @@ export function EditProjectDialog({
     );
     for (const service of config.services) {
       if (serviceIds.has(service.slug)) continue;
+      const envVars = changedValues(service.envVars);
+      const buildArgs = changedValues(service.buildArgs);
       const created = await api<ProjectService>(`/api/projects/${project.id}/services`, {
         method: "POST",
-        body: JSON.stringify({ ...service, dependsOn: [] })
+        body: JSON.stringify({ ...service, envVars, buildArgs, dependsOn: [] })
       });
       serviceIds.set(service.slug, created.id);
     }
@@ -333,19 +393,21 @@ export function EditProjectDialog({
             ServiceDomainsReplaceSchema.parse({ domains: service.domains })
           )
         });
-        if (Object.keys(service.envVars).length > 0) {
+        const envVars = changedValues(service.envVars);
+        if (Object.keys(envVars).length > 0) {
           await api(`/api/services/${serviceId}/variables`, {
             method: "PATCH",
             body: JSON.stringify(
-              EnvVarsPatchSchema.parse({ set: service.envVars, unset: [] })
+              EnvVarsPatchSchema.parse({ set: envVars, unset: [] })
             )
           });
         }
-        if (Object.keys(service.buildArgs).length > 0) {
+        const buildArgs = changedValues(service.buildArgs);
+        if (Object.keys(buildArgs).length > 0) {
           await api(`/api/services/${serviceId}/build-args`, {
             method: "PATCH",
             body: JSON.stringify(
-              BuildArgsPatchSchema.parse({ set: service.buildArgs, unset: [] })
+              BuildArgsPatchSchema.parse({ set: buildArgs, unset: [] })
             )
           });
         }
@@ -481,10 +543,11 @@ export function EditProjectDialog({
             type="button"
             size="sm"
             variant={inputMode === "json" ? "default" : "ghost"}
-            onClick={() => setInputMode("json")}
+            disabled={jsonPreviewsLoading}
+            onClick={() => void openJsonEditor()}
           >
             <FileJson className="mr-2 size-4" />
-            JSON
+            {jsonPreviewsLoading ? "Loading JSON…" : "JSON"}
           </Button>
         </div>
         <form
@@ -809,6 +872,12 @@ export function EditProjectDialog({
                   onChange={(event) => setJsonConfig(event.target.value)}
                   spellCheck={false}
                 />
+                <span className="text-xs font-normal text-muted-foreground">
+                  Stored variables appear as masked values such as
+                  {" "}<span className="font-mono">&lt;stored:supp•••.com&gt;</span>. Leave a
+                  placeholder unchanged to preserve its encrypted value, or replace it to update
+                  that key. Use Form mode to remove stored keys.
+                </span>
               </Field>
               <div className="flex flex-wrap items-center gap-3">
                 <Button

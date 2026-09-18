@@ -357,6 +357,72 @@ describe("API routes", { skip }, () => {
       assert.equal(row.envVarsEncrypted.toString().includes("never-return-this"), false);
     });
 
+    it("shows project variable keys and masked previews only to admins", async () => {
+      const cookie = await signIn();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        headers: { cookie },
+        payload: {
+          ...fleet,
+          envVars: { SUPPORT_EMAIL: "support@example.test" },
+          services: fleet.services.map((service, index) =>
+            index === 1
+              ? {
+                  ...service,
+                  envVars: { WORKER_TOKEN: "worker-secret-value" },
+                  buildArgs: { BUILD_TOKEN: "build-secret-value" }
+                }
+              : service
+          )
+        }
+      });
+      assert.equal(created.statusCode, 200, created.body);
+      const project = created.json() as {
+        id: string;
+        services: { id: string; slug: string }[];
+      };
+
+      const response = await app.inject({
+        method: "GET",
+        url: `/api/projects/${project.id}/variable-previews`,
+        headers: { cookie }
+      });
+      assert.equal(response.statusCode, 200, response.body);
+      assert.ok(response.body.includes("SUPPORT_EMAIL"));
+      assert.ok(response.body.includes("WORKER_TOKEN"));
+      assert.ok(response.body.includes("BUILD_TOKEN"));
+      for (const secret of [
+        "support@example.test",
+        "worker-secret-value",
+        "build-secret-value"
+      ]) {
+        assert.equal(response.body.includes(secret), false);
+      }
+
+      const body = response.json() as {
+        project: { key: string; preview: string }[];
+        services: {
+          id: string;
+          envVars: { key: string; preview: string }[];
+          buildArgs: { key: string; preview: string }[];
+        }[];
+      };
+      assert.deepEqual(body.project.map((item) => item.key), ["SUPPORT_EMAIL"]);
+      const worker = project.services.find((service) => service.slug === "worker")!;
+      const service = body.services.find((item) => item.id === worker.id)!;
+      assert.deepEqual(service.envVars.map((item) => item.key), ["WORKER_TOKEN"]);
+      assert.deepEqual(service.buildArgs.map((item) => item.key), ["BUILD_TOKEN"]);
+
+      const memberCookie = await signInAs("member");
+      const forbidden = await app.inject({
+        method: "GET",
+        url: `/api/projects/${project.id}/variable-previews`,
+        headers: { cookie: memberCookie }
+      });
+      assert.equal(forbidden.statusCode, 403, forbidden.body);
+    });
+
     it("keeps projects organization-scoped", async () => {
       const ownerCookie = await signIn();
       const created = await app.inject({

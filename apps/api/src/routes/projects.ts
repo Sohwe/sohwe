@@ -27,7 +27,12 @@ import { recordAudit } from "../audit";
 import { isUniqueViolation } from "../prisma-errors";
 import { requireRole } from "../rbac";
 import { autoDeployBlocker } from "./applications";
-import { applyVarPatch, encodeVarBlob, readVarBlob } from "./variable-store";
+import {
+  applyVarPatch,
+  encodeVarBlob,
+  maskedListing,
+  readVarBlob
+} from "./variable-store";
 
 const IdParam = z.object({ id: z.string().uuid() });
 const ServiceParam = z.object({ serviceId: z.string().uuid() });
@@ -413,6 +418,52 @@ export async function registerProjectRoutes(app: FastifyInstance) {
         select: projectSelect(30)
       });
       return row ?? reply.notFound();
+    }
+  );
+
+  // The regular project response is member-readable and therefore contains no
+  // secret-adjacent metadata. Editors need enough context to understand the
+  // JSON configuration, so expose keys and masked previews on a separate,
+  // admin-only endpoint. Plaintext values never leave the API here.
+  app.get(
+    "/api/projects/:id/variable-previews",
+    {
+      preHandler: [requireRole("admin")],
+      schema: { params: IdParam },
+      logLevel: "silent"
+    },
+    async (req, reply) => {
+      const { id } = IdParam.parse(req.params);
+      const project = await prisma.project.findFirst({
+        where: { id, organizationId: req.user!.organizationId },
+        select: {
+          envVarsEncrypted: true,
+          services: {
+            orderBy: { createdAt: "asc" },
+            select: {
+              id: true,
+              envVarsEncrypted: true,
+              buildArgsEncrypted: true
+            }
+          }
+        }
+      });
+      if (!project) return reply.notFound();
+
+      try {
+        return {
+          project: maskedListing(readVarBlob(project.envVarsEncrypted)).items,
+          services: project.services.map((service) => ({
+            id: service.id,
+            envVars: maskedListing(readVarBlob(service.envVarsEncrypted)).items,
+            buildArgs: maskedListing(readVarBlob(service.buildArgsEncrypted)).items
+          }))
+        };
+      } catch {
+        return reply
+          .status(500)
+          .send({ message: "Failed to read project variable configuration" });
+      }
     }
   );
 
