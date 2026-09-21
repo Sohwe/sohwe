@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { Field } from "@/components/common/Field";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Card,
   CardContent,
@@ -19,6 +20,7 @@ import {
   SelectValue
 } from "@/components/ui/select";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
+import { ResourceItem, ResourceList } from "@/components/common/Section";
 import { api, apiGet } from "@/lib/api";
 import { describeDestinationConfig, type BackupDestination } from "@/lib/types";
 
@@ -135,7 +137,7 @@ export function DestinationsManager() {
             </p>
           ) : null}
           {q.data ? (
-            <ul className="space-y-2">
+            <ResourceList>
               {q.data.destinations.length === 0 ? (
                 <li className="text-sm text-muted-foreground">
                   No destinations yet. Add one to write or schedule exports, or
@@ -143,10 +145,7 @@ export function DestinationsManager() {
                 </li>
               ) : null}
               {q.data.destinations.map((d) => (
-                <li
-                  key={d.id}
-                  className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border/60 bg-muted/20 px-3 py-2"
-                >
+                <ResourceItem key={d.id}>
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium">{d.name}</span>
@@ -166,9 +165,9 @@ export function DestinationsManager() {
                   >
                     Remove
                   </Button>
-                </li>
+                </ResourceItem>
               ))}
-            </ul>
+            </ResourceList>
           ) : null}
 
           <div className="space-y-3 rounded-md border border-border/60 p-3">
@@ -253,8 +252,7 @@ export function DestinationsManager() {
                   />
                 </Field>
                 <label className="flex items-center gap-2 text-sm text-muted-foreground sm:col-span-2">
-                  <input
-                    type="checkbox"
+                  <Checkbox
                     checked={s3.forcePathStyle}
                     onChange={(e) =>
                       setS3({ ...s3, forcePathStyle: e.target.checked })

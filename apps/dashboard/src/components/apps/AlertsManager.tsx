@@ -21,6 +21,7 @@ import {
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { api, apiGet } from "@/lib/api";
 import type { AlertDestination, AlertDestinationType } from "@/lib/types";
+import { ResourceItem, ResourceList } from "@/components/common/Section";
 
 const TYPE_LABELS: Record<AlertDestinationType, string> = {
   slack: "Slack",
@@ -111,17 +112,14 @@ export function AlertsManager({ appId }: { appId: string }) {
             </p>
           ) : null}
           {q.data ? (
-            <ul className="space-y-2">
+            <ResourceList>
               {q.data.destinations.length === 0 ? (
                 <li className="text-sm text-muted-foreground">
                   No alert destinations configured.
                 </li>
               ) : null}
               {q.data.destinations.map((d) => (
-                <li
-                  key={d.id}
-                  className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border/60 bg-muted/20 px-3 py-2"
-                >
+                <ResourceItem key={d.id}>
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium">{d.name}</span>
@@ -157,9 +155,9 @@ export function AlertsManager({ appId }: { appId: string }) {
                       Remove
                     </Button>
                   </div>
-                </li>
+                </ResourceItem>
               ))}
-            </ul>
+            </ResourceList>
           ) : null}
           <div className="grid gap-2 sm:grid-cols-2 sm:items-end">
             <Field label="Type">

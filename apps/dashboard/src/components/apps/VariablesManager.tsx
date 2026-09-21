@@ -9,6 +9,7 @@ import { api, apiGet } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
+import { Notice, ResourceItem, ResourceList } from "@/components/common/Section";
 
 /**
  * One list per application, each variable scoped to the build, the container,
@@ -160,24 +161,21 @@ export function VariablesManager({ appId, onChanged }: { appId: string; onChange
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <p className="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+          <Notice className="text-xs">
             Anything reaching the build is baked into image layers and readable via{" "}
             <span className="font-mono">docker history</span>. Keep credentials on{" "}
             <span className="font-mono">Runtime only</span>. A Dockerfile build additionally only sees a variable it
             declares with a matching <span className="font-mono">ARG</span>.
-          </p>
+          </Notice>
 
           {listQuery.isLoading ? <p className="text-sm text-muted-foreground">Loading…</p> : null}
           {listQuery.isError ? <p className="text-sm text-destructive">Could not load variables.</p> : null}
 
           {unlocked == null && listQuery.data ? (
-            <ul className="space-y-2">
+            <ResourceList>
               {items.length === 0 ? <li className="text-sm text-muted-foreground">No variables yet.</li> : null}
               {items.map((row) => (
-                <li
-                  key={row.key}
-                  className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-sm"
-                >
+                <ResourceItem key={row.key} className="text-sm">
                   <div className="min-w-0">
                     <span className="font-mono text-foreground">{row.key}</span>
                     <span className="ml-2 text-muted-foreground">{row.preview}</span>
@@ -200,9 +198,9 @@ export function VariablesManager({ appId, onChanged }: { appId: string; onChange
                       Remove
                     </Button>
                   </div>
-                </li>
+                </ResourceItem>
               ))}
-            </ul>
+            </ResourceList>
           ) : null}
 
           {unlocked != null ? (

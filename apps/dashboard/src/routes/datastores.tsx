@@ -18,6 +18,7 @@ import {
   DatastoreKindBadge,
   DatastoreStatusBadge
 } from "@/components/datastores/DatastoreStatusBadge";
+import { ResourceRow } from "@/components/common/Section";
 
 export function DatastoresPage() {
   const [createOpen, setCreateOpen] = useState(false);
@@ -73,25 +74,23 @@ export function DatastoresPage() {
               ) : null}
               {q.data.datastores.map((d) => (
                 <li key={d.id}>
-                  <Link
-                    to="/datastores/$datastoreId"
-                    params={{ datastoreId: d.id }}
-                    className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border/60 bg-muted/20 px-3 py-2 transition-colors hover:bg-accent"
-                  >
-                    <div className="flex min-w-0 items-center gap-2">
-                      <DatastoreKindBadge kind={d.kind} />
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium">{d.name}</p>
-                        <p className="font-mono text-xs text-muted-foreground">
-                          {d.kind}:{d.engineVersion} · /{d.slug}
-                          {d.memoryLimitMb != null ? ` · ${d.memoryLimitMb} MB` : " · unlimited memory"}
-                          {d.cpuLimit != null ? ` · ${d.cpuLimit} CPU` : " · unlimited CPU"}
-                          {d.publicPort != null ? ` · public :${d.publicPort}` : ""}
-                        </p>
+                  <ResourceRow asChild>
+                    <Link to="/datastores/$datastoreId" params={{ datastoreId: d.id }}>
+                      <div className="flex min-w-0 items-center gap-3">
+                        <DatastoreKindBadge kind={d.kind} />
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium">{d.name}</p>
+                          <p className="font-mono text-xs text-muted-foreground">
+                            {d.kind}:{d.engineVersion} · /{d.slug}
+                            {d.memoryLimitMb != null ? ` · ${d.memoryLimitMb} MB` : " · unlimited memory"}
+                            {d.cpuLimit != null ? ` · ${d.cpuLimit} CPU` : " · unlimited CPU"}
+                            {d.publicPort != null ? ` · public :${d.publicPort}` : ""}
+                          </p>
+                        </div>
                       </div>
-                    </div>
-                    <DatastoreStatusBadge status={d.status} />
-                  </Link>
+                      <DatastoreStatusBadge status={d.status} />
+                    </Link>
+                  </ResourceRow>
                 </li>
               ))}
             </ul>

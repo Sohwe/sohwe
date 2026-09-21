@@ -7,6 +7,7 @@ import { Field } from "@/components/common/Field";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { api, apiGet } from "@/lib/api";
 import type { AppRow, BuildMode, GitHubAppStatus, GitHubRepo } from "@/lib/types";
@@ -312,8 +313,7 @@ export function CreateAppDialog({
           </Field>
           {githubInstalled ? (
             <label className="flex items-start gap-2 text-sm">
-              <input
-                type="checkbox"
+              <Checkbox
                 className="mt-0.5 h-4 w-4 rounded border-border"
                 checked={cAutoDeploy}
                 onChange={(e) => setCAutoDeploy(e.target.checked)}

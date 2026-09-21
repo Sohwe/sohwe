@@ -9,8 +9,8 @@ export function Field({
   ...rest
 }: { label: string; children: ReactNode; className?: string } & LabelHTMLAttributes<HTMLLabelElement>) {
   return (
-    <Label className={cn("grid gap-1.5", className)} {...rest}>
-      <span className="text-xs font-medium text-muted-foreground">{label}</span>
+    <Label className={cn("grid gap-2", className)} {...rest}>
+      <span className="text-xs font-medium text-foreground/80">{label}</span>
       {children}
     </Label>
   );

@@ -9,8 +9,9 @@ import { formatDeploymentTiming, triggerLabel } from "@/lib/format";
 import { PageHeader } from "@/components/common/PageHeader";
 import { api } from "@/lib/api";
 import type { AppRow } from "@/lib/types";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
+import { Section } from "@/components/common/Section";
 
 export function DeploymentsPage() {
   const { appId, deploymentId } = useParams({ strict: false });
@@ -72,16 +73,19 @@ export function DeploymentsPage() {
   return (
     <div>
       <PageHeader title="Deployments" description="Build logs stream over SSE. Roll back to a previous successful build." />
-      <DeploymentsTable
-        app={app}
-        onViewLog={onOpenLog}
-        onRollBack={(id) => setRollBackId(id)}
-        actionsDisabled={app.status === "deploying" || rollbackMut.isPending}
-      />
+      <Section className="overflow-hidden">
+        <DeploymentsTable
+          app={app}
+          onViewLog={onOpenLog}
+          onRollBack={(id) => setRollBackId(id)}
+          actionsDisabled={app.status === "deploying" || rollbackMut.isPending}
+        />
+      </Section>
       <Sheet open={logOpen} onOpenChange={(o) => !o && onCloseLog()}>
-        <SheetContent className="flex w-full flex-col gap-0 overflow-hidden p-0 sm:max-w-lg">
+        <SheetContent className="flex w-full flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl">
           <SheetHeader className="border-b border-border p-4 text-left">
             <SheetTitle>Build log</SheetTitle>
+            <SheetDescription className="sr-only">Deployment status and build output.</SheetDescription>
             {watchDep ? (
               <div className="space-y-1 text-left text-xs text-muted-foreground">
                 <DeploymentStatusLine status={watchDep.status} />
@@ -98,7 +102,7 @@ export function DeploymentsPage() {
               <BuildLogViewer
                 deploymentId={deploymentId}
                 status={watchDep?.status}
-                className="h-[min(70vh,480px)] shrink-0"
+                className="h-[min(70vh,560px)] shrink-0"
               />
             </div>
           ) : null}

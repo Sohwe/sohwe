@@ -4,6 +4,7 @@ import { CreateProjectSchema, normalizeHostname } from "@sohwe/types";
 import { Boxes, FileJson, Plus, Rocket, RotateCcw, Settings, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/common/PageHeader";
+import { EmptyState } from "@/components/common/EmptyState";
 import { Field } from "@/components/common/Field";
 import { EditProjectDialog } from "@/components/projects/EditProjectDialog";
 import { Badge } from "@/components/ui/badge";
@@ -17,6 +18,7 @@ import {
   DialogTitle
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
@@ -343,8 +345,7 @@ function CreateProjectDialog({
             <Input value={branch} onChange={(e) => setBranch(e.target.value)} required />
           </Field>
           <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
+            <Checkbox
               checked={autoDeploy}
               onChange={(event) => setAutoDeploy(event.target.checked)}
             />
@@ -976,10 +977,12 @@ export function ProjectsPage() {
       <CreateProjectDialog open={open} onOpenChange={setOpen} />
       {projects.isError ? <p className="text-destructive">Could not load projects.</p> : null}
       {projects.data?.length === 0 ? (
-        <div className="rounded-lg border border-dashed p-8 text-center text-muted-foreground">
-          <Boxes className="mx-auto mb-3 h-8 w-8" />
-          No multi-service projects yet.
-        </div>
+        <EmptyState
+          icon={Boxes}
+          title="No projects yet"
+          description="Group HTTP services, private workers, and release commands into one coordinated deployment."
+          action={isAdmin(me) ? <Button onClick={() => setOpen(true)}>Create project</Button> : undefined}
+        />
       ) : null}
       <div className="grid gap-4 xl:grid-cols-2">
         {projects.data?.map((project) => (

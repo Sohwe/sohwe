@@ -5,8 +5,7 @@ import { PageHeader } from "@/components/common/PageHeader";
 import { RuntimeLogViewer } from "@/components/apps/RuntimeLogViewer";
 import { BuildLogViewer } from "@/components/apps/BuildLogViewer";
 import { BuildFailureSummary } from "@/components/apps/BuildFailureSummary";
-import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api } from "@/lib/api";
 import type { AppRow } from "@/lib/types";
 
@@ -44,30 +43,12 @@ export function AppLogsPage() {
             : "Build output from the most recent deployment."
         }
       />
-      <div className="mb-3 flex gap-0.5 rounded-lg border border-border/80 bg-muted/30 p-0.5 w-fit">
-        <Button
-          variant="ghost"
-          size="sm"
-          className={cn(
-            "rounded-md",
-            view === "runtime" && "bg-background text-foreground shadow-sm"
-          )}
-          onClick={() => setView("runtime")}
-        >
-          Runtime
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          className={cn(
-            "rounded-md",
-            view === "build" && "bg-background text-foreground shadow-sm"
-          )}
-          onClick={() => setView("build")}
-        >
-          Last build
-        </Button>
-      </div>
+      <Tabs value={view} onValueChange={(value) => setView(value as View)} className="mb-4">
+        <TabsList>
+          <TabsTrigger value="runtime">Runtime</TabsTrigger>
+          <TabsTrigger value="build">Latest build</TabsTrigger>
+        </TabsList>
+      </Tabs>
       {view === "runtime" ? (
         <RuntimeLogViewer appId={appId} appSlug={app?.slug} />
       ) : lastDeployment ? (
@@ -76,7 +57,7 @@ export function AppLogsPage() {
           <BuildLogViewer
             deploymentId={lastDeployment.id}
             status={lastDeployment.status}
-            className="h-[min(70vh,560px)]"
+            className="h-[min(68vh,600px)]"
           />
         </div>
       ) : (

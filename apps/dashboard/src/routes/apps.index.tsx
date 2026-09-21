@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Plus } from "lucide-react";
+import { Plus, Rocket } from "lucide-react";
 import { AppCard } from "@/components/apps/AppCard";
 import { CreateAppDialog } from "@/components/apps/CreateAppDialog";
 import { PageHeader } from "@/components/common/PageHeader";
@@ -31,7 +31,7 @@ export function AppsListPage() {
     <div>
       <PageHeader
         title="Applications"
-        description={`Deploy from public Git. Default URL: your-slug.${baseDomain} (optional custom domain per app).`}
+        description={`Build, deploy, and manage services from Git. New apps receive a your-slug.${baseDomain} address automatically.`}
         actions={
           canCreate ? (
             <Button onClick={() => setCreateOpen(true)}>
@@ -45,7 +45,7 @@ export function AppsListPage() {
       {q.isLoading ? (
         <div className="grid gap-4 sm:grid-cols-1 lg:grid-cols-2">
           {[1, 2, 3].map((i) => (
-            <div key={i} className="space-y-2 rounded-lg border border-border p-4">
+            <div key={i} className="space-y-3 rounded-xl border border-border/80 bg-card p-5 shadow-panel">
               <Skeleton className="h-5 w-2/3" />
               <Skeleton className="h-4 w-full" />
               <Skeleton className="h-4 w-1/2" />
@@ -56,6 +56,7 @@ export function AppsListPage() {
       {q.isError ? <p className="text-destructive">Failed to load applications.</p> : null}
       {q.data?.length === 0 ? (
         <EmptyState
+          icon={Rocket}
           title="No applications yet"
           description={
             canCreate

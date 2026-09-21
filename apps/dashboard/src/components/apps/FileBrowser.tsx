@@ -1,7 +1,10 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { ChevronRight, File, Folder, FolderUp } from "lucide-react";
 import { FilePreviewDialog } from "./FilePreviewDialog";
 import { Button } from "@/components/ui/button";
+import { Section, SectionContent, SectionHeader } from "@/components/common/Section";
+import { EmptyState } from "@/components/common/EmptyState";
 import { apiGet } from "@/lib/api";
 import { joinFsPath, parentFsPath, type FsListResponse } from "@/lib/types";
 
@@ -30,11 +33,11 @@ function Crumbs({
     return out;
   }, [path, rootPath]);
   return (
-    <nav className="flex flex-wrap items-center gap-0.5 text-xs text-muted-foreground" aria-label="Path">
+    <nav className="flex min-w-0 flex-wrap items-center gap-0.5 text-xs text-muted-foreground" aria-label="Path">
       {items.map((c, i) => (
         <span key={c.path} className="inline-flex items-center">
-          {i > 0 ? <span className="px-0.5 text-border">/</span> : null}
-          <Button type="button" variant="link" className="h-auto p-0 text-xs" onClick={() => onPath(c.path)}>
+          {i > 0 ? <ChevronRight className="mx-0.5 h-3 w-3 text-muted-foreground/50" /> : null}
+          <Button type="button" variant="ghost" className="h-7 max-w-48 px-1.5 text-xs" onClick={() => onPath(c.path)}>
             {c.label}
           </Button>
         </span>
@@ -72,12 +75,12 @@ export function FileBrowser({
   });
 
   return (
-    <div className="space-y-3 rounded-lg border border-border bg-card/30 p-4">
-      <div>
-        <p className="text-xs font-medium text-muted-foreground">{title}</p>
-        <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
+    <Section className="overflow-hidden">
+      <SectionHeader title={title} description={description} />
+      <div className="border-b border-border/70 bg-muted/20 px-4 py-2.5">
+        <Crumbs path={path} rootPath={rootPath} onPath={setPath} />
       </div>
-      <Crumbs path={path} rootPath={rootPath} onPath={setPath} />
+      <SectionContent className="p-2">
 
       {listQuery.isLoading ? <p className="text-sm text-muted-foreground">Loading directory…</p> : null}
       {listQuery.isError ? (
@@ -87,11 +90,11 @@ export function FileBrowser({
       ) : null}
 
       {listQuery.data ? (
-        <ul className="max-h-64 space-y-0.5 overflow-auto font-mono text-sm">
+        <ul className="max-h-80 space-y-0.5 overflow-auto font-mono text-sm">
           {path !== rootPath ? (
             <li>
-              <Button type="button" variant="link" className="h-auto p-0 text-foreground" onClick={() => setPath(parentFsPath(path))}>
-                ..
+              <Button type="button" variant="ghost" className="h-9 w-full justify-start gap-2 px-2 text-muted-foreground" onClick={() => setPath(parentFsPath(path))}>
+                <FolderUp className="h-4 w-4" /> ..
               </Button>
             </li>
           ) : null}
@@ -100,20 +103,20 @@ export function FileBrowser({
               {e.kind === "file" ? (
                 <Button
                   type="button"
-                  variant="link"
-                  className="h-auto p-0 text-primary"
+                  variant="ghost"
+                  className="h-9 w-full justify-start gap-2 px-2 font-mono text-foreground"
                   onClick={() => setPreviewPath(joinFsPath(path, e.name))}
                 >
-                  {e.name}
+                  <File className="h-4 w-4 text-muted-foreground" /> {e.name}
                 </Button>
               ) : (
                 <Button
                   type="button"
-                  variant="link"
-                  className="h-auto p-0 text-emerald-600 dark:text-emerald-400"
+                  variant="ghost"
+                  className="h-9 w-full justify-start gap-2 px-2 font-mono text-foreground"
                   onClick={() => setPath(joinFsPath(path, e.name))}
                 >
-                  {e.name}
+                  <Folder className="h-4 w-4 text-primary" /> {e.name}
                   {e.kind === "symlink" ? " →" : "/"}
                 </Button>
               )}
@@ -122,9 +125,14 @@ export function FileBrowser({
         </ul>
       ) : null}
 
+      {listQuery.data?.entries.length === 0 ? (
+        <EmptyState icon={Folder} title="This folder is empty" className="m-2 min-h-40 border-0 bg-transparent" />
+      ) : null}
+
       {previewPath ? (
         <FilePreviewDialog url={fileUrl(previewPath)} path={previewPath} onClose={() => setPreviewPath(null)} />
       ) : null}
-    </div>
+      </SectionContent>
+    </Section>
   );
 }

@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { ExternalLink, Rocket } from "lucide-react";
+import { ExternalLink, GitBranch, MoreHorizontal, Rocket } from "lucide-react";
 import { toast } from "sonner";
 import { BuildModeBadge, AppStatusBadge } from "./BuildModeBadge";
 import { useAppConfig } from "@/lib/config";
@@ -12,7 +12,6 @@ import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import { CopyButton } from "@/components/common/CopyButton";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { MoreVertical } from "lucide-react";
 
 export function AppCard({ app }: { app: AppRow }) {
   const queryClient = useQueryClient();
@@ -40,10 +39,14 @@ export function AppCard({ app }: { app: AppRow }) {
   });
 
   return (
-    <Card className="group transition-shadow hover:shadow-md">
-      <CardHeader className="border-b border-border/60 pb-3">
+    <Card className="group transition-[border-color,box-shadow,transform] hover:-translate-y-0.5 hover:border-border hover:shadow-lg hover:shadow-black/5 dark:hover:shadow-black/20">
+      <CardHeader className="border-b border-border/60 pb-4">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-          <div>
+          <div className="flex min-w-0 items-start gap-3">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border/70 bg-muted/40 text-sm font-semibold uppercase text-foreground">
+              {app.name.slice(0, 1)}
+            </span>
+            <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <Link
                 to="/apps/$appId/overview"
@@ -54,8 +57,9 @@ export function AppCard({ app }: { app: AppRow }) {
               </Link>
               <BuildModeBadge mode={app.buildMode} />
             </div>
-            <div className="mt-1">
+            <div className="mt-1.5">
               <AppStatusBadge status={app.status} />
+            </div>
             </div>
           </div>
           <div className="flex items-center gap-1">
@@ -70,7 +74,7 @@ export function AppCard({ app }: { app: AppRow }) {
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button size="icon" variant="ghost" className="h-8 w-8" aria-label="More">
-                  <MoreVertical className="h-4 w-4" />
+                  <MoreHorizontal className="h-4 w-4" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
@@ -115,11 +119,14 @@ export function AppCard({ app }: { app: AppRow }) {
             {app.domain}
           </a>
         ) : null}
-        <p className="mt-2 break-all font-mono text-xs text-muted-foreground/90">
-          {app.gitRepo} <span className="text-border">@</span> {app.gitBranch} · :{app.port}
-        </p>
+        <div className="mt-3 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+          <GitBranch className="h-3.5 w-3.5 shrink-0" />
+          <span className="truncate font-mono">{app.gitRepo}</span>
+          <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono">{app.gitBranch}</span>
+          <span className="shrink-0 font-mono">:{app.port}</span>
+        </div>
         {lastDep ? (
-          <div className="mt-3 rounded-md border border-border/50 bg-muted/20 px-2 py-1.5 text-xs">
+          <div className="mt-4 rounded-lg border border-border/60 bg-muted/25 px-3 py-2 text-xs">
             <span className="text-muted-foreground">Latest deploy: </span>
             <span className="font-mono text-foreground/90">{lastDep.status}</span>
             {lastDep.commitSha ? (
@@ -130,7 +137,7 @@ export function AppCard({ app }: { app: AppRow }) {
             <span className="ml-2 text-muted-foreground">{formatRelativeTime(lastDep.createdAt)}</span>
           </div>
         ) : null}
-        <div className="mt-3 flex flex-wrap gap-2">
+        <div className="mt-4 flex flex-wrap gap-2 border-t border-border/60 pt-4">
           <Button variant="outline" size="sm" asChild>
             <Link to="/apps/$appId/overview" params={{ appId: app.id }}>
               Open

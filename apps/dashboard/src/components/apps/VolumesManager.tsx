@@ -8,6 +8,7 @@ import { api, apiGet } from "@/lib/api";
 import type { AppVolume } from "@/lib/types";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
+import { ResourceItem, ResourceList } from "@/components/common/Section";
 
 const MOUNT_PATH_RE = /^\/[A-Za-z0-9._\-/]+$/;
 
@@ -74,15 +75,12 @@ export function VolumesManager({ appId, onChanged }: { appId: string; onChanged:
           {q.isLoading ? <p className="text-sm text-muted-foreground">Loading…</p> : null}
           {q.isError ? <p className="text-sm text-destructive">Could not load volumes.</p> : null}
           {q.data ? (
-            <ul className="space-y-2">
+            <ResourceList>
               {q.data.volumes.length === 0 ? (
                 <li className="text-sm text-muted-foreground">No extra volumes. Default image FS only.</li>
               ) : null}
               {q.data.volumes.map((v) => (
-                <li
-                  key={v.id}
-                  className="flex flex-wrap items-baseline justify-between gap-2 rounded-md border border-border/60 bg-muted/20 px-3 py-2"
-                >
+                <ResourceItem key={v.id} className="items-baseline">
                   <div>
                     <span className="font-mono text-sm">{v.mountPath}</span>
                     {v.sizeBytes ? <span className="ml-2 text-xs text-muted-foreground">{v.sizeBytes} B hint</span> : null}
@@ -90,9 +88,9 @@ export function VolumesManager({ appId, onChanged }: { appId: string; onChanged:
                   <Button type="button" size="sm" variant="ghost" onClick={() => setRemoveId(v.id)}>
                     Remove
                   </Button>
-                </li>
+                </ResourceItem>
               ))}
-            </ul>
+            </ResourceList>
           ) : null}
           <div className="grid gap-2 sm:grid-cols-2 sm:items-end">
             <Field label="Mount path in container">

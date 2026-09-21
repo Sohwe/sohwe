@@ -24,12 +24,25 @@ function tabLabel(tab: string | undefined, sub: string | undefined): string {
   if (tab === "deployments" && !sub) return "Deployments";
   if (tab === "deployments" && sub) return `Log ${shortDepId(sub)}`;
   if (tab === "logs") return "Logs";
+  if (tab === "metrics") return "Metrics";
   if (tab === "variables") return "Variables";
   if (tab === "volumes") return "Volumes";
+  if (tab === "domains") return "Domains";
   if (tab === "files") return "Files";
   if (tab === "settings") return "Settings";
   return tab;
 }
+
+const ROOT_LABELS: Record<string, string> = {
+  apps: "Applications",
+  projects: "Projects",
+  datastores: "Datastores",
+  git: "Git provider",
+  backups: "Backups",
+  "host-files": "Host files",
+  members: "Members",
+  audit: "Audit log"
+};
 
 export function Topbar({ me }: { me: Me }) {
   const { pathname } = useLocation();
@@ -73,7 +86,11 @@ export function Topbar({ me }: { me: Me }) {
       }
       return cl;
     }
-    return [{ label: "Sohwe" }];
+    const root = segments[0];
+    if (root === "datastores" && segments[1]) {
+      return [{ label: "Datastores", to: "datastores" as const }, { label: "Datastore" }];
+    }
+    return [{ label: root ? (ROOT_LABELS[root] ?? root) : "Sohwe" }];
   }, [segments, appNameLabel]);
 
   const logout = useMutation({
@@ -88,7 +105,7 @@ export function Topbar({ me }: { me: Me }) {
   return (
     <header
       className={cn(
-        "sticky top-0 z-40 flex h-14 items-center gap-2 border-b border-border bg-background/95 px-3 backdrop-blur",
+        "z-40 flex h-14 shrink-0 items-center gap-2 border-b border-border/80 bg-background/90 px-3 backdrop-blur-xl sm:px-5",
         "supports-[backdrop-filter]:bg-background/75"
       )}
     >
@@ -105,6 +122,10 @@ export function Topbar({ me }: { me: Me }) {
                 <Link to="/apps" className="truncate text-muted-foreground hover:text-foreground">
                   {c.label}
                 </Link>
+              ) : "to" in c && c.to === "datastores" ? (
+                <Link to="/datastores" className="truncate text-muted-foreground hover:text-foreground">
+                  {c.label}
+                </Link>
               ) : "to" in c && c.to === "app" && c.appIdParam ? (
                 <Link
                   to="/apps/$appId/overview"
@@ -115,7 +136,7 @@ export function Topbar({ me }: { me: Me }) {
                 </Link>
               ) : (
                 <span
-                  className={cn("truncate", isLast ? "font-medium text-foreground" : "text-muted-foreground")}
+                  className={cn("truncate", isLast ? "font-medium tracking-[-0.01em] text-foreground" : "text-muted-foreground")}
                 >
                   {c.label}
                 </span>

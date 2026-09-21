@@ -21,14 +21,14 @@ function Meter({
 }) {
   const pct = Math.max(0, Math.min(100, percent));
   return (
-    <div>
-      <div className="mb-1 flex items-baseline justify-between text-sm">
+    <div className="rounded-lg border border-border/70 bg-muted/15 p-4">
+      <div className="mb-3 flex items-baseline justify-between gap-4 text-sm">
         <span className="font-medium">{label}</span>
         <span className="font-mono text-muted-foreground">{detail}</span>
       </div>
-      <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
         <div
-          className="h-full rounded-full bg-primary transition-[width] duration-500"
+          className="h-full rounded-full bg-primary shadow-[0_0_10px_hsl(var(--primary)/0.35)] transition-[width] duration-500"
           style={{ width: `${pct}%` }}
         />
       </div>

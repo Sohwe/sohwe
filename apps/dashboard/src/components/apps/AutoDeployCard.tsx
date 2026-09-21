@@ -3,6 +3,7 @@ import { Link } from "@tanstack/react-router";
 import { GitBranch } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Card,
   CardContent,
@@ -60,9 +61,7 @@ export function AutoDeployCard({ app }: { app: AppRow }) {
       </CardHeader>
       <CardContent className="flex flex-wrap items-center gap-3">
         <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            className="h-4 w-4 rounded border-border"
+          <Checkbox
             checked={app.autoDeploy}
             disabled={!app.repoFullName || toggle.isPending}
             onChange={(e) => toggle.mutate(e.target.checked)}

@@ -17,6 +17,8 @@ import { DestinationsManager } from "@/components/backups/DestinationsManager";
 import { SchedulesManager } from "@/components/backups/SchedulesManager";
 import { ExportDialog } from "@/components/backups/ExportDialog";
 import { RestoreDialog } from "@/components/backups/RestoreDialog";
+import { ResourceItem, ResourceList } from "@/components/common/Section";
+import { Badge } from "@/components/ui/badge";
 
 export function BackupsPage() {
   const [exportOpen, setExportOpen] = useState(false);
@@ -62,17 +64,14 @@ export function BackupsPage() {
             <p className="text-sm text-destructive">Could not load bundles.</p>
           ) : null}
           {bundlesQ.data ? (
-            <ul className="space-y-2">
+            <ResourceList>
               {bundlesQ.data.bundles.length === 0 ? (
                 <li className="text-sm text-muted-foreground">
                   No bundles yet.
                 </li>
               ) : null}
               {bundlesQ.data.bundles.map((b) => (
-                <li
-                  key={b.id}
-                  className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border/60 bg-muted/20 px-3 py-2"
-                >
+                <ResourceItem key={b.id}>
                   <div className="min-w-0">
                     <p className="truncate font-mono text-xs">{b.filename}</p>
                     <p className="text-xs text-muted-foreground">
@@ -93,18 +92,14 @@ export function BackupsPage() {
                       </span>
                     ) : null}
                     {b.status === "failed" ? (
-                      <span className="rounded bg-destructive/15 px-1.5 py-0.5 text-destructive">
-                        failed
-                      </span>
+                      <Badge variant="destructive">Failed</Badge>
                     ) : (
-                      <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-emerald-600 dark:text-emerald-400">
-                        ready
-                      </span>
+                      <Badge variant="success">Ready</Badge>
                     )}
                   </div>
-                </li>
+                </ResourceItem>
               ))}
-            </ul>
+            </ResourceList>
           ) : null}
         </CardContent>
       </Card>

@@ -484,7 +484,7 @@ function ConnectionRow({
   mono?: boolean;
 }) {
   return (
-    <div className="flex items-center justify-between gap-2 rounded-md border border-border/60 bg-muted/20 px-3 py-2">
+    <div className="flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-muted/20 px-4 py-3">
       <div className="min-w-0">
         <p className="text-xs text-muted-foreground">{label}</p>
         <p className={mono ? "truncate font-mono text-xs" : "truncate text-sm"}>

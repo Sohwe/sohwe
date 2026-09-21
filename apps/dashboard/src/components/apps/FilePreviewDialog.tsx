@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { apiGet } from "@/lib/api";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { FsFileResponse } from "@/lib/types";
@@ -23,6 +23,7 @@ export function FilePreviewDialog({
       <DialogContent className="max-h-[90vh] max-w-2xl overflow-hidden sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle className="truncate font-mono text-left text-sm">{filePath}</DialogTitle>
+          <DialogDescription className="sr-only">Read-only file preview.</DialogDescription>
         </DialogHeader>
         <div className="min-h-0">
           {fileQuery.isLoading ? <p className="text-sm text-muted-foreground">Loading file…</p> : null}

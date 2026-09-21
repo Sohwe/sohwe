@@ -23,6 +23,7 @@ import {
   CardTitle
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { api, apiGet, fetchMe } from "@/lib/api";
@@ -302,9 +303,8 @@ export function DomainsManager({ app }: { app: AppRow }) {
               )}
               {companion && (
                 <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
-                  <input
-                    type="checkbox"
-                    className="h-3.5 w-3.5 accent-primary"
+                  <Checkbox
+                    className="h-3.5 w-3.5"
                     checked={withCompanion}
                     onChange={(e) => setWithCompanion(e.target.checked)}
                   />

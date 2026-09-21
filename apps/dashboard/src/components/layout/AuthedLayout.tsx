@@ -40,15 +40,15 @@ export function AuthedLayout() {
   }
 
   return (
-    <div className="flex min-h-svh w-full bg-background">
+    <div className="flex h-svh w-full overflow-hidden bg-background">
       <AppSidebar me={me} collapsed={collapsed} onToggleCollapse={() => setCollapsed((c) => !c)} />
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <Topbar me={me} />
-        <div className="flex-1 overflow-auto p-4 md:p-6">
-          <div className="mx-auto max-w-6xl">
+        <main className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-5 sm:px-6 md:px-8 md:py-7">
+          <div className="mx-auto w-full max-w-[1280px]">
             <Outlet />
           </div>
-        </div>
+        </main>
       </div>
     </div>
   );

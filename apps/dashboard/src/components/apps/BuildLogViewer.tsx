@@ -18,17 +18,17 @@ export function BuildLogViewer({
 
   return (
     <LogPane
-      className={cn("h-80 rounded-md border border-border", className)}
+      className={cn("h-[min(68vh,600px)]", className)}
       text={text}
       emptyText={live ? "Waiting for build output…" : "No build output was recorded."}
       downloadName={`sohwe-build-${shortDepId(deploymentId)}.log`}
       toolbarLeft={
         live && !connected ? (
-          <span className="text-amber-500">Reconnecting…</span>
+          <span className="inline-flex items-center gap-1.5"><span className="h-1.5 w-1.5 rounded-full bg-amber-400" /> Reconnecting</span>
         ) : live ? (
-          <span>Streaming</span>
+          <span className="inline-flex items-center gap-1.5"><span className="relative flex h-1.5 w-1.5"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-70" /><span className="relative h-1.5 w-1.5 rounded-full bg-emerald-400" /></span> Live build output</span>
         ) : (
-          <span>{text.length > 0 ? `${text.split("\n").length - 1} lines` : ""}</span>
+          <span>Build output</span>
         )
       }
     />

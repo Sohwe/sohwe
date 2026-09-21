@@ -22,6 +22,7 @@ import {
   DialogTitle
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -574,8 +575,7 @@ export function EditProjectDialog({
             <Input value={branch} onChange={(event) => setBranch(event.target.value)} required />
           </Field>
           <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
+            <Checkbox
               checked={autoDeploy}
               onChange={(event) => setAutoDeploy(event.target.checked)}
             />
@@ -1069,8 +1069,7 @@ function ProjectDatastoreBindings({ project }: { project: ProjectRow }) {
         <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2">
           {project.services.map((service) => (
             <label key={service.id} className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
+              <Checkbox
                 checked={serviceIds.includes(service.id)}
                 onChange={(event) =>
                   setServiceIds((current) =>

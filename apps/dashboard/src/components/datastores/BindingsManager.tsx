@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
+import { ResourceItem, ResourceList } from "@/components/common/Section";
 import { Field } from "@/components/common/Field";
 import { Button } from "@/components/ui/button";
 import {
@@ -85,17 +86,14 @@ export function BindingsManager({ datastore }: { datastore: DatastoreDetail }) {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <ul className="space-y-2">
+          <ResourceList>
             {datastore.bindings.length === 0 ? (
               <li className="text-sm text-muted-foreground">
                 No apps bound yet.
               </li>
             ) : null}
             {datastore.bindings.map((b) => (
-              <li
-                key={b.id}
-                className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border/60 bg-muted/20 px-3 py-2"
-              >
+              <ResourceItem key={b.id}>
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium">
                     {b.appName}{" "}
@@ -115,9 +113,9 @@ export function BindingsManager({ datastore }: { datastore: DatastoreDetail }) {
                 >
                   Unbind
                 </Button>
-              </li>
+              </ResourceItem>
             ))}
-          </ul>
+          </ResourceList>
 
           <div className="grid gap-2 sm:grid-cols-2 sm:items-end">
             <Field label="Application">

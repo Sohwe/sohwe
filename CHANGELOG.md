@@ -148,6 +148,18 @@ write-ups.
 
 ### Changed
 
+- **Dashboard UI system overhaul.** The dashboard now uses a unified visual
+  system for color, typography, spacing, elevation, focus states, controls,
+  cards, tables, status badges, resource rows, empty states, overlays, and
+  authentication screens. Desktop navigation is a fixed-height application
+  shell with independently scrolling content, so the sidebar stays intact on
+  long pages; expanded, collapsed, and mobile navigation share one route
+  definition and consistent active states. Dialog and drawer motion, sizing,
+  backdrop, and overflow behavior are standardized. Runtime and build output
+  now share one terminal-style log viewer, and file browsing, deployments,
+  metrics, application cards, and responsive states use the same component
+  language in light and dark themes.
+
 - The worker's imperative Docker subsystems — runtime log tailing, stat sampling, crash-event watching, and the deploy path's container/volume/network operations — moved out of the entrypoint into dedicated modules (`runtime-logs.ts`, `stats.ts`, `crash-watch.ts`, `docker-ops.ts`) that take a narrow structural slice of dockerode, and are now unit-tested against Docker doubles. Behavior is unchanged with one deliberate fix: a dying Docker events stream fired both `end` and `close`, each scheduling its own resubscribe, so every disconnect leaked one extra crash-watcher events stream; the reconnect is now scheduled once.
 
 - **Bundle format bumped to v2** for the datastore section, then to **v3** for build variables. This build reads v1, v2, and v3 bundles; older Sohwe versions cannot read v3 bundles (they fail cleanly with "Unrecognized or unsupported bundle format" rather than a misleading signature error, which is why an additive field still takes a version bump — an older reader strips the unknown key before verifying the signature). The frozen v1 and v2 goldens still parse, and a v3 golden pins the new format. Build variables ride the bundle in their own encrypted block, alongside env vars and under the same rule: exported only when **include secrets** is set, and preflight reports key *counts*, never values.

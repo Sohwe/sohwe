@@ -5,7 +5,6 @@ import { Rocket, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import { AppStatusBadge, BuildModeBadge } from "@/components/apps/BuildModeBadge";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
 import { api, fetchMe } from "@/lib/api";
 import { useAppConfig } from "@/lib/config";
 import { isAdmin } from "@/lib/roles";
@@ -125,10 +124,13 @@ export function AppLayout() {
 
   return (
     <div>
-      <div className="mb-4 flex flex-col gap-3 border-b border-border pb-4 md:flex-row md:items-center md:justify-between">
-        <div>
+      <div className="mb-1 flex flex-col gap-4 pb-5 md:flex-row md:items-center md:justify-between">
+        <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-xl font-semibold tracking-tight">{app.name}</h1>
+            <span className="flex h-9 w-9 items-center justify-center rounded-lg border border-border/70 bg-card text-sm font-semibold uppercase shadow-panel">
+              {app.name.slice(0, 1)}
+            </span>
+            <h1 className="text-xl font-semibold tracking-[-0.025em]">{app.name}</h1>
             <BuildModeBadge mode={app.buildMode} />
             <AppStatusBadge status={app.status} />
           </div>
@@ -151,7 +153,6 @@ export function AppLayout() {
           </div>
         </div>
         <Button
-          size="sm"
           disabled={app.status === "deploying" || deployMut.isPending}
           onClick={() => deployMut.mutate(app.id)}
         >
@@ -160,7 +161,7 @@ export function AppLayout() {
         </Button>
       </div>
 
-      <div className="mb-6 flex flex-wrap gap-0.5 rounded-lg border border-border/80 bg-muted/30 p-0.5">
+      <div className="mb-7 flex max-w-full gap-1 overflow-x-auto border-b border-border/80" role="tablist" aria-label="Application sections">
         {visibleTabs.map((t) => {
           const isActive = t.path === "deployments" ? currentSection === "deployments" : currentSection === t.path;
           if (t.path === "files" && app.status !== "running") {
@@ -169,7 +170,7 @@ export function AppLayout() {
                 key={t.path}
                 variant="ghost"
                 size="sm"
-                className="rounded-md opacity-50"
+                className="h-10 rounded-none border-b-2 border-transparent px-3 opacity-50"
                 type="button"
                 disabled
                 title="App must be running to browse the filesystem"
@@ -183,10 +184,12 @@ export function AppLayout() {
               key={t.path}
               variant="ghost"
               size="sm"
-              className={cn("rounded-md", isActive && "bg-background text-foreground shadow-sm")}
+              className={isActive
+                ? "h-10 rounded-none border-b-2 border-primary bg-transparent px-3 text-foreground hover:bg-transparent"
+                : "h-10 rounded-none border-b-2 border-transparent px-3 text-muted-foreground hover:bg-muted/40 hover:text-foreground"}
               asChild
             >
-              <Link to={t.route} params={{ appId }}>
+              <Link to={t.route} params={{ appId }} aria-current={isActive ? "page" : undefined}>
                 {t.label}
               </Link>
             </Button>
