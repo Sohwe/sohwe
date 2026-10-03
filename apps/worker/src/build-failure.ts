@@ -141,6 +141,56 @@ export function summarizeBuildFailure(input: {
   recentLines: string[];
 }): BuildFailureSummary {
   const lines = input.recentLines.slice(-BUILD_FAILURE_SCAN_LINES);
+  const raw = input.errorMessage;
+
+  // Clone and preflight failures happen before a builder writes any useful
+  // output. Match the operation as well as Git's wording: "not found" on its
+  // own could mean a missing build dependency instead of a missing branch.
+  if (/git clone .* failed/i.test(raw)) {
+    if (/remote branch .* not found|couldn't find remote ref|remote ref .* not found/i.test(raw)) {
+      return {
+        headline: "The tracked Git branch was not found",
+        evidence: [truncate(raw, MAX_EVIDENCE_LINE)],
+        hint: "Select an existing branch in app Settings, then redeploy."
+      };
+    }
+    if (/repository(?: .+)? not found|authentication failed|could not read (?:from remote repository|Username)|requested url returned error: (?:401|403|404)|permission denied|could not resolve host|unable to access|terminal prompts disabled/i.test(raw)) {
+      return {
+        headline: "Sohwe could not access the repository",
+        evidence: [truncate(raw, MAX_EVIDENCE_LINE)],
+        hint: "Check the repository URL and GitHub App access to this repository, then redeploy."
+      };
+    }
+  }
+  if (/Set required variables in app settings before deploying:/i.test(raw)) {
+    return {
+      headline: "Required variables are missing",
+      evidence: [truncate(raw, MAX_EVIDENCE_LINE)],
+      hint: "Add the named values with the required scopes in app Variables, then redeploy."
+    };
+  }
+  if (/Dockerfile (?:not found|path|was not found)|Build mode is set to 'dockerfile' but .* was not found/i.test(raw)) {
+    return {
+      headline: "The configured Dockerfile could not be used",
+      evidence: [truncate(raw, MAX_EVIDENCE_LINE)],
+      hint: "Check the repository-relative Dockerfile path and build mode in app Settings, then redeploy."
+    };
+  }
+  if (/no command specified|no command (?:was )?provided|container .*has no (?:command|entrypoint)/i.test(raw)) {
+    return {
+      headline: "The image has no start command",
+      evidence: [truncate(raw, MAX_EVIDENCE_LINE)],
+      hint: "Add CMD or ENTRYPOINT to the Dockerfile, or set a container command override in app Settings."
+    };
+  }
+
+  if (/nixpacks (?:build )?failed/i.test(raw) && lines.some((line) => /no start command|could not determine.*start|failed to detect.*start/i.test(line))) {
+    return {
+      headline: "Nixpacks could not find a start command",
+      evidence: lines.filter((line) => /no start command|could not determine.*start|failed to detect.*start/i.test(line)).slice(-2).map((line) => truncate(line, MAX_EVIDENCE_LINE)),
+      hint: "Set a Nixpacks start command in app Settings, then redeploy."
+    };
+  }
 
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i];

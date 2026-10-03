@@ -1,6 +1,6 @@
 # Application onboarding priorities
 
-Status: **priorities 1–5 implemented; live fixture validation remains; priorities 6–9 planned**
+Status: **priorities 1–6 implemented; live fixture validation remains; priorities 7–9 planned**
 Last reviewed: 2026-10-03
 
 ## Goal and scope
@@ -13,7 +13,7 @@ Target flow: **choose or paste a repo → review suggested settings → add requ
 variables → deploy → open the URL**. An admin must remain able to inspect and
 override every suggestion.
 
-This plan tracks the sequence of work. Priorities 1–5 are implemented; the
+This plan tracks the sequence of work. Priorities 1–6 are implemented; the
 first release acceptance repositories still need to be exercised live.
 
 ## Dashboard redesign direction
@@ -95,7 +95,7 @@ must be **suggestions**, not hidden assumptions.
 | 3 | P0 | **Variables before first deploy.** Put Sohwe's existing scoped variable editor and bulk paste in the creation flow. Save encrypted variables before queueing the build. Treat creation and initial configuration as one reliable operation, or provide a recoverable draft if a later step fails. **Implemented.** | Prevents avoidable first-build failures and secret handling workarounds. | Medium |
 | 4 | P1 | **Repository inspection and build-plan preview.** After repo selection, inspect the chosen branch and propose build mode, root or app directory, Dockerfile, likely start command, and container port. Show the evidence and resolved build plan. Preserve repository-root build context for workspaces and let users override each suggestion. **Implemented; live private-repo acceptance remains.** | Highest potential to improve success for unfamiliar repos and monorepos, but requires careful design and validation. | Large |
 | 5 | P1 | **Repository config file and deployment docs.** Support `sohwe.yaml` v1 with validation, required variable prompts, deploy-time resolution, and visible source/override rules. Publish a quickstart, field reference, examples, schema, and troubleshooting guide. **Implemented; live fixture validation remains.** | Lets teams commit repeatable, reviewable app preferences and makes unfamiliar deployments easier to understand. | Medium–large |
-| 6 | P1 | **First-deploy diagnosis.** Give specific remedies for inaccessible repos, missing branches, wrong Dockerfile paths, missing start commands, port mismatches, and missing variables. Link each diagnosis to the setting that fixes it, while retaining raw logs. | Reduces time from failed build to a working app. | Medium |
+| 6 | P1 | **First-deploy diagnosis.** Give specific remedies for inaccessible repos, missing branches, wrong Dockerfile paths, missing start commands, port mismatches, and missing variables. Link each diagnosis to the setting that fixes it, while retaining raw logs. **Implemented; live fixture validation remains.** | Reduces time from failed build to a working app. | Medium |
 | 7 | P1 | **Git push behavior in setup.** When a repo comes from a connected GitHub installation, clearly offer push-to-deploy with the selected branch and explain the default. Do not show an enabled state for a repo that cannot receive webhooks. | Aligns setup with the expectation created by Git-based deploy platforms. | Small–medium |
 | 8 | P2 | **Reusable app templates or a Deploy with Sohwe link.** A template may suggest non-secret settings and required variable names; users supply secret values. | Helps repeated/common setups after the core import path works. | Medium–large |
 | 9 | Later | **Preview deployments and additional sources** such as local directory or image import. | Useful platform capabilities, but they do less to fix the first production deploy and add significant runtime complexity. | Large |

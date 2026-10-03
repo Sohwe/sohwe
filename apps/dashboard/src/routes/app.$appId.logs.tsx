@@ -53,7 +53,7 @@ export function AppLogsPage() {
         <RuntimeLogViewer appId={appId} appSlug={app?.slug} />
       ) : lastDeployment ? (
         <div className="space-y-3">
-          <BuildFailureSummary deployment={lastDeployment} />
+          <BuildFailureSummary deployment={lastDeployment} appId={appId} />
           <BuildLogViewer
             deploymentId={lastDeployment.id}
             status={lastDeployment.status}

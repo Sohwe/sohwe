@@ -2,6 +2,8 @@
 
 Open the app's **Deployments** tab, select the failed deployment, and read the error and build log. For config-backed apps, the drawer shows the config path, commit, resolved settings, and their sources. Correct the file on the tracked branch or change the named setting in Sohwe, then deploy again.
 
+Recognized first-deploy failures show a remedy link directly to the relevant Settings field, Variables page, or GitHub connection. The raw build log remains available below the summary. If the deployment succeeds but its URL does not respond, expand **App URL not responding?** in the deployment drawer to check the container port and runtime logs; container startup alone does not prove the HTTP endpoint is reachable.
+
 | Symptom | Check and correction |
 | --- | --- |
 | Repository cannot be inspected or cloned | Confirm the HTTPS URL. For a private GitHub repo, check that the connected GitHub App has access to that repository. Reopen **Git** to adjust its installation if needed. |

@@ -14,6 +14,42 @@ function summarize(recentLines: string[], errorMessage = GENERIC) {
 }
 
 describe("summarizeBuildFailure", () => {
+  it("identifies an inaccessible repository without exposing the Git command as the headline", () => {
+    const s = summarize([], "git clone --depth 1 -b main https://github.com/acme/private.git /tmp/repo failed (128): fatal: repository not found");
+    assert.equal(s.headline, "Sohwe could not access the repository");
+    assert.match(s.hint ?? "", /GitHub App access/);
+  });
+
+  it("distinguishes a missing branch from repository access", () => {
+    const s = summarize([], "git clone --depth 1 -b missing https://github.com/acme/app.git /tmp/repo failed (128): fatal: Remote branch missing not found in upstream origin");
+    assert.equal(s.headline, "The tracked Git branch was not found");
+    assert.match(s.hint ?? "", /Settings/);
+  });
+
+  it("points missing Dockerfiles to build settings", () => {
+    const s = summarize([], "Build mode is set to 'dockerfile' but apps/api/Dockerfile was not found in the repository.");
+    assert.match(s.headline, /Dockerfile/);
+    assert.match(s.hint ?? "", /Dockerfile path/);
+  });
+
+  it("points missing required variables to Variables", () => {
+    const s = summarize([], "Set required variables in app settings before deploying: DATABASE_URL (runtime)");
+    assert.equal(s.headline, "Required variables are missing");
+    assert.match(s.evidence[0] ?? "", /DATABASE_URL/);
+  });
+
+  it("points an undetected Nixpacks start command to Settings", () => {
+    const s = summarize(["Error: No start command could be detected"], "nixpacks build failed with exit code 1");
+    assert.match(s.headline, /start command/);
+    assert.match(s.hint ?? "", /Settings/);
+  });
+
+  it("explains an image with no command", () => {
+    const s = summarize([], "(HTTP code 400) bad parameter - No command specified");
+    assert.equal(s.headline, "The image has no start command");
+    assert.match(s.hint ?? "", /container command override/);
+  });
+
   it("names a disk-space failure", () => {
     const s = summarize([
       "#8 [4/6] RUN npm ci",

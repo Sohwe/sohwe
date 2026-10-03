@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useParams, useRouter } from "@tanstack/react-router";
+import { Link, useParams, useRouter } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { BuildFailureSummary } from "./BuildFailureSummary";
 import { BuildLogViewer, DeploymentStatusLine } from "./BuildLogViewer";
@@ -98,7 +98,17 @@ export function DeploymentsPage() {
           </SheetHeader>
           {deploymentId ? (
             <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
-              <BuildFailureSummary deployment={watchDep} />
+              <BuildFailureSummary deployment={watchDep} appId={appId} />
+              {watchDep?.status === "success" ? (
+                <details className="rounded-md border border-border/70 p-3 text-sm">
+                  <summary className="cursor-pointer font-medium">App URL not responding?</summary>
+                  <p className="mt-2 text-muted-foreground">Check the runtime log for the address and port your process listens on. It must listen on 0.0.0.0, and the container port in Sohwe must match{watchDep.resolvedPlan ? ` (${watchDep.resolvedPlan.values.port} for this deployment)` : ""}. A successful container start does not verify the HTTP endpoint.</p>
+                  <div className="mt-2 flex gap-4">
+                    <Link to="/apps/$appId/settings" params={{ appId }} hash="container-port" className="underline underline-offset-2">Check container port →</Link>
+                    <Link to="/apps/$appId/logs" params={{ appId }} className="underline underline-offset-2">Runtime logs →</Link>
+                  </div>
+                </details>
+              ) : null}
               {watchDep?.resolvedPlan ? <section className="rounded-md border border-border/70 p-3 text-xs" aria-label="Resolved deployment plan">
                 <p className="font-medium">Resolved plan · {watchDep.resolvedPlan.configPath} at {watchDep.resolvedPlan.commitSha.slice(0, 12)}</p>
                 <div className="mt-2 grid gap-1 sm:grid-cols-2">

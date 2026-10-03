@@ -10,6 +10,12 @@ write-ups.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-03
+
+### Added
+
+- Failed app deployments now identify inaccessible repositories, missing branches, unusable Dockerfile paths, undetected Nixpacks start commands, and missing required variables. The deployment summary links to the relevant GitHub connection, Settings field, or Variables page while keeping the raw build log. Successful deployment details also include a port and listening-address check for an app URL that does not respond.
+
 ## [0.8.0] - 2026-10-03
 
 ### Added

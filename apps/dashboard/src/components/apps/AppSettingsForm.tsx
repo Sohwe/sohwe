@@ -151,7 +151,7 @@ export function AppSettingsForm({ app, onDelete }: { app: AppRow; onDelete?: () 
                   </SelectContent>
                 </Select>
               </Field>
-              <Field label="Branch">
+              <Field id="branch" label="Branch">
                 {branchesQ.isSuccess && branchChoices.length > 0 ? (
                   <Select value={showManualBranch ? ":manual" : branch} onValueChange={(value) => {
                     if (value === ":manual") setManualBranch(true);
@@ -180,13 +180,13 @@ export function AppSettingsForm({ app, onDelete }: { app: AppRow; onDelete?: () 
               <Field label="Build command (nixpacks override)">
                 <Input value={shownBuildCmd} onChange={(e) => { setBuildCmd(e.target.value); override("buildCmd"); }} placeholder="(auto)" />
               </Field>
-              <Field label="Start command (nixpacks override)">
+              <Field id="start-command" label="Start command (nixpacks override)">
                 <Input value={shownStartCmd} onChange={(e) => { setStartCmd(e.target.value); override("startCmd"); }} placeholder="(auto)" />
               </Field>
             </div>
             {shownBuildMode !== "nixpacks" ? (
               <div className="grid gap-3 sm:grid-cols-2">
-                <Field label="Dockerfile path">
+                <Field id="dockerfile-path" label="Dockerfile path">
                   <Input
                     value={shownDockerfilePath}
                     onChange={(e) => { setDockerfilePath(e.target.value); override("dockerfilePath"); }}
@@ -202,7 +202,7 @@ export function AppSettingsForm({ app, onDelete }: { app: AppRow; onDelete?: () 
                 </Field>
               </div>
             ) : null}
-            <Field label="Container command override (optional)">
+            <Field id="runtime-command" label="Container command override (optional)">
               <Input
                 value={shownRuntimeCmd}
                 onChange={(e) => { setRuntimeCmd(e.target.value); override("runtimeCmd"); }}
@@ -210,7 +210,7 @@ export function AppSettingsForm({ app, onDelete }: { app: AppRow; onDelete?: () 
               />
             </Field>
             <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Container port">
+              <Field id="container-port" label="Container port">
                 <Input
                   type="number"
                   value={shownPort}

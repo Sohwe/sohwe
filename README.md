@@ -46,6 +46,11 @@ values are encrypted when the app is created, before the first build is queued.
 when you need more setup before the first deploy. If the deploy
 request fails after saving, the dialog shows the saved app with **Retry deploy**
 and **Open saved app**; retrying does not create another application.
+If the first deploy fails, its deployment drawer names recognized clone, branch,
+Dockerfile, start-command, and required-variable problems and links to the
+relevant control while keeping the full build log. After a successful container
+start, the drawer also has a port and listening-address check for an app URL
+that does not respond.
 
 ## Install on a server (production)
 
