@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/Sohwe/sohwe/main/docs/schemas/sohwe.v1.schema.json",
+  "title": "Sohwe application config v1",
+  "description": "Portable, non-secret preferences for one Sohwe application. Sohwe also enforces checkout-relative paths and builder compatibility at import.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "application"],
+  "properties": {
+    "version": { "const": 1 },
+    "application": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 120, "description": "Import-time display name suggestion only." },
+        "directory": { "$ref": "#/$defs/repositoryPath", "description": "Application directory; Docker build context remains the repository root." },
+        "build": {
+          "type": "object",
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "if": { "anyOf": [{ "required": ["command"] }, { "required": ["startCommand"] }] },
+              "then": { "required": ["mode"], "properties": { "mode": { "const": "nixpacks" } } }
+            },
+            {
+              "if": { "required": ["mode"], "properties": { "mode": { "const": "nixpacks" } } },
+              "then": { "not": { "anyOf": [{ "required": ["dockerfile"] }, { "required": ["target"] }] } }
+            }
+          ],
+          "properties": {
+            "mode": { "enum": ["auto", "dockerfile", "nixpacks"] },
+            "dockerfile": { "$ref": "#/$defs/repositoryPath" },
+            "target": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+            "command": { "type": "string", "minLength": 1, "maxLength": 4096, "description": "Nixpacks build command." },
+            "startCommand": { "type": "string", "minLength": 1, "maxLength": 4096, "description": "Nixpacks start command." }
+          }
+        },
+        "runtime": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "command": { "type": "string", "minLength": 1, "maxLength": 4096, "description": "Override the image's container command." }
+          }
+        },
+        "variables": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["key"],
+            "properties": {
+              "key": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "maxLength": 128 },
+              "scope": { "enum": ["runtime", "build", "both"], "default": "runtime" },
+              "required": { "type": "boolean", "default": false },
+              "description": { "type": "string", "maxLength": 500 }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "repositoryPath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "description": "Relative to the repository root; absolute paths, backslashes, and parent traversal are rejected by Sohwe."
+    }
+  }
+}

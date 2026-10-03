@@ -25,6 +25,7 @@ import { recordAudit } from "../audit";
 import { requireRole } from "../rbac";
 import { isUniqueViolation } from "../prisma-errors";
 import { encodeVarBlob, splitScoped } from "./variable-store";
+import { inspectRepository } from "../repository-inspection";
 
 const docker = new Docker();
 
@@ -220,6 +221,13 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
       const duplicateKey = variableKeys.find((key, index) => variableKeys.indexOf(key) !== index);
       if (duplicateKey) return reply.badRequest(`Duplicate variable key: ${duplicateKey}`);
       const initialVariables = splitScoped(body.variables ?? []);
+      if (body.configOverrides?.length && !body.configPath) return reply.badRequest("Config overrides require a config path.");
+      if (body.configPath) {
+        let inspected;
+        try { inspected = await inspectRepository(u.organizationId, body.gitRepo, body.gitBranch, body.configOverrides?.includes("appDirectory") ? body.appDirectory : undefined, body.configPath); }
+        catch (error) { return reply.badRequest(error instanceof Error && /sohwe\.yaml:\d+:\d+:/.test(error.message) ? error.message : "Could not validate repository config. Check the branch, file path, and repository access."); }
+        if (!inspected.config) return reply.badRequest("Repository config was not found.");
+      }
 
       // Denormalized so push webhooks resolve with one indexed lookup; null for
       // non-GitHub remotes, which simply never match a delivery.
@@ -266,6 +274,8 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
           startCmd: body.startCmd ?? null,
           runtimeCmd: body.runtimeCmd ?? null,
           appDirectory: body.appDirectory,
+          configPath: body.configPath ?? null,
+          configOverrides: body.configOverrides ?? [],
           dockerfilePath: body.dockerfilePath,
           dockerTarget: body.dockerTarget ?? null,
           envVarsEncrypted: encodeVarBlob(initialVariables.env),
@@ -328,6 +338,18 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
       if (!existing) return reply.notFound();
 
       const data: Record<string, unknown> = {};
+      if (body.configPath !== undefined) {
+        if (body.configPath) {
+          try { await inspectRepository(u.organizationId, existing.gitRepo, body.gitBranch ?? existing.gitBranch, body.configOverrides?.includes("appDirectory") ? body.appDirectory ?? existing.appDirectory : undefined, body.configPath); }
+          catch (error) { return reply.badRequest(error instanceof Error && /sohwe\.yaml:\d+:\d+:/.test(error.message) ? error.message : "Could not validate repository config. Check the branch, file path, and repository access."); }
+        }
+        data.configPath = body.configPath;
+        if (body.configPath === null) data.configOverrides = [];
+      }
+      if (body.configOverrides !== undefined) {
+        if (!((body.configPath === undefined ? existing.configPath : body.configPath))) return reply.badRequest("Config overrides require a config path.");
+        data.configOverrides = body.configOverrides;
+      }
       if (body.name !== undefined) data.name = body.name;
       if (body.gitBranch !== undefined) data.gitBranch = body.gitBranch;
       if (body.port !== undefined) data.port = body.port;

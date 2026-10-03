@@ -1,0 +1,15 @@
+# Place at the repository root as sohwe.yaml.
+version: 1
+application:
+  name: web
+  build:
+    mode: dockerfile
+    dockerfile: Dockerfile
+    target: runtime
+  runtime:
+    port: 3000
+  variables:
+    - key: DATABASE_URL
+      scope: runtime
+      required: true
+      description: Connection URL for the production database

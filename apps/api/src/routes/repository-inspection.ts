@@ -1,13 +1,14 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { AppDirectorySchema } from "@sohwe/types";
+import { AppDirectorySchema, ConfigPathSchema } from "@sohwe/types";
 import { requireRole } from "../rbac";
 import { inspectRepository, listRepositoryBranches } from "../repository-inspection";
 
 const InspectRequest = z.object({
   gitRepo: z.string().url().max(2048),
   branch: z.string().trim().min(1).max(255),
-  directory: AppDirectorySchema.optional()
+  directory: AppDirectorySchema.optional(),
+  configPath: ConfigPathSchema.optional()
 });
 const BranchRequest = z.object({ gitRepo: z.string().url().max(2048) });
 
@@ -33,10 +34,10 @@ export async function registerRepositoryInspectionRoutes(app: FastifyInstance) {
   }, async (req, reply) => {
     const body = InspectRequest.parse(req.body);
     try {
-      return await inspectRepository(req.user!.organizationId, body.gitRepo, body.branch, body.directory);
+      return await inspectRepository(req.user!.organizationId, body.gitRepo, body.branch, body.directory, body.configPath);
     } catch (error) {
       // Git may print tokenized remotes. Never serialize or log its error.
-      const message = error instanceof Error && /^(Use an HTTPS|Enter a valid branch|App directory must)/.test(error.message)
+      const message = error instanceof Error && (/^(Use an HTTPS|Enter a valid branch|App directory must)/.test(error.message) || /^([\w./-]+\/)?sohwe\.yaml:\d+:\d+:/.test(error.message))
         ? error.message : "Could not inspect this repository and branch. Check access and the branch name, then retry.";
       return reply.badRequest(message);
     }

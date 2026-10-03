@@ -72,6 +72,36 @@ describe("repository inspection", () => {
     });
   });
 
+  it("loads a root config and applies its directory and port ahead of detection", async () => {
+    await fixture({
+      "Dockerfile": "FROM node:24\nEXPOSE 3000\n",
+      "apps/api/Dockerfile": "FROM node:24\nEXPOSE 4000\n",
+      "sohwe.yaml": "version: 1\napplication:\n  directory: apps/api\n  runtime:\n    port: 8080\n  variables:\n    - key: DATABASE_URL\n      required: true\n",
+      ".env": "DATABASE_URL=do-not-read\n"
+    }, async (root) => {
+      const plan = await inspectCheckout(root, "main", "abc123");
+      assert.equal(plan.configPath, "sohwe.yaml");
+      assert.equal(plan.selected.directory, "apps/api");
+      assert.equal(plan.resolved.values.port, 8080);
+      assert.equal(plan.resolved.sources.port, "file");
+      assert.equal(plan.buildContext, ".");
+      assert.ok(!JSON.stringify(plan).includes("do-not-read"));
+    });
+  });
+
+  it("supports an explicit nested config and rejects invalid or missing files", async () => {
+    await fixture({
+      "package.json": "{}",
+      "apps/api/sohwe.yaml": "version: 1\napplication:\n  build:\n    mode: nixpacks\n"
+    }, async (root) => {
+      const plan = await inspectCheckout(root, "main", "abc123", undefined, "apps/api/sohwe.yaml");
+      assert.equal(plan.configPath, "apps/api/sohwe.yaml");
+      await assert.rejects(() => inspectCheckout(root, "main", "abc123", undefined, "other/sohwe.yaml"), /Config file could not be read/);
+      await writeFile(join(root, "apps/api/sohwe.yaml"), "version: 1\napplication:\n  privileged: true\n");
+      await assert.rejects(() => inspectCheckout(root, "main", "abc123", undefined, "apps/api/sohwe.yaml"), /apps\/api\/sohwe\.yaml:\d+:\d+:.*privileged/);
+    });
+  });
+
   it("does not inspect a symlink outside the checkout", async () => {
     await fixture({ "package.json": "{}" }, async (root) => {
       await symlink(tmpdir(), join(root, "apps"));

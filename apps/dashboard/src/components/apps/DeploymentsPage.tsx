@@ -99,6 +99,14 @@ export function DeploymentsPage() {
           {deploymentId ? (
             <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
               <BuildFailureSummary deployment={watchDep} />
+              {watchDep?.resolvedPlan ? <section className="rounded-md border border-border/70 p-3 text-xs" aria-label="Resolved deployment plan">
+                <p className="font-medium">Resolved plan · {watchDep.resolvedPlan.configPath} at {watchDep.resolvedPlan.commitSha.slice(0, 12)}</p>
+                <div className="mt-2 grid gap-1 sm:grid-cols-2">
+                  {(Object.keys(watchDep.resolvedPlan.sources) as (keyof typeof watchDep.resolvedPlan.sources)[]).map((field) => <p key={field}>
+                    <span className="font-mono">{field}</span>: {String(watchDep.resolvedPlan!.values[field] ?? "default")} <span className="text-muted-foreground">({watchDep.resolvedPlan!.sources[field]})</span>
+                  </p>)}
+                </div>
+              </section> : null}
               <BuildLogViewer
                 deploymentId={deploymentId}
                 status={watchDep?.status}

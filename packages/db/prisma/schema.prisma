@@ -248,6 +248,8 @@ model Application {
   startCmd           String?            @map("start_command")
   runtimeCmd         String?            @map("runtime_command")
   appDirectory       String             @default(".") @map("app_directory")
+  configPath         String?            @map("config_path")
+  configOverrides    String[]           @default([]) @map("config_overrides")
   dockerfilePath     String             @default("Dockerfile") @map("dockerfile_path")
   dockerTarget       String?            @map("docker_target")
   port               Int                @default(3000)
@@ -279,6 +281,7 @@ model Deployment {
   application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
   commitSha     String?     @map("commit_sha")
   commitMessage String?     @map("commit_message") @db.Text
+  resolvedPlan  Json?        @map("resolved_plan")
   imageTag      String?     @map("image_tag")
   // What caused this deployment: manual | push | rollback. Drives the
   // deployments table badge and whether a commit status is reported back.

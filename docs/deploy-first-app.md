@@ -1,0 +1,9 @@
+# Deploy your first application
+
+1. Sign in as an owner or admin and choose **New application**. For a public repository, paste its HTTPS Git URL. For a private GitHub repository, connect the account under **Git**, grant the Sohwe GitHub App access to the repository, then choose it from the repository picker.
+2. Select a branch from the dropdown. Sohwe inspects that branch and shows its commit, detected build plan, and evidence. If the repository has a root `sohwe.yaml`, the plan shows file values. For a monorepo config elsewhere, enter its path under **Advanced settings** (for example `apps/api/sohwe.yaml`). The Docker build context remains the repository root.
+3. Review the app directory, builder, Dockerfile, start command, and container port. Change any setting that needs an instance-specific override. A Dockerfile controls startup through its `CMD` or `ENTRYPOINT` unless you set a container command override.
+4. Fill in variables marked **required**. Enter values in the dashboard, never in `sohwe.yaml`. Runtime variables reach the running container; build variables reach the image build. Use **Build + runtime** only when both need the same value.
+5. Choose **Create and deploy**. Sohwe opens the deployment build log. After success, open the app's **Overview** to follow the generated `<slug>.<base-domain>` URL. If you need more setup first, choose **Save for later** and deploy from the saved app.
+
+For an inaccessible repo, missing branch, Dockerfile, command, port, or variable failure, use [deployment troubleshooting](./deployment-troubleshooting.md). The full config format is in the [`sohwe.yaml` reference](./sohwe-yaml.md).

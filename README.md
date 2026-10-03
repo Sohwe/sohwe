@@ -4,6 +4,8 @@ Sohwe is an open-source, self-hostable deployment platform (PaaS): connect a rep
 
 This repository is a **pnpm + Turborepo** monorepo. For setup, see [Development](#development) or the [fresh-machine guide](./docs/fresh-machine-setup.md). Current work is tracked in [`UPCOMING_PLANS.md`](./UPCOMING_PLANS.md).
 
+To deploy an app, start with the [five-minute first app guide](./docs/deploy-first-app.md). Repositories can commit non-secret preferences and required variable names in [`sohwe.yaml`](./docs/sohwe-yaml.md); see [deployment troubleshooting](./docs/deployment-troubleshooting.md) when a build fails.
+
 ## Current status
 
 The current codebase includes Phases 0–8, with Phase 9 in progress. See [`CHANGELOG.md`](./CHANGELOG.md) for release history.

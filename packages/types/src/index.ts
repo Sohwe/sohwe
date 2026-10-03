@@ -170,6 +170,19 @@ export const AppDirectorySchema = z
     "App directory must stay inside the repository"
   );
 
+export const ConfigPathSchema = z.string().min(1).max(512).refine(
+  (path) => (path === "sohwe.yaml" || path.endsWith("/sohwe.yaml")) &&
+    !path.startsWith("/") && !path.includes("\\") && !path.includes("\0") &&
+    !path.split("/").some((part) => part === ".." || part === "." || part === ""),
+  "Use sohwe.yaml or a repository-relative path ending in /sohwe.yaml"
+);
+export const CONFIG_FIELDS = ["appDirectory", "buildMode", "dockerfilePath", "dockerTarget", "buildCmd", "startCmd", "runtimeCmd", "port"] as const;
+export type ConfigField = typeof CONFIG_FIELDS[number];
+export const ConfigOverridesSchema = z.array(z.enum(CONFIG_FIELDS)).max(CONFIG_FIELDS.length).refine(
+  (keys) => new Set(keys).size === keys.length,
+  "Duplicate config override"
+);
+
 export const CreateApplicationSchema = z.object({
   name: z.string().min(1),
   slug: z.string().regex(/^[a-z0-9-]+$/),
@@ -181,6 +194,8 @@ export const CreateApplicationSchema = z.object({
   startCmd: z.string().optional(),
   runtimeCmd: z.string().max(4096).optional(),
   appDirectory: AppDirectorySchema.default("."),
+  configPath: ConfigPathSchema.optional(),
+  configOverrides: ConfigOverridesSchema.optional(),
   dockerfilePath: DockerfilePathSchema.default("Dockerfile"),
   dockerTarget: DockerTargetSchema.optional(),
   domain: OptionalDomain,
@@ -210,6 +225,8 @@ export const UpdateApplicationSchema = z
     startCmd: z.string().nullable().optional(),
     runtimeCmd: z.string().max(4096).nullable().optional(),
     appDirectory: AppDirectorySchema.optional(),
+    configPath: ConfigPathSchema.nullable().optional(),
+    configOverrides: ConfigOverridesSchema.optional(),
     dockerfilePath: DockerfilePathSchema.optional(),
     dockerTarget: DockerTargetSchema.nullable().optional(),
     memoryLimitMb: z

@@ -2684,6 +2684,8 @@ describe("API routes", { skip }, () => {
             buildCmd: null,
             startCmd: null,
             runtimeCmd: "node dist/worker.js",
+            configPath: "apps/api/sohwe.yaml",
+            configOverrides: ["port"],
             dockerfilePath: "apps/api/Dockerfile",
             dockerTarget: "worker",
             port: 3000,
@@ -2775,6 +2777,8 @@ describe("API routes", { skip }, () => {
         { NIXPACKS_NODE_VERSION: "22" }
       );
       assert.equal(restoredApp.runtimeCmd, "node dist/worker.js");
+      assert.equal(restoredApp.configPath, "apps/api/sohwe.yaml");
+      assert.deepEqual(restoredApp.configOverrides, ["port"]);
       assert.equal(restoredApp.dockerfilePath, "apps/api/Dockerfile");
       assert.equal(restoredApp.dockerTarget, "worker");
       assert.equal(await prisma.datastoreBinding.count(), 1);

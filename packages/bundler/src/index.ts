@@ -31,8 +31,10 @@ export const BUNDLE_FORMAT = "sohwe-backup" as const;
  * - v6: adds projects, services, project datastore bindings, and their
  *   encrypted variable blocks.
  * - v7: adds the application directory used during repository import.
+ * - v8: preserves an application's repository config path and dashboard
+ *   override keys across portable restore.
  */
-export const BUNDLE_VERSION = 7 as const;
+export const BUNDLE_VERSION = 8 as const;
 
 // --- Input shapes (plaintext, supplied by the API) -------------------------
 
@@ -59,6 +61,8 @@ export type BundleAppInput = {
   startCmd: string | null;
   runtimeCmd: string | null;
   appDirectory?: string;
+  configPath?: string | null;
+  configOverrides?: string[];
   dockerfilePath: string;
   dockerTarget: string | null;
   port: number;
@@ -253,6 +257,10 @@ const AppEntrySchema = z.object({
   runtimeCmd: z.string().nullable().optional(),
   /** v7+. Defaults to the repository root for old bundles. */
   appDirectory: z.string().optional(),
+  /** v8+. Null for apps without repository config. */
+  configPath: z.string().nullable().optional(),
+  /** v8+. Dashboard override field names. */
+  configOverrides: z.array(z.string()).optional(),
   /** v5+. Repository-relative path; validated by the API when first saved. */
   dockerfilePath: z.string().optional(),
   /** v5+. Named stage from a multi-stage Dockerfile. */
@@ -349,6 +357,13 @@ export const BundleManifestV7Schema = z.object({
   projects: z.array(ProjectEntrySchema)
 });
 
+export const BundleManifestV8Schema = z.object({
+  ...ManifestBase,
+  version: z.literal(8),
+  datastores: z.array(DatastoreEntrySchema),
+  projects: z.array(ProjectEntrySchema)
+});
+
 export const BundleManifestSchema = z.discriminatedUnion("version", [
   BundleManifestV1Schema,
   BundleManifestV2Schema,
@@ -356,11 +371,12 @@ export const BundleManifestSchema = z.discriminatedUnion("version", [
   BundleManifestV4Schema,
   BundleManifestV5Schema,
   BundleManifestV6Schema,
-  BundleManifestV7Schema
+  BundleManifestV7Schema,
+  BundleManifestV8Schema
 ]);
 
 /** The manifest `buildBundle` emits (always the current version). */
-export type BundleManifest = z.infer<typeof BundleManifestV7Schema>;
+export type BundleManifest = z.infer<typeof BundleManifestV8Schema>;
 /** Any version `parseBundle` accepts. */
 export type AnyBundleManifest = z.infer<typeof BundleManifestSchema>;
 export type BundleAppEntry = z.infer<typeof AppEntrySchema>;
@@ -376,6 +392,8 @@ export type ParsedBundleApp = Omit<
   | "domains"
   | "runtimeCmd"
   | "appDirectory"
+  | "configPath"
+  | "configOverrides"
   | "dockerfilePath"
   | "dockerTarget"
 > & {
@@ -389,6 +407,8 @@ export type ParsedBundleApp = Omit<
   domains: string[];
   runtimeCmd: string | null;
   appDirectory: string;
+  configPath: string | null;
+  configOverrides: string[];
   dockerfilePath: string;
   dockerTarget: string | null;
 };
@@ -457,6 +477,8 @@ export function buildBundle(
       startCmd: a.startCmd,
       runtimeCmd: a.runtimeCmd,
       appDirectory: a.appDirectory ?? ".",
+      configPath: a.configPath ?? null,
+      configOverrides: a.configOverrides ?? [],
       dockerfilePath: a.dockerfilePath,
       dockerTarget: a.dockerTarget,
       port: a.port,
@@ -647,6 +669,8 @@ export function parseBundle(raw: unknown, passphrase: string): ParsedBundle {
       domains,
       runtimeCmd,
       appDirectory,
+      configPath,
+      configOverrides,
       dockerfilePath,
       dockerTarget,
       ...rest
@@ -658,13 +682,15 @@ export function parseBundle(raw: unknown, passphrase: string): ParsedBundle {
       domains: domains ?? (rest.domain ? [rest.domain] : []),
       runtimeCmd: runtimeCmd ?? null,
       appDirectory: appDirectory ?? ".",
+      configPath: configPath ?? null,
+      configOverrides: configOverrides ?? [],
       dockerfilePath: dockerfilePath ?? "Dockerfile",
       dockerTarget: dockerTarget ?? null
     };
   });
 
   const projects =
-    (manifest.version === 6 || manifest.version === 7)
+    (manifest.version === 6 || manifest.version === 7 || manifest.version === 8)
       ? manifest.projects.map((project) => ({
           name: project.name,
           slug: project.slug,

@@ -5,8 +5,12 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildAppImage, type BuildMode } from "@sohwe/builder";
+import { inspectCheckout } from "@sohwe/types/inspection";
+import { resolveSohwePlan, type PlanValues } from "@sohwe/types/config";
+import { missingRequiredVariables } from "@sohwe/types/required-variables";
+import { CONFIG_FIELDS, type ConfigField } from "@sohwe/types";
 import { decryptJson, getSohweEncryptionKey, toDockerEnvList } from "@sohwe/crypto";
-import { prisma } from "@sohwe/db";
+import { prisma, type Prisma } from "@sohwe/db";
 import {
   appLogChannelName,
   createRedisForPublish,
@@ -308,6 +312,17 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
   // applies to a host Let's Encrypt could issue for — see `container-spec.ts`,
   // which owns every routing and container-shape decision from here on.
   const routing = resolveRoutingConfig();
+  let activePlan: PlanValues = {
+    appDirectory: app.appDirectory,
+    buildMode: app.buildMode as PlanValues["buildMode"],
+    dockerfilePath: app.dockerfilePath,
+    dockerTarget: app.dockerTarget,
+    buildCmd: app.buildCmd,
+    startCmd: app.startCmd,
+    runtimeCmd: app.runtimeCmd,
+    port: app.port
+  };
+  let oldContainersStopped = false;
 
   const logChannel = logChannelName(deploymentId);
   const emit = (line: string) => {
@@ -384,6 +399,11 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
       imageTag = prev.imageTag;
       commitSha = prev.commitSha ?? null;
       commitMessage = prev.commitMessage ?? null;
+      if (prev.resolvedPlan && typeof prev.resolvedPlan === "object" && !Array.isArray(prev.resolvedPlan)) {
+        const prior = prev.resolvedPlan as { values?: PlanValues };
+        if (prior.values) activePlan = prior.values;
+        await prisma.deployment.update({ where: { id: deploymentId }, data: { resolvedPlan: prev.resolvedPlan as Prisma.InputJsonValue, commitSha, commitMessage } });
+      }
     } else {
       workDir = await mkdtemp(join(tmpdir(), "sohwe-"));
       const repoDir = join(workDir, "repo");
@@ -414,6 +434,22 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
       commitSha = await getCommitSha(repoDir);
       commitMessage = await getCommitSubject(repoDir);
       onLog(`[sohwe] At commit ${commitSha}`);
+      await prisma.deployment.update({ where: { id: deploymentId }, data: { commitSha, commitMessage } });
+
+      if (app.configPath) {
+        const overrides = app.configOverrides.filter((field): field is ConfigField => CONFIG_FIELDS.includes(field as ConfigField));
+        const inspected = await inspectCheckout(repoDir, app.gitBranch, commitSha, overrides.includes("appDirectory") ? app.appDirectory : undefined, app.configPath);
+        const candidate = inspected.selected;
+        const detected: PlanValues = { appDirectory: candidate.directory, buildMode: candidate.buildMode, dockerfilePath: candidate.dockerfilePath, dockerTarget: null, buildCmd: candidate.buildCmd, startCmd: candidate.startCmd, runtimeCmd: null, port: candidate.port };
+        const resolved = resolveSohwePlan(detected, inspected.config, overrides, activePlan);
+        activePlan = resolved.values;
+        const env = readEncryptedVars(app.envVarsEncrypted);
+        const build = readEncryptedVars(app.buildArgsEncrypted);
+        const missing = missingRequiredVariables(inspected.config!, env, build);
+        if (missing.length) throw new Error(`Set required variables in app settings before deploying: ${missing.join(", ")}`);
+        await prisma.deployment.update({ where: { id: deploymentId }, data: { resolvedPlan: { configPath: app.configPath, commitSha, ...resolved } } });
+        onLog(`[sohwe] Resolved ${app.configPath} for ${commitSha.slice(0, 12)}; sources: ${CONFIG_FIELDS.map((field) => `${field}=${resolved.sources[field]}`).join(", ")}`);
+      }
 
       await reportCommitStatus(github, {
         commitSha,
@@ -427,13 +463,13 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
       imageTag = buildImageTag(app.slug, deploymentId);
       await buildAppImage({
         contextDir: repoDir,
-        appDirectory: app.appDirectory,
+        appDirectory: activePlan.appDirectory,
         imageTag,
-        mode: (app.buildMode as BuildMode) ?? "auto",
-        buildCmd: app.buildCmd,
-        startCmd: app.startCmd,
-        dockerfilePath: app.dockerfilePath,
-        dockerTarget: app.dockerTarget,
+        mode: (activePlan.buildMode as BuildMode) ?? "auto",
+        buildCmd: activePlan.buildCmd,
+        startCmd: activePlan.startCmd,
+        dockerfilePath: activePlan.dockerfilePath,
+        dockerTarget: activePlan.dockerTarget,
         buildArgs: readEncryptedVars(app.buildArgsEncrypted),
         onLogLine: onLog
       });
@@ -442,11 +478,12 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
     await sink.end();
     onLog(`[sohwe] Stopping old containers for this app (if any)...`);
     logTails.stop(app.id);
+    oldContainersStopped = true;
     await stopAndRemoveAppContainers(docker, app.id);
 
     const hosts = resolveHosts(app, routing.baseDomain);
     onLog(
-      `[sohwe] Starting container (Traefik: ${buildHostRule(hosts)}, port ${String(app.port)}, tls=${String(shouldUseTls(hosts, routing.httpsEnabled))})...`
+      `[sohwe] Starting container (Traefik: ${buildHostRule(hosts)}, port ${String(activePlan.port)}, tls=${String(shouldUseTls(hosts, routing.httpsEnabled))})...`
     );
 
     const vols = await prisma.volume.findMany({ where: { applicationId: app.id } });
@@ -458,7 +495,7 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
 
     const c = await docker.createContainer(
       buildContainerSpec({
-        app,
+        app: { ...app, port: activePlan.port, runtimeCmd: activePlan.runtimeCmd },
         deploymentId,
         imageTag,
         volumes: vols,
@@ -526,7 +563,7 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
     await prisma.application
       .update({
         where: { id: app.id },
-        data: { status: "idle" }
+        data: { status: !oldContainersStopped && app.status === "running" ? "running" : "idle" }
       })
       .catch(() => {});
 

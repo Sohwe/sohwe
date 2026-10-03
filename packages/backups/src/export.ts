@@ -64,6 +64,8 @@ export async function gatherBundleApps(
     startCmd: a.startCmd,
     runtimeCmd: a.runtimeCmd,
     appDirectory: a.appDirectory,
+    configPath: a.configPath,
+    configOverrides: a.configOverrides,
     dockerfilePath: a.dockerfilePath,
     dockerTarget: a.dockerTarget,
     port: a.port,

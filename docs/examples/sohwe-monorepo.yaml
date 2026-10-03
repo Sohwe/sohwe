@@ -1,0 +1,12 @@
+# Commit as apps/api/sohwe.yaml and select that config path in Sohwe.
+# Paths below still start at the repository root.
+version: 1
+application:
+  name: api
+  directory: apps/api
+  build:
+    mode: dockerfile
+    dockerfile: apps/api/Dockerfile
+    target: runtime
+  runtime:
+    port: 4000

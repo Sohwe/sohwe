@@ -10,6 +10,21 @@ write-ups.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-03
+
+### Added
+
+- `sohwe.yaml` v1 lets repositories declare portable single-application build
+  preferences and required variable names without committing values. Import
+  previews file, detected, and dashboard sources; deployment resolves the file
+  again from the cloned commit, records the non-secret plan, and checks required
+  variables before replacing a running container. Existing apps opt in with a
+  config path. Added a first-app guide, field reference, JSON Schema, examples,
+  and troubleshooting guide. Portable bundles advance to v8 so config paths
+  and overrides survive restore; older bundles restore with no config path. A
+  forward-only migration adds the application config fields and each
+  deployment's resolved plan.
+
 ## [0.7.0] - 2026-10-03
 
 This entry consolidates changes documented since v0.6.0; several were also

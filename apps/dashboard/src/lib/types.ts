@@ -38,6 +38,8 @@ export type AppRow = {
   startCmd: string | null;
   runtimeCmd: string | null;
   appDirectory: string;
+  configPath: string | null;
+  configOverrides: string[];
   dockerfilePath: string;
   dockerTarget: string | null;
   /**
@@ -59,6 +61,7 @@ export type AppRow = {
     /** manual | push | rollback */
     trigger: string;
     errorMessage: string | null;
+    resolvedPlan: { configPath: string; commitSha: string; values: import("@sohwe/types/config").PlanValues; sources: import("@sohwe/types/config").ResolvedPlan["sources"] } | null;
     createdAt: string;
     startedAt: string | null;
     finishedAt: string | null;
@@ -98,6 +101,9 @@ export type RepositoryInspection = {
   buildContext: ".";
   candidates: RepositoryInspectionCandidate[];
   selected: RepositoryInspectionCandidate;
+  configPath: string | null;
+  config: import("@sohwe/types/config").SohweConfig | null;
+  resolved: import("@sohwe/types/config").ResolvedPlan;
 };
 
 export type ServiceKind = "http" | "worker" | "release";

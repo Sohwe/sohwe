@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { CreateApplicationSchema, normalizeHostname, type VariableEntry } from "@sohwe/types";
+import { CreateApplicationSchema, normalizeHostname, type ConfigField, type VariableEntry } from "@sohwe/types";
+import { missingRequiredVariables } from "@sohwe/types/required-variables";
 import { Lock, Search } from "lucide-react";
 import { toast } from "sonner";
 import { Field } from "@/components/common/Field";
@@ -73,6 +74,7 @@ export function CreateAppDialog({
   const [cDomain, setCDomain] = useState("");
   const [cAutoDeploy, setCAutoDeploy] = useState(false);
   const [cVariables, setCVariables] = useState<VariableEntry[]>([]);
+  const [cConfigPath, setCConfigPath] = useState("");
   const [variableError, setVariableError] = useState<string | null>(null);
   const [repoSearch, setRepoSearch] = useState("");
   const [selectedRepo, setSelectedRepo] = useState<string | undefined>();
@@ -135,30 +137,37 @@ export function CreateAppDialog({
   const showManualBranch = manualBranch || branchesQ.isError || branchesQ.isSuccess && !branchChoices.includes(effectiveBranch);
   const inspectionDirectory = editedPlanFields.has("appDirectory") ? cAppDirectory : undefined;
   const inspectionQ = useQuery({
-    queryKey: ["repository-inspection", cRepo.trim(), effectiveBranch.trim(), inspectionDirectory],
+    queryKey: ["repository-inspection", cRepo.trim(), effectiveBranch.trim(), inspectionDirectory, cConfigPath.trim()],
     queryFn: () => api<RepositoryInspection>("/api/repositories/inspect", {
       method: "POST",
-      body: JSON.stringify({ gitRepo: cRepo.trim(), branch: effectiveBranch.trim(), directory: inspectionDirectory })
+      body: JSON.stringify({ gitRepo: cRepo.trim(), branch: effectiveBranch.trim(), directory: inspectionDirectory, configPath: cConfigPath.trim() || undefined })
     }),
     enabled: open && branchReady && inspectionRequested && !repository.error && !!effectiveBranch.trim() && !savedApp,
     retry: false,
     staleTime: 60_000
   });
   const inspection = inspectionQ.data;
-  const effectiveDirectory = editedPlanFields.has("appDirectory") ? cAppDirectory : inspection?.selected.directory ?? cAppDirectory;
+  const basePlan = inspection?.resolved.values;
+  const effectiveName = nameEdited ? cName : inspection?.config?.application.name ?? cName;
+  const effectiveDirectory = editedPlanFields.has("appDirectory") ? cAppDirectory : basePlan?.appDirectory ?? cAppDirectory;
   const selectedCandidate = inspection?.candidates.find((candidate) => candidate.directory === effectiveDirectory) ?? inspection?.selected;
-  const effectiveMode = editedPlanFields.has("buildMode") ? cBuildMode : selectedCandidate?.buildMode ?? cBuildMode;
-  const effectiveDockerfile = editedPlanFields.has("dockerfilePath") ? cDockerfilePath : selectedCandidate?.dockerfilePath ?? cDockerfilePath;
-  const effectiveBuildCmd = editedPlanFields.has("buildCmd") ? cBuildCmd : selectedCandidate?.buildCmd ?? cBuildCmd;
-  const effectiveStartCmd = editedPlanFields.has("startCmd") ? cStartCmd : selectedCandidate?.startCmd ?? cStartCmd;
-  const effectiveRuntimeCmd = editedPlanFields.has("runtimeCmd") ? cRuntimeCmd : selectedCandidate?.runtimeCmd ?? cRuntimeCmd;
-  const effectivePort = editedPlanFields.has("port") ? cPort : selectedCandidate?.port ?? cPort;
+  const effectiveMode = editedPlanFields.has("buildMode") ? cBuildMode : basePlan?.buildMode ?? cBuildMode;
+  const effectiveDockerfile = editedPlanFields.has("dockerfilePath") ? cDockerfilePath : basePlan?.dockerfilePath ?? cDockerfilePath;
+  const effectiveDockerTarget = editedPlanFields.has("dockerTarget") ? cDockerTarget : basePlan?.dockerTarget ?? cDockerTarget;
+  const effectiveBuildCmd = editedPlanFields.has("buildCmd") ? cBuildCmd : basePlan?.buildCmd ?? cBuildCmd;
+  const effectiveStartCmd = editedPlanFields.has("startCmd") ? cStartCmd : basePlan?.startCmd ?? cStartCmd;
+  const effectiveRuntimeCmd = editedPlanFields.has("runtimeCmd") ? cRuntimeCmd : basePlan?.runtimeCmd ?? cRuntimeCmd;
+  const effectivePort = editedPlanFields.has("port") ? cPort : basePlan?.port ?? cPort;
+  const requiredVariables = inspection?.config?.application.variables?.filter((item) => item.required) ?? [];
+  const displayedVariables = [...cVariables];
+  for (const required of requiredVariables) if (!displayedVariables.some((entry) => entry.key === required.key)) displayedVariables.push({ key: required.key, value: "", scope: required.scope });
+  const planSource = (field: ConfigField) => editedPlanFields.has(field) ? "override" : inspection?.resolved.sources[field] ?? "default";
 
   useEffect(() => {
     if (!open || repository.error || !branchReady || !effectiveBranch.trim()) return;
     const timer = setTimeout(() => setInspectionRequested(true), 500);
     return () => clearTimeout(timer);
-  }, [open, cRepo, effectiveBranch, inspectionDirectory, branchReady, repository.error]);
+  }, [open, cRepo, effectiveBranch, inspectionDirectory, cConfigPath, branchReady, repository.error]);
 
   useEffect(() => {
     if (!open || repository.error) return;
@@ -194,6 +203,8 @@ export function CreateAppDialog({
     setBranchEdited(false);
     setCAppDirectory(".");
     setEditedPlanFields(new Set());
+    setCConfigPath("");
+    setCVariables([]);
     const parsed = repositoryNameFromUrl(next);
     const name = suggestedName ?? parsed.name ?? "";
     if (!nameEdited) setCName(name);
@@ -228,6 +239,7 @@ export function CreateAppDialog({
     setCDomain("");
     setCAutoDeploy(false);
     setCVariables([]);
+    setCConfigPath("");
     setVariableError(null);
     setRepoSearch("");
     setSelectedRepo(undefined);
@@ -269,7 +281,7 @@ export function CreateAppDialog({
     mutationFn: async ({ intent, variables }: { intent: "deploy" | "save"; variables: VariableEntry[] }) => {
       setSlugError(null);
       const body = CreateApplicationSchema.parse({
-        name: cName,
+        name: effectiveName,
         slug: cSlug,
         gitRepo: cRepo.trim(),
         gitBranch: effectiveBranch,
@@ -280,7 +292,9 @@ export function CreateAppDialog({
         runtimeCmd: effectiveRuntimeCmd || undefined,
         appDirectory: effectiveDirectory,
         dockerfilePath: effectiveDockerfile,
-        dockerTarget: cDockerTarget || undefined,
+        dockerTarget: effectiveDockerTarget || undefined,
+        configPath: inspection?.configPath ?? undefined,
+        configOverrides: inspection?.configPath ? [...editedPlanFields].filter((field): field is ConfigField => ["appDirectory", "buildMode", "dockerfilePath", "dockerTarget", "buildCmd", "startCmd", "runtimeCmd", "port"].includes(field)) : undefined,
         // Normalized the same way the Domains tab does, so a pasted URL works
         // here too rather than being rejected as a malformed hostname.
         domain: cDomain.trim() ? normalizeHostname(cDomain) : undefined,
@@ -370,10 +384,17 @@ export function CreateAppDialog({
                 setVariableError(initialVariables.error);
                 return;
               }
-              setVariableError(null);
               const submitter = (e.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
+              const intent = submitter?.value === "save" ? "save" : "deploy";
+              if (intent === "deploy" && inspection.config) {
+                const runtime = Object.fromEntries(initialVariables.vars.filter((entry) => entry.scope !== "build").map((entry) => [entry.key, entry.value]));
+                const build = Object.fromEntries(initialVariables.vars.filter((entry) => entry.scope !== "runtime").map((entry) => [entry.key, entry.value]));
+                const missing = missingRequiredVariables(inspection.config, runtime, build);
+                if (missing.length) { setVariableError(`Set required variables before deploying: ${missing.join(", ")}`); return; }
+              }
+              setVariableError(null);
               createMut.mutate({
-                intent: submitter?.value === "save" ? "save" : "deploy",
+                intent,
                 variables: initialVariables.vars
               });
             }}
@@ -456,7 +477,7 @@ export function CreateAppDialog({
             <div className="grid gap-3 sm:grid-cols-2">
               <Field label="Name">
                 <Input
-                  value={cName}
+                  value={effectiveName}
                   onChange={(e) => {
                     setCName(e.target.value);
                     setNameEdited(true);
@@ -547,6 +568,7 @@ export function CreateAppDialog({
               {inspection && !inspectionQ.isFetching ? (
                 <div className="mt-3 space-y-3 text-sm">
                   <p className="text-xs text-muted-foreground">{inspection.branch} at <code>{inspection.commitSha.slice(0, 12)}</code> · Docker and workspace context: repository root</p>
+                  <p className="text-xs text-muted-foreground">{inspection.configPath ? `Configuration: ${inspection.configPath}` : "No sohwe.yaml found; using repository detection."}</p>
                   <Field label="App directory">
                     <Select value={effectiveDirectory} onValueChange={(value) => { setCAppDirectory(value); setInspectionRequested(false); markEdited("appDirectory"); }}>
                       <SelectTrigger><SelectValue /></SelectTrigger>
@@ -555,14 +577,15 @@ export function CreateAppDialog({
                     <span className="text-xs text-muted-foreground">Choose another detected application, or enter a path in Advanced settings.</span>
                   </Field>
                   <div className="grid gap-2 rounded-lg border border-border/70 bg-background p-3 text-xs sm:grid-cols-2">
-                    <span>Builder: <strong>{effectiveMode === "auto" ? `Auto (${selectedCandidate?.buildMode ?? "inspect on deploy"})` : effectiveMode}</strong>{editedPlanFields.has("buildMode") ? " · override" : " · suggested"}</span>
-                    <span>App directory: <strong>{effectiveDirectory}</strong>{editedPlanFields.has("appDirectory") ? " · override" : " · suggested"}</span>
-                    <span>Dockerfile: <strong>{effectiveMode === "nixpacks" ? "Not used" : effectiveDockerfile}</strong>{editedPlanFields.has("dockerfilePath") ? " · override" : " · suggested"}</span>
-                    <span>Container port: <strong>{effectivePort}</strong>{editedPlanFields.has("port") ? " · override" : " · suggested"}</span>
-                    <span>Docker target: <strong>{cDockerTarget || "None"}</strong>{editedPlanFields.has("dockerTarget") ? " · override" : ""}</span>
-                    <span className="sm:col-span-2">Start: <strong>{effectiveRuntimeCmd || (effectiveMode === "dockerfile" ? selectedCandidate?.startDisplay || "Image CMD / ENTRYPOINT (verify Dockerfile)" : effectiveStartCmd || "Nixpacks detection")}</strong>{editedPlanFields.has("runtimeCmd") || editedPlanFields.has("startCmd") ? " · override" : " · suggested"}</span>
-                    {effectiveMode !== "dockerfile" ? <span className="sm:col-span-2">Build command: <strong>{effectiveBuildCmd || "Nixpacks detection"}</strong>{editedPlanFields.has("buildCmd") ? " · override" : " · suggested"}</span> : null}
+                    <span>Builder: <strong>{effectiveMode === "auto" ? `Auto (${selectedCandidate?.buildMode ?? "inspect on deploy"})` : effectiveMode}</strong> · {planSource("buildMode")}</span>
+                    <span>App directory: <strong>{effectiveDirectory}</strong> · {planSource("appDirectory")}</span>
+                    <span>Dockerfile: <strong>{effectiveMode === "nixpacks" ? "Not used" : effectiveDockerfile}</strong> · {planSource("dockerfilePath")}</span>
+                    <span>Container port: <strong>{effectivePort}</strong> · {planSource("port")}</span>
+                    <span>Docker target: <strong>{effectiveDockerTarget || "None"}</strong> · {planSource("dockerTarget")}</span>
+                    <span className="sm:col-span-2">Start: <strong>{effectiveRuntimeCmd || (effectiveMode === "dockerfile" ? selectedCandidate?.startDisplay || "Image CMD / ENTRYPOINT (verify Dockerfile)" : effectiveStartCmd || "Nixpacks detection")}</strong> · {effectiveRuntimeCmd ? planSource("runtimeCmd") : planSource("startCmd")}</span>
+                    {effectiveMode !== "dockerfile" ? <span className="sm:col-span-2">Build command: <strong>{effectiveBuildCmd || "Nixpacks detection"}</strong> · {planSource("buildCmd")}</span> : null}
                   </div>
+                  {editedPlanFields.size ? <Button type="button" size="sm" variant="outline" onClick={() => setEditedPlanFields(new Set())}>Clear build-plan overrides</Button> : null}
                   <div>
                     <p className="text-xs font-medium">Evidence</p>
                     <ul className="mt-1 space-y-1 text-xs text-muted-foreground">{selectedCandidate?.evidence.map((item, index) => <li key={`${item.path}-${index}`}><code>{item.path}</code> — {item.detail}</li>)}</ul>
@@ -572,17 +595,22 @@ export function CreateAppDialog({
             </section>
             <InitialVariablesEditor
               ref={variablesEditor}
-              value={cVariables}
+              value={displayedVariables}
               onChange={(entries) => {
                 setCVariables(entries);
                 setVariableError(null);
               }}
               disabled={pending}
             />
+            {requiredVariables.length ? <p className="text-xs text-muted-foreground">Required by {inspection?.configPath}: {requiredVariables.map((item) => `${item.key} (${item.scope})${item.description ? ` — ${item.description}` : ""}`).join("; ")}. Enter values before creating.</p> : null}
             {variableError ? <p className="text-xs text-destructive" role="alert">{variableError}</p> : null}
             <details className="rounded-lg border border-border/70 bg-muted/20 p-3">
               <summary className="cursor-pointer text-sm font-medium">Advanced settings</summary>
               <div className="mt-3 space-y-3">
+                <Field label="Repository config path (optional)">
+                  <Input value={cConfigPath} onChange={(e) => { setCConfigPath(e.target.value); setInspectionRequested(false); }} placeholder="sohwe.yaml or apps/api/sohwe.yaml" />
+                  <span className="text-xs text-muted-foreground">Leave blank to discover sohwe.yaml at the repository root. This path does not change Docker build context.</span>
+                </Field>
                 <Field label="App directory (repository relative)">
                   <Input value={effectiveDirectory} onChange={(e) => { setCAppDirectory(e.target.value); setInspectionRequested(false); markEdited("appDirectory"); }} placeholder=". or apps/api" />
                 </Field>
@@ -615,7 +643,7 @@ export function CreateAppDialog({
                     </Field>
                     <Field label="Docker target (optional)">
                       <Input
-                        value={cDockerTarget}
+                        value={effectiveDockerTarget}
                         onChange={(e) => { setCDockerTarget(e.target.value); markEdited("dockerTarget"); }}
                         placeholder="api, worker, migrate…"
                       />

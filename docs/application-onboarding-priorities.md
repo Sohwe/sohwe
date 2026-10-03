@@ -1,6 +1,6 @@
 # Application onboarding priorities
 
-Status: **priorities 1–4 implemented; live fixture validation remains; priorities 5–9 planned**
+Status: **priorities 1–5 implemented; live fixture validation remains; priorities 6–9 planned**
 Last reviewed: 2026-10-03
 
 ## Goal and scope
@@ -13,7 +13,7 @@ Target flow: **choose or paste a repo → review suggested settings → add requ
 variables → deploy → open the URL**. An admin must remain able to inspect and
 override every suggestion.
 
-This plan tracks the sequence of work. Priorities 1–4 are implemented; the
+This plan tracks the sequence of work. Priorities 1–5 are implemented; the
 first release acceptance repositories still need to be exercised live.
 
 ## Dashboard redesign direction
@@ -94,13 +94,15 @@ must be **suggestions**, not hidden assumptions.
 | 2 | P0 | **Reduce manual form entry.** Derive name and slug from pasted Git URLs as well as picker selections; preserve user edits. Put Docker targets, command overrides, and custom domain under an Advanced section. Keep branch and port visible with clear defaults. Validate slug collisions and malformed URLs in context. **Implemented.** | Makes the common case understandable without removing control. | Small–medium |
 | 3 | P0 | **Variables before first deploy.** Put Sohwe's existing scoped variable editor and bulk paste in the creation flow. Save encrypted variables before queueing the build. Treat creation and initial configuration as one reliable operation, or provide a recoverable draft if a later step fails. **Implemented.** | Prevents avoidable first-build failures and secret handling workarounds. | Medium |
 | 4 | P1 | **Repository inspection and build-plan preview.** After repo selection, inspect the chosen branch and propose build mode, root or app directory, Dockerfile, likely start command, and container port. Show the evidence and resolved build plan. Preserve repository-root build context for workspaces and let users override each suggestion. **Implemented; live private-repo acceptance remains.** | Highest potential to improve success for unfamiliar repos and monorepos, but requires careful design and validation. | Large |
-| 5 | P1 | **Repository config file and deployment docs.** Support the proposed `sohwe.yaml` format below, with validation and visible source/override rules. Publish a quickstart, full field reference, examples, and troubleshooting guide. | Lets teams commit repeatable, reviewable app preferences and makes unfamiliar deployments easier to understand. Build-plan preview in item 4 provides the right UI for reviewing file values. | Medium–large |
+| 5 | P1 | **Repository config file and deployment docs.** Support `sohwe.yaml` v1 with validation, required variable prompts, deploy-time resolution, and visible source/override rules. Publish a quickstart, field reference, examples, schema, and troubleshooting guide. **Implemented; live fixture validation remains.** | Lets teams commit repeatable, reviewable app preferences and makes unfamiliar deployments easier to understand. | Medium–large |
 | 6 | P1 | **First-deploy diagnosis.** Give specific remedies for inaccessible repos, missing branches, wrong Dockerfile paths, missing start commands, port mismatches, and missing variables. Link each diagnosis to the setting that fixes it, while retaining raw logs. | Reduces time from failed build to a working app. | Medium |
 | 7 | P1 | **Git push behavior in setup.** When a repo comes from a connected GitHub installation, clearly offer push-to-deploy with the selected branch and explain the default. Do not show an enabled state for a repo that cannot receive webhooks. | Aligns setup with the expectation created by Git-based deploy platforms. | Small–medium |
 | 8 | P2 | **Reusable app templates or a Deploy with Sohwe link.** A template may suggest non-secret settings and required variable names; users supply secret values. | Helps repeated/common setups after the core import path works. | Medium–large |
 | 9 | Later | **Preview deployments and additional sources** such as local directory or image import. | Useful platform capabilities, but they do less to fix the first production deploy and add significant runtime complexity. | Large |
 
-## Proposed `sohwe.yaml` v1
+## `sohwe.yaml` v1
+
+Implemented in [`sohwe-yaml.md`](./sohwe-yaml.md), with the [first-app guide](./deploy-first-app.md), [JSON Schema](./schemas/sohwe.v1.schema.json), and [troubleshooting guide](./deployment-troubleshooting.md). The design notes below remain as background; `application.directory`, `build.command`, and `build.startCommand` are also supported.
 
 Use **`sohwe.yaml` at the repository root** as the standard name. It is easier
 to discover than a hidden `.sohwe` directory and follows the convention of
@@ -112,7 +114,7 @@ design rather than an overloaded app schema. This repository file is distinct
 from Sohwe's existing `.sohwe.json` backup bundles, which export instance
 configuration for restore.
 
-Proposed example (a design sketch, **not yet a supported file**):
+Example:
 
 ```yaml
 version: 1
@@ -187,8 +189,8 @@ fails at preflight with a clear prompt while the current app stays live.
 
 ## First release acceptance criteria
 
-Items 1–3 are implemented; validate them with the repositories below before
-considering the first onboarding release accepted. An admin with a public Git URL
+Items 1–5 are implemented; validate them with the repositories below before
+considering the onboarding flow accepted. An admin with a public Git URL
 or an installed GitHub repository can create an app, review or change its name,
 slug, branch and port, enter scoped variables, and start the first deployment
 without leaving the creation flow. The deployment view opens with live logs.

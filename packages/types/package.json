@@ -1,11 +1,19 @@
 {
-    "name": "@sohwe/types",
-    "version": "0.0.0",
-    "private": true,
-    "type": "module",
-    "main": "./src/index.ts",
-    "types": "./src/index.ts",
+  "name": "@sohwe/types",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./config": "./src/config.ts",
+    "./config-file": "./src/config-file.ts",
+    "./inspection": "./src/inspection.ts",
+    "./required-variables": "./src/required-variables.ts"
+  },
   "dependencies": {
+    "yaml": "^2.8.1",
     "zod": "^3.23.0"
   },
   "devDependencies": {
@@ -16,7 +24,7 @@
   "scripts": {
     "lint": "eslint .",
     "build": "tsc --noEmit",
-    "test": "node --import tsx --test src/index.test.ts",
+    "test": "node --import tsx --test src/index.test.ts src/config.test.ts",
     "typecheck": "tsc --noEmit"
   }
 }

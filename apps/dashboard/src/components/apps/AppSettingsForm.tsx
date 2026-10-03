@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { UpdateApplicationSchema } from "@sohwe/types";
+import { UpdateApplicationSchema, type ConfigField } from "@sohwe/types";
 import { toast } from "sonner";
 import { useRouter } from "@tanstack/react-router";
 import { Field } from "@/components/common/Field";
@@ -24,6 +24,29 @@ export function AppSettingsForm({ app, onDelete }: { app: AppRow; onDelete?: () 
   const [dockerTarget, setDockerTarget] = useState(app.dockerTarget ?? "");
   const [port, setPort] = useState(app.port);
   const [branch, setBranch] = useState(app.gitBranch);
+  const [configPath, setConfigPath] = useState(app.configPath ?? "");
+  const [configOverrides, setConfigOverrides] = useState<Set<ConfigField>>(() => new Set(app.configOverrides as ConfigField[]));
+  const configQ = useQuery({
+    queryKey: ["repository-config-preview", app.gitRepo, branch, configPath.trim(), app.configOverrides.includes("appDirectory") ? app.appDirectory : null],
+    queryFn: () => api<{ configPath: string | null; resolved: import("@sohwe/types/config").ResolvedPlan }>("/api/repositories/inspect", {
+      method: "POST",
+      body: JSON.stringify({ gitRepo: app.gitRepo, branch, configPath: configPath.trim(), directory: app.configOverrides.includes("appDirectory") ? app.appDirectory : undefined })
+    }),
+    enabled: !!configPath.trim(),
+    retry: false,
+    staleTime: 60_000
+  });
+  function override(field: ConfigField) { setConfigOverrides((current) => new Set(current).add(field)); }
+  function clearOverride(field: ConfigField) { setConfigOverrides((current) => { const next = new Set(current); next.delete(field); return next; }); }
+  const filePlan = configPath.trim() ? configQ.data?.resolved.values : undefined;
+  const shownBuildMode = !configOverrides.has("buildMode") && filePlan ? filePlan.buildMode : buildMode;
+  const shownAppDirectory = !configOverrides.has("appDirectory") && filePlan ? filePlan.appDirectory : appDirectory;
+  const shownBuildCmd = !configOverrides.has("buildCmd") && filePlan ? filePlan.buildCmd ?? "" : buildCmd;
+  const shownStartCmd = !configOverrides.has("startCmd") && filePlan ? filePlan.startCmd ?? "" : startCmd;
+  const shownDockerfilePath = !configOverrides.has("dockerfilePath") && filePlan ? filePlan.dockerfilePath : dockerfilePath;
+  const shownDockerTarget = !configOverrides.has("dockerTarget") && filePlan ? filePlan.dockerTarget ?? "" : dockerTarget;
+  const shownRuntimeCmd = !configOverrides.has("runtimeCmd") && filePlan ? filePlan.runtimeCmd ?? "" : runtimeCmd;
+  const shownPort = !configOverrides.has("port") && filePlan ? filePlan.port : port;
   const [manualBranch, setManualBranch] = useState(false);
   const branchesQ = useQuery({
     queryKey: ["repository-branches", app.gitRepo],
@@ -48,6 +71,8 @@ export function AppSettingsForm({ app, onDelete }: { app: AppRow; onDelete?: () 
         startCmd: startCmd ? startCmd : null,
         runtimeCmd: runtimeCmd ? runtimeCmd : null,
         appDirectory,
+        ...(configPath.trim() !== (app.configPath ?? "") ? { configPath: configPath.trim() || null } : {}),
+        ...(configPath.trim() ? { configOverrides: [...configOverrides] } : {}),
         dockerfilePath,
         dockerTarget: dockerTarget ? dockerTarget : null,
         port,
@@ -95,8 +120,27 @@ export function AppSettingsForm({ app, onDelete }: { app: AppRow; onDelete?: () 
             }}
           >
             <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Repository config file">
+                <Input value={configPath} onChange={(e) => setConfigPath(e.target.value)} placeholder="sohwe.yaml or apps/api/sohwe.yaml" />
+                <span className="text-xs text-muted-foreground">Opt in with a repository-relative path. Clear it to stop reading the file on future deploys.</span>
+              </Field>
+              {configPath.trim() ? <div className="text-xs text-muted-foreground">
+                {configQ.isFetching ? "Reading repository config…" : configQ.isError ? <span className="text-destructive">Could not read this config or branch. Check the path and file.</span> : `Current file: ${configQ.data?.configPath ?? configPath}`}
+                <p>On each deployment, Sohwe reads this file from the deployed commit. Saved overrides take precedence.</p>
+              </div> : null}
+            </div>
+            {configPath.trim() ? <div className="rounded-md border border-border/70 p-3 text-xs">
+              <p className="font-medium">Current file and detection preview</p>
+              <div className="mt-2 grid gap-1 sm:grid-cols-2">
+                {(["appDirectory", "buildMode", "dockerfilePath", "dockerTarget", "buildCmd", "startCmd", "runtimeCmd", "port"] as const).map((field) => <div key={field} className="flex items-center gap-2">
+                  <span>{field}: {configOverrides.has(field) ? "dashboard override" : configQ.data ? `${String(configQ.data.resolved.values[field] ?? "default")} (${configQ.data.resolved.sources[field]})` : "loading"}</span>
+                  {configOverrides.has(field) ? <Button type="button" size="sm" variant="ghost" onClick={() => clearOverride(field)}>Clear override</Button> : null}
+                </div>)}
+              </div>
+            </div> : null}
+            <div className="grid gap-3 sm:grid-cols-2">
               <Field label="Build mode">
-                <Select value={buildMode} onValueChange={(v) => setBuildMode(v as BuildMode)}>
+                <Select value={shownBuildMode} onValueChange={(v) => { setBuildMode(v as BuildMode); override("buildMode"); }}>
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
@@ -131,28 +175,28 @@ export function AppSettingsForm({ app, onDelete }: { app: AppRow; onDelete?: () 
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
               <Field label="App directory (repository relative)">
-                <Input value={appDirectory} onChange={(e) => setAppDirectory(e.target.value)} placeholder=". or apps/api" />
+                <Input value={shownAppDirectory} onChange={(e) => { setAppDirectory(e.target.value); override("appDirectory"); }} placeholder=". or apps/api" />
               </Field>
               <Field label="Build command (nixpacks override)">
-                <Input value={buildCmd} onChange={(e) => setBuildCmd(e.target.value)} placeholder="(auto)" />
+                <Input value={shownBuildCmd} onChange={(e) => { setBuildCmd(e.target.value); override("buildCmd"); }} placeholder="(auto)" />
               </Field>
               <Field label="Start command (nixpacks override)">
-                <Input value={startCmd} onChange={(e) => setStartCmd(e.target.value)} placeholder="(auto)" />
+                <Input value={shownStartCmd} onChange={(e) => { setStartCmd(e.target.value); override("startCmd"); }} placeholder="(auto)" />
               </Field>
             </div>
-            {buildMode !== "nixpacks" ? (
+            {shownBuildMode !== "nixpacks" ? (
               <div className="grid gap-3 sm:grid-cols-2">
                 <Field label="Dockerfile path">
                   <Input
-                    value={dockerfilePath}
-                    onChange={(e) => setDockerfilePath(e.target.value)}
+                    value={shownDockerfilePath}
+                    onChange={(e) => { setDockerfilePath(e.target.value); override("dockerfilePath"); }}
                     placeholder="Dockerfile or apps/api/Dockerfile"
                   />
                 </Field>
                 <Field label="Docker target (optional)">
                   <Input
-                    value={dockerTarget}
-                    onChange={(e) => setDockerTarget(e.target.value)}
+                    value={shownDockerTarget}
+                    onChange={(e) => { setDockerTarget(e.target.value); override("dockerTarget"); }}
                     placeholder="api, worker, migrate…"
                   />
                 </Field>
@@ -160,8 +204,8 @@ export function AppSettingsForm({ app, onDelete }: { app: AppRow; onDelete?: () 
             ) : null}
             <Field label="Container command override (optional)">
               <Input
-                value={runtimeCmd}
-                onChange={(e) => setRuntimeCmd(e.target.value)}
+                value={shownRuntimeCmd}
+                onChange={(e) => { setRuntimeCmd(e.target.value); override("runtimeCmd"); }}
                 placeholder="Use the image CMD"
               />
             </Field>
@@ -169,8 +213,8 @@ export function AppSettingsForm({ app, onDelete }: { app: AppRow; onDelete?: () 
               <Field label="Container port">
                 <Input
                   type="number"
-                  value={port}
-                  onChange={(e) => setPort(Number(e.target.value))}
+                  value={shownPort}
+                  onChange={(e) => { setPort(Number(e.target.value)); override("port"); }}
                   min={1}
                   max={65535}
                 />

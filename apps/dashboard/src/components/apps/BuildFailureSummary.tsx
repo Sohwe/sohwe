@@ -40,6 +40,7 @@ export function BuildFailureSummary({
               {detail}
             </pre>
           ) : null}
+          <a className="mt-2 inline-block text-xs underline underline-offset-2" href="https://github.com/Sohwe/sohwe/blob/main/docs/deployment-troubleshooting.md" target="_blank" rel="noopener noreferrer">Deployment troubleshooting</a>
         </div>
         <CopyButton text={deployment.errorMessage} label="Copy failure details" />
       </div>

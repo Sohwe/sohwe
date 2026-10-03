@@ -731,6 +731,24 @@ describe("v7 application directory", () => {
   });
 });
 
+describe("v8 repository config", () => {
+  it("round-trips and signs the config path and overrides", () => {
+    const bundle = buildBundle([sampleApp({ configPath: "apps/api/sohwe.yaml", configOverrides: ["port"] })], OPTS);
+    const restored = parseBundle(bundle, OPTS.passphrase).apps[0]!;
+    assert.equal(restored.configPath, "apps/api/sohwe.yaml");
+    assert.deepEqual(restored.configOverrides, ["port"]);
+    const tampered = structuredClone(bundle);
+    tampered.apps[0]!.configOverrides = [];
+    assert.throws(() => parseBundle(tampered, OPTS.passphrase), /Invalid passphrase or corrupted bundle/);
+  });
+
+  it("defaults older bundles to no repository config", () => {
+    const older = parseBundle(GOLDEN_BUNDLE_V4, GOLDEN_PASSPHRASE).apps[0]!;
+    assert.equal(older.configPath, null);
+    assert.deepEqual(older.configOverrides, []);
+  });
+});
+
 describe("v6 projects and services", () => {
   it("round-trips the FleetOptics topology and encrypted variables", () => {
     const bundle = buildBundle([], OPTS, [], [FLEET_PROJECT]);

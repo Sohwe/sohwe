@@ -1,0 +1,15 @@
+# Place at the repository root as sohwe.yaml.
+version: 1
+application:
+  name: site
+  build:
+    mode: nixpacks
+    command: npm run build
+    startCommand: npm run start
+  runtime:
+    port: 3000
+  variables:
+    - key: PUBLIC_API_URL
+      scope: both
+      required: true
+      description: Public API origin used by the image build and container
