@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { CreateApplicationSchema, normalizeHostname, type ConfigField, type VariableEntry } from "@sohwe/types";
 import { missingRequiredVariables } from "@sohwe/types/required-variables";
 import { Lock, Search } from "lucide-react";
@@ -44,6 +44,18 @@ function repositoryNameFromUrl(value: string): { name: string; error: null } | {
     return { name, error: null };
   } catch {
     return { name: null, error: "Enter a valid HTTPS Git repository URL." };
+  }
+}
+
+function githubRepoNameFromUrl(url: string): string | undefined {
+  try {
+    const parsed = new URL(url.trim());
+    if (parsed.protocol !== "https:" || !["github.com", "www.github.com"].includes(parsed.hostname) || parsed.username || parsed.password || parsed.search || parsed.hash) return undefined;
+    const parts = parsed.pathname.split("/").filter(Boolean);
+    if (parts.length !== 2) return undefined;
+    return `${parts[0]}/${parts[1]!.replace(/\.git$/i, "")}`.toLowerCase();
+  } catch {
+    return undefined;
   }
 }
 
@@ -121,6 +133,9 @@ export function CreateAppDialog({
     enabled: open && !savedApp
   });
   const repository = repositoryNameFromUrl(cRepo);
+  const githubRepoName = githubRepoNameFromUrl(cRepo);
+  const pushRepo = reposQ.data?.repositories.find((repo) => repo.fullName.toLowerCase() === githubRepoName);
+  const canEnablePushDeploy = githubInstalled && reposQ.isSuccess && !!pushRepo;
   const branchesQ = useQuery({
     queryKey: ["repository-branches", cRepo.trim()],
     queryFn: () => api<{ branches: string[]; defaultBranch: string | null; truncated: boolean }>("/api/repositories/branches", {
@@ -197,6 +212,7 @@ export function CreateAppDialog({
 
   function changeRepo(next: string, suggestedName?: string, defaultBranch = "main") {
     setCRepo(next);
+    setCAutoDeploy(false);
     setInspectionRequested(false);
     setBranchLookupRequested(false);
     setManualBranch(false);
@@ -299,7 +315,7 @@ export function CreateAppDialog({
         // here too rather than being rejected as a malformed hostname.
         domain: cDomain.trim() ? normalizeHostname(cDomain) : undefined,
         variables,
-        autoDeploy: cAutoDeploy
+        autoDeploy: canEnablePushDeploy && cAutoDeploy
       });
       const app = await api<AppRow>("/api/applications", { method: "POST", body: JSON.stringify(body) });
       return { app, intent };
@@ -668,22 +684,37 @@ export function CreateAppDialog({
                 </Field>
               </div>
             </details>
-            {githubInstalled ? (
-              <label className="flex items-start gap-2 text-sm">
-                <Checkbox
-                  className="mt-0.5 h-4 w-4 rounded border-border"
-                  checked={cAutoDeploy}
-                  onChange={(e) => setCAutoDeploy(e.target.checked)}
-                />
-                <span>
-                  Deploy automatically on every push to{" "}
-                  <code className="text-xs">{effectiveBranch || "the tracked branch"}</code>
-                  <span className="block text-xs text-muted-foreground">
-                    Requires the repository to be shared with your GitHub App.
+            <section className="rounded-lg border border-border/70 bg-muted/20 p-3" aria-label="Push to deploy">
+              <h3 className="text-sm font-medium">Push to deploy</h3>
+              {canEnablePushDeploy ? (
+                <label className="mt-2 flex items-start gap-2 text-sm">
+                  <Checkbox
+                    className="mt-0.5 h-4 w-4 rounded border-border"
+                    checked={cAutoDeploy}
+                    onChange={(e) => setCAutoDeploy(e.target.checked)}
+                  />
+                  <span>
+                    Deploy future pushes to <code className="text-xs">{effectiveBranch || "the tracked branch"}</code> from <code className="text-xs">{pushRepo.fullName}</code>.
+                    <span className="block text-xs text-muted-foreground">
+                      Off by default. Create and deploy starts the first deployment now; turn this on to deploy later pushes to this branch.
+                    </span>
                   </span>
-                </span>
-              </label>
-            ) : null}
+                </label>
+              ) : (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {githubInstalled && reposQ.isPending
+                    ? "Checking whether this repository is shared with your GitHub App…"
+                    : githubInstalled && reposQ.isError
+                      ? "Could not verify GitHub repository access. Push to deploy is unavailable until the repository list loads."
+                      : !githubInstalled
+                        ? "Connect a GitHub App to enable push deploys for shared repositories."
+                        : githubRepoName
+                          ? "Share this repository with the connected GitHub App to enable push deploys."
+                          : "Push to deploy requires a GitHub repository shared with the connected App."}{" "}
+                  <Link to="/git" className="underline underline-offset-2">Git settings</Link>
+                </p>
+              )}
+            </section>
             <div className="flex justify-end gap-2">
               <Button type="submit" value="deploy" disabled={pending || !branchReady || !inspectionRequested || !inspection || inspectionQ.isFetching}>
                 {createMut.isPending ? "Creating…" : "Create and deploy"}

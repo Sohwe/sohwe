@@ -14,7 +14,13 @@ import {
   RollbackBodySchema,
   UpdateApplicationSchema
 } from "@sohwe/types";
-import { parseGitHubRepoUrl, repoFullName } from "@sohwe/github";
+import {
+  getInstallationToken,
+  listInstallationRepositories,
+  parseGitHubRepoUrl,
+  parseRepoFullName,
+  repoFullName
+} from "@sohwe/github";
 import { loadGitHubApp } from "@sohwe/github/resolve";
 import Docker from "dockerode";
 import IORedis from "ioredis";
@@ -169,6 +175,24 @@ export async function autoDeployBlocker(
     !githubApp.installations[0]?.accountLogin;
   if (!hasMatchingInstallation && !hasLegacyInstallation) {
     return `Install the GitHub App on ${owner ?? "the repository account"} first to enable auto-deploy.`;
+  }
+  const installation = githubApp.installations.find(
+    (item) => item.accountLogin?.toLowerCase() === owner
+  ) ?? githubApp.installations[0];
+  const ref = parseRepoFullName(repoName);
+  if (!installation || !ref) return "Choose a valid GitHub repository to enable auto-deploy.";
+  try {
+    const token = await getInstallationToken(
+      githubApp.appId,
+      githubApp.credentials.pem,
+      installation.installationId
+    );
+    const repositories = await listInstallationRepositories(token.token);
+    if (!repositories.some((repo) => repo.fullName.toLowerCase() === repoName.toLowerCase())) {
+      return `Share ${repoName} with the connected GitHub App before enabling auto-deploy.`;
+    }
+  } catch {
+    return "Could not verify GitHub repository access. Check the Git connection and try again.";
   }
   return null;
 }

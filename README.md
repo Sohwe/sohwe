@@ -42,6 +42,11 @@ connection. The production API image includes Git for this read-only
 inspection. Add runtime, build, or shared variables before
 deploying; you can enter them individually or paste `.env` values. Variable
 values are encrypted when the app is created, before the first build is queued.
+For a repository shared with your connected GitHub App, **Push to deploy**
+offers future deployments from the selected branch. It is off by default;
+**Create and deploy** starts the first deployment regardless of that choice.
+If the repository is not shared with the installation, connect it in **Git**
+settings before enabling push deploys.
 **Create and deploy** then opens the live build log. Use **Save for later**
 when you need more setup before the first deploy. If the deploy
 request fails after saving, the dialog shows the saved app with **Retry deploy**

@@ -10,6 +10,10 @@ write-ups.
 
 ## [Unreleased]
 
+### Changed
+
+- New application setup offers push-to-deploy only for repositories shared with a connected GitHub installation, shows the selected branch, and explains that future push deploys are off by default. The API verifies repository access before enabling auto-deploy, including installations limited to selected repositories.
+
 ## [0.9.0] - 2026-10-03
 
 ### Added
