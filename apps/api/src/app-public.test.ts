@@ -56,6 +56,7 @@ describe("defaultApplicationSelect", () => {
       "repoFullName",
       "autoDeploy",
       "buildMode",
+      "appDirectory",
       "port",
       "status",
       "memoryLimitMb",

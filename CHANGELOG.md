@@ -33,6 +33,19 @@ write-ups.
 
 ### Added
 
+- Application import now inspects the selected Git branch before creation and
+  previews the commit, evidence, app directory, builder, Dockerfile, commands,
+  and port. Admins can override every suggestion. Docker builds retain the
+  repository root as context; nested JavaScript workspaces keep the root for
+  Nixpacks and receive package-scoped command suggestions. Private GitHub
+  inspection uses installation credentials without returning them to the UI.
+- Branches now load into a dropdown during app creation and in existing app
+  settings, with the remote default first during creation and manual entry for
+  unavailable or unlisted branches.
+- A forward-only migration adds `app_directory` to applications, and portable
+  bundles advance to v7 while restoring older bundles with `.` as the default.
+- The production API image now includes Git for read-only repository inspection.
+
 - **Phase 9 projects and coordinated services.** A new Project owns one Git
   repository/branch and any number of `http`, `worker`, and one-shot `release`
   services. A project release clones once, records one commit SHA, builds every

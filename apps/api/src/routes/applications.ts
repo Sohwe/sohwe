@@ -265,6 +265,7 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
           buildCmd: body.buildCmd ?? null,
           startCmd: body.startCmd ?? null,
           runtimeCmd: body.runtimeCmd ?? null,
+          appDirectory: body.appDirectory,
           dockerfilePath: body.dockerfilePath,
           dockerTarget: body.dockerTarget ?? null,
           envVarsEncrypted: encodeVarBlob(initialVariables.env),
@@ -340,6 +341,7 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
       if (body.runtimeCmd !== undefined) {
         data.runtimeCmd = body.runtimeCmd ? body.runtimeCmd : null;
       }
+      if (body.appDirectory !== undefined) data.appDirectory = body.appDirectory;
       if (body.dockerfilePath !== undefined) {
         data.dockerfilePath = body.dockerfilePath;
       }

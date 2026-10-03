@@ -37,6 +37,7 @@ export type AppRow = {
   buildCmd: string | null;
   startCmd: string | null;
   runtimeCmd: string | null;
+  appDirectory: string;
   dockerfilePath: string;
   dockerTarget: string | null;
   /**
@@ -78,6 +79,26 @@ export function getCurrentDeploymentId(
 }
 
 export type BuildMode = "auto" | "dockerfile" | "nixpacks";
+
+export type RepositoryInspectionCandidate = {
+  directory: string;
+  buildMode: "dockerfile" | "nixpacks";
+  dockerfilePath: string;
+  buildCmd: string | null;
+  startCmd: string | null;
+  startDisplay: string | null;
+  runtimeCmd: string | null;
+  port: number;
+  evidence: { path: string; detail: string }[];
+};
+
+export type RepositoryInspection = {
+  commitSha: string;
+  branch: string;
+  buildContext: ".";
+  candidates: RepositoryInspectionCandidate[];
+  selected: RepositoryInspectionCandidate;
+};
 
 export type ServiceKind = "http" | "worker" | "release";
 

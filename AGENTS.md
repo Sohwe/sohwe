@@ -26,3 +26,8 @@ Sohwe is a pnpm 9/Turborepo monorepo using Node.js 24+. The API is Fastify, the 
 - Never edit released migrations or rename `20260722000000_init`: the upgrade baseline depends on that exact name. After schema changes, run `pnpm db:generate` and `pnpm typecheck`.
 - Wire new API or worker environment variables through `scripts/install.sh` and `docker-compose.prod.yml` as well as local configuration.
 - Update `README.md` and `CHANGELOG.md` when installer, host CLI, Docker, or production behavior changes. Keep `UPCOMING_PLANS.md` aligned with active work.
+
+## Release versions
+
+- Use semantic version tags. New features bump the minor version; bug fixes bump the patch version. Decide the version explicitly for breaking changes before tagging.
+- Before a release tag, update the root package version, lockfile, and changelog to match the tag. Do not use a patch tag for a feature release.

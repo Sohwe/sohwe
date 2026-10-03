@@ -1,6 +1,6 @@
 # Application onboarding priorities
 
-Status: **priorities 1–3 implemented; fixture validation remains; priorities 4–9 planned**
+Status: **priorities 1–4 implemented; live fixture validation remains; priorities 5–9 planned**
 Last reviewed: 2026-10-03
 
 ## Goal and scope
@@ -13,8 +13,8 @@ Target flow: **choose or paste a repo → review suggested settings → add requ
 variables → deploy → open the URL**. An admin must remain able to inspect and
 override every suggestion.
 
-This plan tracks the sequence of work. Priorities 1–3 are implemented; the
-first release acceptance repositories still need to be exercised.
+This plan tracks the sequence of work. Priorities 1–4 are implemented; the
+first release acceptance repositories still need to be exercised live.
 
 ## Dashboard redesign direction
 
@@ -60,6 +60,12 @@ redesign remains open.
 - Push-to-deploy is available for a connected GitHub repository but is off by
   default. Generated app URLs, live build logs, and custom-domain guidance
   already exist.
+- The new-app form inspects the selected branch in a temporary checkout and
+  shows commit, candidate directories, detected files, suggested builder,
+  Dockerfile path, commands, and port before creation. Each value can be
+  changed. Docker builds retain the repository root as context; nested
+  JavaScript workspaces retain it for Nixpacks too. Repository branches load
+  into a dropdown with the remote default first and manual entry as fallback.
 
 Code entry points: [new-app dialog](../apps/dashboard/src/components/apps/CreateAppDialog.tsx),
 [application routes](../apps/api/src/routes/applications.ts),
@@ -87,7 +93,7 @@ must be **suggestions**, not hidden assumptions.
 | 1 | P0 | **Create and deploy** as the primary action, opening the new deployment's live log. Keep **Save for later** for apps needing more setup. If deployment enqueueing fails after creation, show the saved app and a clear retry action; never silently create a second app. **Implemented.** | Removes an unnecessary step from every first deploy. | Small |
 | 2 | P0 | **Reduce manual form entry.** Derive name and slug from pasted Git URLs as well as picker selections; preserve user edits. Put Docker targets, command overrides, and custom domain under an Advanced section. Keep branch and port visible with clear defaults. Validate slug collisions and malformed URLs in context. **Implemented.** | Makes the common case understandable without removing control. | Small–medium |
 | 3 | P0 | **Variables before first deploy.** Put Sohwe's existing scoped variable editor and bulk paste in the creation flow. Save encrypted variables before queueing the build. Treat creation and initial configuration as one reliable operation, or provide a recoverable draft if a later step fails. **Implemented.** | Prevents avoidable first-build failures and secret handling workarounds. | Medium |
-| 4 | P1 | **Repository inspection and build-plan preview.** After repo selection, inspect the chosen branch and propose build mode, root or app directory, Dockerfile, likely start command, and container port. Show the evidence and resolved build plan. Preserve repository-root build context for workspaces and let users override each suggestion. | Highest potential to improve success for unfamiliar repos and monorepos, but requires careful design and validation. | Large |
+| 4 | P1 | **Repository inspection and build-plan preview.** After repo selection, inspect the chosen branch and propose build mode, root or app directory, Dockerfile, likely start command, and container port. Show the evidence and resolved build plan. Preserve repository-root build context for workspaces and let users override each suggestion. **Implemented; live private-repo acceptance remains.** | Highest potential to improve success for unfamiliar repos and monorepos, but requires careful design and validation. | Large |
 | 5 | P1 | **Repository config file and deployment docs.** Support the proposed `sohwe.yaml` format below, with validation and visible source/override rules. Publish a quickstart, full field reference, examples, and troubleshooting guide. | Lets teams commit repeatable, reviewable app preferences and makes unfamiliar deployments easier to understand. Build-plan preview in item 4 provides the right UI for reviewing file values. | Medium–large |
 | 6 | P1 | **First-deploy diagnosis.** Give specific remedies for inaccessible repos, missing branches, wrong Dockerfile paths, missing start commands, port mismatches, and missing variables. Link each diagnosis to the setting that fixes it, while retaining raw logs. | Reduces time from failed build to a working app. | Medium |
 | 7 | P1 | **Git push behavior in setup.** When a repo comes from a connected GitHub installation, clearly offer push-to-deploy with the selected branch and explain the default. Do not show an enabled state for a repo that cannot receive webhooks. | Aligns setup with the expectation created by Git-based deploy platforms. | Small–medium |

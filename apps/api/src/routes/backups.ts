@@ -760,6 +760,7 @@ export async function registerBackupRoutes(app: FastifyInstance) {
             buildCmd: a.buildCmd,
             startCmd: a.startCmd,
             runtimeCmd: a.runtimeCmd,
+            appDirectory: a.appDirectory,
             dockerfilePath: a.dockerfilePath,
             dockerTarget: a.dockerTarget,
             port: a.port,

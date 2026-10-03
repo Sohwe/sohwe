@@ -60,6 +60,9 @@ RUN pnpm --filter @sohwe/db exec prisma generate
 ############################
 FROM base AS runtime
 ARG SOHWE_VERSION
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git \
+ && rm -rf /var/lib/apt/lists/*
 ENV NODE_ENV=production \
     PORT=3001 \
     HOST=0.0.0.0 \

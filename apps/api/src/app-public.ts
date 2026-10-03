@@ -46,6 +46,7 @@ const applicationScalarSelect = {
   buildCmd: true,
   startCmd: true,
   runtimeCmd: true,
+  appDirectory: true,
   dockerfilePath: true,
   dockerTarget: true,
   port: true,

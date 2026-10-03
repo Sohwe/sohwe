@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { UpdateApplicationSchema } from "@sohwe/types";
 import { toast } from "sonner";
 import { useRouter } from "@tanstack/react-router";
@@ -19,10 +19,23 @@ export function AppSettingsForm({ app, onDelete }: { app: AppRow; onDelete?: () 
   const [buildCmd, setBuildCmd] = useState(app.buildCmd ?? "");
   const [startCmd, setStartCmd] = useState(app.startCmd ?? "");
   const [runtimeCmd, setRuntimeCmd] = useState(app.runtimeCmd ?? "");
+  const [appDirectory, setAppDirectory] = useState(app.appDirectory ?? ".");
   const [dockerfilePath, setDockerfilePath] = useState(app.dockerfilePath ?? "Dockerfile");
   const [dockerTarget, setDockerTarget] = useState(app.dockerTarget ?? "");
   const [port, setPort] = useState(app.port);
   const [branch, setBranch] = useState(app.gitBranch);
+  const [manualBranch, setManualBranch] = useState(false);
+  const branchesQ = useQuery({
+    queryKey: ["repository-branches", app.gitRepo],
+    queryFn: () => api<{ branches: string[]; defaultBranch: string | null; truncated: boolean }>("/api/repositories/branches", {
+      method: "POST",
+      body: JSON.stringify({ gitRepo: app.gitRepo })
+    }),
+    staleTime: 60_000,
+    retry: false
+  });
+  const branchChoices = branchesQ.data?.branches ?? [];
+  const showManualBranch = manualBranch || branchesQ.isError || branchesQ.isSuccess && !branchChoices.includes(branch);
   const [memMb, setMemMb] = useState(app.memoryLimitMb != null ? String(app.memoryLimitMb) : "");
   const [cpuStr, setCpuStr] = useState(app.cpuLimit != null ? String(app.cpuLimit) : "");
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -34,6 +47,7 @@ export function AppSettingsForm({ app, onDelete }: { app: AppRow; onDelete?: () 
         buildCmd: buildCmd ? buildCmd : null,
         startCmd: startCmd ? startCmd : null,
         runtimeCmd: runtimeCmd ? runtimeCmd : null,
+        appDirectory,
         dockerfilePath,
         dockerTarget: dockerTarget ? dockerTarget : null,
         port,
@@ -94,10 +108,31 @@ export function AppSettingsForm({ app, onDelete }: { app: AppRow; onDelete?: () 
                 </Select>
               </Field>
               <Field label="Branch">
-                <Input value={branch} onChange={(e) => setBranch(e.target.value)} />
+                {branchesQ.isSuccess && branchChoices.length > 0 ? (
+                  <Select value={showManualBranch ? ":manual" : branch} onValueChange={(value) => {
+                    if (value === ":manual") setManualBranch(true);
+                    else { setBranch(value); setManualBranch(false); }
+                  }}>
+                    <SelectTrigger><SelectValue placeholder="Choose a branch" /></SelectTrigger>
+                    <SelectContent>
+                      {branchChoices.map((name) => <SelectItem key={name} value={name}>{name}{name === branchesQ.data.defaultBranch ? " (default)" : ""}</SelectItem>)}
+                      <SelectItem value=":manual">Enter a branch manually…</SelectItem>
+                    </SelectContent>
+                  </Select>
+                ) : branchesQ.isError || branchesQ.isSuccess ? null : (
+                  <Select disabled><SelectTrigger><SelectValue placeholder="Loading branches…" /></SelectTrigger></Select>
+                )}
+                {showManualBranch || branchesQ.isSuccess && branchChoices.length === 0 ? (
+                  <Input value={branch} onChange={(e) => setBranch(e.target.value)} placeholder="Branch name" />
+                ) : null}
+                {branchesQ.isError ? <span className="text-xs text-muted-foreground">Could not load branches. Enter a branch name to continue.</span> : null}
+                {branchesQ.data?.truncated ? <span className="text-xs text-muted-foreground">Showing the first 100 branches. Enter another branch manually if needed.</span> : null}
               </Field>
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="App directory (repository relative)">
+                <Input value={appDirectory} onChange={(e) => setAppDirectory(e.target.value)} placeholder=". or apps/api" />
+              </Field>
               <Field label="Build command (nixpacks override)">
                 <Input value={buildCmd} onChange={(e) => setBuildCmd(e.target.value)} placeholder="(auto)" />
               </Field>

@@ -30,8 +30,9 @@ export const BUNDLE_FORMAT = "sohwe-backup" as const;
  *   process as the source app.
  * - v6: adds projects, services, project datastore bindings, and their
  *   encrypted variable blocks.
+ * - v7: adds the application directory used during repository import.
  */
-export const BUNDLE_VERSION = 6 as const;
+export const BUNDLE_VERSION = 7 as const;
 
 // --- Input shapes (plaintext, supplied by the API) -------------------------
 
@@ -57,6 +58,7 @@ export type BundleAppInput = {
   buildCmd: string | null;
   startCmd: string | null;
   runtimeCmd: string | null;
+  appDirectory?: string;
   dockerfilePath: string;
   dockerTarget: string | null;
   port: number;
@@ -249,6 +251,8 @@ const AppEntrySchema = z.object({
   startCmd: z.string().nullable(),
   /** v5+. Defaults are supplied while parsing older bundles. */
   runtimeCmd: z.string().nullable().optional(),
+  /** v7+. Defaults to the repository root for old bundles. */
+  appDirectory: z.string().optional(),
   /** v5+. Repository-relative path; validated by the API when first saved. */
   dockerfilePath: z.string().optional(),
   /** v5+. Named stage from a multi-stage Dockerfile. */
@@ -338,17 +342,25 @@ export const BundleManifestV6Schema = z.object({
   projects: z.array(ProjectEntrySchema)
 });
 
+export const BundleManifestV7Schema = z.object({
+  ...ManifestBase,
+  version: z.literal(7),
+  datastores: z.array(DatastoreEntrySchema),
+  projects: z.array(ProjectEntrySchema)
+});
+
 export const BundleManifestSchema = z.discriminatedUnion("version", [
   BundleManifestV1Schema,
   BundleManifestV2Schema,
   BundleManifestV3Schema,
   BundleManifestV4Schema,
   BundleManifestV5Schema,
-  BundleManifestV6Schema
+  BundleManifestV6Schema,
+  BundleManifestV7Schema
 ]);
 
 /** The manifest `buildBundle` emits (always the current version). */
-export type BundleManifest = z.infer<typeof BundleManifestV6Schema>;
+export type BundleManifest = z.infer<typeof BundleManifestV7Schema>;
 /** Any version `parseBundle` accepts. */
 export type AnyBundleManifest = z.infer<typeof BundleManifestSchema>;
 export type BundleAppEntry = z.infer<typeof AppEntrySchema>;
@@ -363,6 +375,7 @@ export type ParsedBundleApp = Omit<
   | "buildArgs"
   | "domains"
   | "runtimeCmd"
+  | "appDirectory"
   | "dockerfilePath"
   | "dockerTarget"
 > & {
@@ -375,6 +388,7 @@ export type ParsedBundleApp = Omit<
   */
   domains: string[];
   runtimeCmd: string | null;
+  appDirectory: string;
   dockerfilePath: string;
   dockerTarget: string | null;
 };
@@ -442,6 +456,7 @@ export function buildBundle(
       buildCmd: a.buildCmd,
       startCmd: a.startCmd,
       runtimeCmd: a.runtimeCmd,
+      appDirectory: a.appDirectory ?? ".",
       dockerfilePath: a.dockerfilePath,
       dockerTarget: a.dockerTarget,
       port: a.port,
@@ -631,6 +646,7 @@ export function parseBundle(raw: unknown, passphrase: string): ParsedBundle {
       buildArgs,
       domains,
       runtimeCmd,
+      appDirectory,
       dockerfilePath,
       dockerTarget,
       ...rest
@@ -641,13 +657,14 @@ export function parseBundle(raw: unknown, passphrase: string): ParsedBundle {
       buildArgs: decryptBlock(buildArgs),
       domains: domains ?? (rest.domain ? [rest.domain] : []),
       runtimeCmd: runtimeCmd ?? null,
+      appDirectory: appDirectory ?? ".",
       dockerfilePath: dockerfilePath ?? "Dockerfile",
       dockerTarget: dockerTarget ?? null
     };
   });
 
   const projects =
-    manifest.version === 6
+    (manifest.version === 6 || manifest.version === 7)
       ? manifest.projects.map((project) => ({
           name: project.name,
           slug: project.slug,

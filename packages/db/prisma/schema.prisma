@@ -247,6 +247,7 @@ model Application {
   buildCmd           String?            @map("build_command")
   startCmd           String?            @map("start_command")
   runtimeCmd         String?            @map("runtime_command")
+  appDirectory       String             @default(".") @map("app_directory")
   dockerfilePath     String             @default("Dockerfile") @map("dockerfile_path")
   dockerTarget       String?            @map("docker_target")
   port               Int                @default(3000)

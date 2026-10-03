@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { NODE_VERSION_KEY, resolveNodeVersion } from "./node-version";
@@ -10,6 +10,8 @@ export type BuildMode = "auto" | "dockerfile" | "nixpacks";
 
 export type BuildOptions = {
   contextDir: string;
+  /** App source within the checkout. Docker always keeps contextDir. */
+  appDirectory?: string | null;
   imageTag: string;
   /** How the user configured the app. "auto" inspects `contextDir` to pick. */
   mode: BuildMode;
@@ -63,6 +65,29 @@ export type NixpacksBuildOptions = {
   buildArgs?: BuildArgs | null;
   onLogLine: LogHandler;
 };
+
+/** Keep workspace dependencies available to Nixpacks; standalone nested apps use their own source. */
+export function resolveNixpacksSource(contextDir: string, appDirectory?: string | null): string {
+  const directory = appDirectory?.trim() || ".";
+  if (directory.includes("\0") || isAbsolute(directory) || directory.split(/[\\/]/).includes("..")) {
+    throw new Error("App directory must stay inside the repository root.");
+  }
+  const root = realpathSync(contextDir);
+  const target = realpathSync(resolve(root, directory));
+  const fromRoot = relative(root, target);
+  if (fromRoot === ".." || fromRoot.startsWith(`..${sep}`) || !statSync(target).isDirectory()) {
+    throw new Error("App directory must stay inside the repository root.");
+  }
+  if (directory === ".") return root;
+  let workspace = existsSync(join(root, "pnpm-workspace.yaml")) || existsSync(join(root, "turbo.json"));
+  if (!workspace && existsSync(join(root, "package.json"))) {
+    try {
+      const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { workspaces?: unknown };
+      workspace = pkg.workspaces !== undefined;
+    } catch { /* Let Nixpacks explain a malformed manifest. */ }
+  }
+  return workspace && existsSync(join(target, "package.json")) ? root : target;
+}
 
 const DEFAULT_DOCKERFILE = "Dockerfile";
 const DOCKER_TARGET_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -327,6 +352,7 @@ export async function nixpacksBuild(opts: NixpacksBuildOptions): Promise<void> {
 export async function buildAppImage(opts: BuildOptions): Promise<BuildResult> {
   const {
     contextDir,
+    appDirectory,
     imageTag,
     mode,
     buildCmd,
@@ -393,7 +419,8 @@ export async function buildAppImage(opts: BuildOptions): Promise<BuildResult> {
   // Nixpacks falls back to Node 18 (end of life) when a repo pins nothing.
   // Fill in a supported LTS instead — only for Nixpacks, and only when neither
   // the user nor the repo has expressed a preference.
-  const nodeVersion = resolveNodeVersion(contextDir, buildArgs);
+  const sourceDir = resolveNixpacksSource(contextDir, appDirectory);
+  const nodeVersion = resolveNodeVersion(sourceDir, buildArgs);
   const resolvedArgs = nodeVersion.applied
     ? { ...buildArgs, [NODE_VERSION_KEY]: nodeVersion.version }
     : buildArgs;
@@ -407,7 +434,7 @@ export async function buildAppImage(opts: BuildOptions): Promise<BuildResult> {
   }
 
   await nixpacksBuild({
-    contextDir,
+    contextDir: sourceDir,
     imageTag,
     buildCmd,
     startCmd,

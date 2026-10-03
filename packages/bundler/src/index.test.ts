@@ -717,6 +717,20 @@ describe("v5 Docker deployment settings", () => {
   });
 });
 
+describe("v7 application directory", () => {
+  it("round-trips a nested directory and signs it", () => {
+    const bundle = buildBundle([sampleApp({ appDirectory: "apps/api" })], OPTS);
+    assert.equal(parseBundle(bundle, OPTS.passphrase).apps[0]?.appDirectory, "apps/api");
+    const tampered = structuredClone(bundle);
+    tampered.apps[0]!.appDirectory = "apps/web";
+    assert.throws(() => parseBundle(tampered, OPTS.passphrase), /Invalid passphrase or corrupted bundle/);
+  });
+
+  it("defaults older bundles to the repository root", () => {
+    assert.equal(parseBundle(GOLDEN_BUNDLE_V4, GOLDEN_PASSPHRASE).apps[0]?.appDirectory, ".");
+  });
+});
+
 describe("v6 projects and services", () => {
   it("round-trips the FleetOptics topology and encrypted variables", () => {
     const bundle = buildBundle([], OPTS, [], [FLEET_PROJECT]);
@@ -724,7 +738,7 @@ describe("v6 projects and services", () => {
     assert.equal(raw.includes("project-secret"), false);
     assert.equal(raw.includes('"projects"'), true);
     const parsed = parseBundle(bundle, OPTS.passphrase);
-    assert.equal(parsed.version, 6);
+    assert.equal(parsed.version, BUNDLE_VERSION);
     assert.deepEqual(
       parsed.projects[0]?.services.map((service) => [service.kind, service.dockerTarget]),
       [["http", "api"], ["worker", "worker"], ["release", "migrate"]]

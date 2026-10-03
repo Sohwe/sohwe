@@ -791,6 +791,21 @@ describe("API routes", { skip }, () => {
       assert.equal(rows[0]?.id, created.id);
     });
 
+    it("restricts repository inspection to admins and rejects private network hosts", async () => {
+      const ownerCookie = await signIn();
+      const memberCookie = await signInAs("member");
+      const payload = { gitRepo: "https://127.0.0.1/private.git", branch: "main" };
+      const unauthorized = await app.inject({ method: "POST", url: "/api/repositories/inspect", payload });
+      assert.equal(unauthorized.statusCode, 401);
+      const forbidden = await app.inject({ method: "POST", url: "/api/repositories/inspect", headers: { cookie: memberCookie }, payload });
+      assert.equal(forbidden.statusCode, 403);
+      const rejected = await app.inject({ method: "POST", url: "/api/repositories/inspect", headers: { cookie: ownerCookie }, payload });
+      assert.equal(rejected.statusCode, 400);
+      assert.ok(!rejected.body.includes("127.0.0.1"));
+      const branches = await app.inject({ method: "POST", url: "/api/repositories/branches", headers: { cookie: memberCookie }, payload });
+      assert.equal(branches.statusCode, 403);
+    });
+
     it("stores initial scoped variables with creation, without exposing their values", async () => {
       const cookie = await signIn();
       const runtimeValue = "runtime-secret-value";
@@ -874,6 +889,7 @@ describe("API routes", { skip }, () => {
     it("creates, returns, and updates Docker monorepo settings", async () => {
       const cookie = await signIn();
       const created = await createApp(cookie, {
+        appDirectory: "apps/api",
         dockerfilePath: "apps/api/Dockerfile",
         dockerTarget: "api",
         runtimeCmd: "node dist/server.js"
@@ -884,17 +900,20 @@ describe("API routes", { skip }, () => {
         url: `/api/applications/${created.id}`,
         headers: { cookie },
         payload: {
+          appDirectory: "apps/worker",
           dockerTarget: "worker",
           runtimeCmd: "node dist/worker.js"
         }
       });
       assert.equal(patched.statusCode, 200, patched.body);
       const body = patched.json() as {
+        appDirectory: string;
         dockerfilePath: string;
         dockerTarget: string | null;
         runtimeCmd: string | null;
       };
       assert.equal(body.dockerfilePath, "apps/api/Dockerfile");
+      assert.equal(body.appDirectory, "apps/worker");
       assert.equal(body.dockerTarget, "worker");
       assert.equal(body.runtimeCmd, "node dist/worker.js");
 
@@ -902,6 +921,7 @@ describe("API routes", { skip }, () => {
         where: { id: created.id }
       });
       assert.equal(row.dockerfilePath, "apps/api/Dockerfile");
+      assert.equal(row.appDirectory, "apps/worker");
       assert.equal(row.dockerTarget, "worker");
       assert.equal(row.runtimeCmd, "node dist/worker.js");
     });

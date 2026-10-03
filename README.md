@@ -24,10 +24,20 @@ Implemented in the current codebase:
 ### Create your first application
 
 Open **Applications → New app**, select a repository shared with your GitHub
-App or paste a public HTTPS Git URL. Sohwe suggests a name and slug from the
-repository; you can edit both. Review the branch, container port, and build
-mode, then open **Advanced settings** for Dockerfile paths and targets, command
-overrides, or a custom domain. Add runtime, build, or shared variables before
+App or paste a public HTTPS Git URL. Sohwe loads the repository's branches into
+a dropdown with the default branch first; manual entry remains available when
+the list cannot be loaded or a branch is not shown. The same picker appears in
+an existing app's build settings. After you choose a branch, Sohwe inspects
+that branch and shows the commit, detected app directories, file evidence, and
+the build plan before creation. It suggests Dockerfile or Nixpacks, a
+repository-relative app directory and Dockerfile path, likely commands, and a
+container port. Review these suggestions, then change any of them in the form;
+**Advanced settings** holds Dockerfile paths and targets, command overrides,
+and a custom domain. The inspection reads source only. It does not run repo
+code or copy `.env` values. Connected private GitHub repositories use the
+installation's short-lived access token; public HTTPS repositories need no
+connection. The production API image includes Git for this read-only
+inspection. Add runtime, build, or shared variables before
 deploying; you can enter them individually or paste `.env` values. Variable
 values are encrypted when the app is created, before the first build is queued.
 **Create and deploy** then opens the live build log. Use **Save for later**
@@ -162,6 +172,14 @@ and shared packages. In an application's build settings, set:
 Absolute Dockerfile paths, parent-directory traversal, and paths that resolve
 through a symlink outside the cloned repository are rejected. These settings
 are also preserved in portable backup bundles.
+
+The **App directory** identifies the application within a repository. A
+standalone nested Nixpacks app builds from that directory. A JavaScript
+workspace keeps the repository root as Nixpacks source so its lockfile and
+shared packages remain available; inspection suggests package-scoped build and
+start commands for the selected app. Dockerfile mode always uses the repository
+root as build context regardless of app directory. Inspection is advisory:
+confirm ports and commands against the app's actual runtime before deploying.
 
 ### Multi-service projects
 

@@ -28,6 +28,7 @@ import { registerAuditRoutes } from "./routes/audit";
 import { registerBackupRoutes } from "./routes/backups";
 import { registerBuildArgRoutes } from "./routes/build-args";
 import { registerApplicationRoutes } from "./routes/applications";
+import { registerRepositoryInspectionRoutes } from "./routes/repository-inspection";
 import { registerDatastoreRoutes } from "./routes/datastores";
 import { registerDnsRoutes } from "./routes/dns";
 import { registerDomainRoutes } from "./routes/domains";
@@ -205,6 +206,7 @@ export async function buildServer(
   });
 
   await registerApplicationRoutes(app);
+  await registerRepositoryInspectionRoutes(app);
   await registerProjectRoutes(app);
   await registerEnvVarRoutes(app);
   await registerBuildArgRoutes(app);

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -11,6 +11,7 @@ import {
   redactValues,
   resolveDockerfilePath,
   resolveDockerTarget,
+  resolveNixpacksSource,
   type LogHandler
 } from "./index";
 
@@ -41,6 +42,22 @@ afterEach(async () => {
 async function addDockerfile(): Promise<void> {
   await writeFile(join(dir, "Dockerfile"), "FROM scratch\n", "utf8");
 }
+
+describe("Nixpacks source directory", () => {
+  it("uses the repository root for a workspace package", async () => {
+    await mkdir(join(dir, "apps", "api"), { recursive: true });
+    await writeFile(join(dir, "pnpm-workspace.yaml"), "packages:\n  - apps/*\n");
+    await writeFile(join(dir, "apps", "api", "package.json"), "{}");
+    assert.equal(resolveNixpacksSource(dir, "apps/api"), await realpath(dir));
+  });
+
+  it("uses a nested standalone app and rejects a symlink escape", async () => {
+    await mkdir(join(dir, "api"));
+    assert.equal(resolveNixpacksSource(dir, "api"), await realpath(join(dir, "api")));
+    await symlink(tmpdir(), join(dir, "escape"));
+    assert.throws(() => resolveNixpacksSource(dir, "escape"), /inside the repository/);
+  });
+});
 
 /** Which engine a build attempt reached, inferred from its announcement line. */
 function announcedEngine(): "dockerfile" | "nixpacks" | null {

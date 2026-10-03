@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { CreateApplicationSchema, normalizeHostname, type VariableEntry } from "@sohwe/types";
@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { api, apiGet } from "@/lib/api";
-import type { AppRow, BuildMode, GitHubAppStatus, GitHubRepo } from "@/lib/types";
+import type { AppRow, BuildMode, GitHubAppStatus, GitHubRepo, RepositoryInspection } from "@/lib/types";
 import { InitialVariablesEditor, type InitialVariablesEditorHandle } from "./InitialVariablesEditor";
 
 /** `my-cool-repo` -> a slug that satisfies the API's `[a-z0-9-]+` rule. */
@@ -67,6 +67,7 @@ export function CreateAppDialog({
   const [cBuildCmd, setCBuildCmd] = useState("");
   const [cStartCmd, setCStartCmd] = useState("");
   const [cRuntimeCmd, setCRuntimeCmd] = useState("");
+  const [cAppDirectory, setCAppDirectory] = useState(".");
   const [cDockerfilePath, setCDockerfilePath] = useState("Dockerfile");
   const [cDockerTarget, setCDockerTarget] = useState("");
   const [cDomain, setCDomain] = useState("");
@@ -78,6 +79,8 @@ export function CreateAppDialog({
   const [nameEdited, setNameEdited] = useState(false);
   const [slugEdited, setSlugEdited] = useState(false);
   const [branchEdited, setBranchEdited] = useState(false);
+  const [manualBranch, setManualBranch] = useState(false);
+  const [branchLookupRequested, setBranchLookupRequested] = useState(false);
   const [repoTouched, setRepoTouched] = useState(false);
   const [slugTouched, setSlugTouched] = useState(false);
   // A taken slug is a field problem, not a request problem — show it on the
@@ -85,6 +88,8 @@ export function CreateAppDialog({
   const [slugError, setSlugError] = useState<string | null>(null);
   const [savedApp, setSavedApp] = useState<AppRow | null>(null);
   const [deployError, setDeployError] = useState<string | null>(null);
+  const [inspectionRequested, setInspectionRequested] = useState(false);
+  const [editedPlanFields, setEditedPlanFields] = useState<Set<string>>(() => new Set());
 
   const githubQ = useQuery({
     queryKey: ["github", "app"],
@@ -114,6 +119,56 @@ export function CreateAppDialog({
     enabled: open && !savedApp
   });
   const repository = repositoryNameFromUrl(cRepo);
+  const branchesQ = useQuery({
+    queryKey: ["repository-branches", cRepo.trim()],
+    queryFn: () => api<{ branches: string[]; defaultBranch: string | null; truncated: boolean }>("/api/repositories/branches", {
+      method: "POST",
+      body: JSON.stringify({ gitRepo: cRepo.trim() })
+    }),
+    enabled: open && branchLookupRequested && !repository.error && !savedApp,
+    retry: false,
+    staleTime: 60_000
+  });
+  const effectiveBranch = branchEdited ? cBranch : branchesQ.data?.defaultBranch ?? cBranch;
+  const branchChoices = branchesQ.data?.branches ?? [];
+  const branchReady = branchesQ.isSuccess || branchesQ.isError;
+  const showManualBranch = manualBranch || branchesQ.isError || branchesQ.isSuccess && !branchChoices.includes(effectiveBranch);
+  const inspectionDirectory = editedPlanFields.has("appDirectory") ? cAppDirectory : undefined;
+  const inspectionQ = useQuery({
+    queryKey: ["repository-inspection", cRepo.trim(), effectiveBranch.trim(), inspectionDirectory],
+    queryFn: () => api<RepositoryInspection>("/api/repositories/inspect", {
+      method: "POST",
+      body: JSON.stringify({ gitRepo: cRepo.trim(), branch: effectiveBranch.trim(), directory: inspectionDirectory })
+    }),
+    enabled: open && branchReady && inspectionRequested && !repository.error && !!effectiveBranch.trim() && !savedApp,
+    retry: false,
+    staleTime: 60_000
+  });
+  const inspection = inspectionQ.data;
+  const effectiveDirectory = editedPlanFields.has("appDirectory") ? cAppDirectory : inspection?.selected.directory ?? cAppDirectory;
+  const selectedCandidate = inspection?.candidates.find((candidate) => candidate.directory === effectiveDirectory) ?? inspection?.selected;
+  const effectiveMode = editedPlanFields.has("buildMode") ? cBuildMode : selectedCandidate?.buildMode ?? cBuildMode;
+  const effectiveDockerfile = editedPlanFields.has("dockerfilePath") ? cDockerfilePath : selectedCandidate?.dockerfilePath ?? cDockerfilePath;
+  const effectiveBuildCmd = editedPlanFields.has("buildCmd") ? cBuildCmd : selectedCandidate?.buildCmd ?? cBuildCmd;
+  const effectiveStartCmd = editedPlanFields.has("startCmd") ? cStartCmd : selectedCandidate?.startCmd ?? cStartCmd;
+  const effectiveRuntimeCmd = editedPlanFields.has("runtimeCmd") ? cRuntimeCmd : selectedCandidate?.runtimeCmd ?? cRuntimeCmd;
+  const effectivePort = editedPlanFields.has("port") ? cPort : selectedCandidate?.port ?? cPort;
+
+  useEffect(() => {
+    if (!open || repository.error || !branchReady || !effectiveBranch.trim()) return;
+    const timer = setTimeout(() => setInspectionRequested(true), 500);
+    return () => clearTimeout(timer);
+  }, [open, cRepo, effectiveBranch, inspectionDirectory, branchReady, repository.error]);
+
+  useEffect(() => {
+    if (!open || repository.error) return;
+    const timer = setTimeout(() => setBranchLookupRequested(true), 500);
+    return () => clearTimeout(timer);
+  }, [open, cRepo, repository.error]);
+
+  function markEdited(field: string) {
+    setEditedPlanFields((current) => new Set(current).add(field));
+  }
   const repoError = repoTouched ? repository.error : null;
   const slugTaken = appsQ.data?.some((app) => app.slug === cSlug) ?? false;
   const currentSlugError = slugTaken
@@ -133,6 +188,12 @@ export function CreateAppDialog({
 
   function changeRepo(next: string, suggestedName?: string, defaultBranch = "main") {
     setCRepo(next);
+    setInspectionRequested(false);
+    setBranchLookupRequested(false);
+    setManualBranch(false);
+    setBranchEdited(false);
+    setCAppDirectory(".");
+    setEditedPlanFields(new Set());
     const parsed = repositoryNameFromUrl(next);
     const name = suggestedName ?? parsed.name ?? "";
     if (!nameEdited) setCName(name);
@@ -140,7 +201,7 @@ export function CreateAppDialog({
       setCSlug(slugFromRepoName(name));
       setSlugError(null);
     }
-    if (!branchEdited) setCBranch(defaultBranch);
+    setCBranch(defaultBranch);
   }
 
   function pickRepo(fullName: string) {
@@ -161,6 +222,7 @@ export function CreateAppDialog({
     setCBuildCmd("");
     setCStartCmd("");
     setCRuntimeCmd("");
+    setCAppDirectory(".");
     setCDockerfilePath("Dockerfile");
     setCDockerTarget("");
     setCDomain("");
@@ -172,11 +234,15 @@ export function CreateAppDialog({
     setNameEdited(false);
     setSlugEdited(false);
     setBranchEdited(false);
+    setManualBranch(false);
+    setBranchLookupRequested(false);
     setRepoTouched(false);
     setSlugTouched(false);
     setSlugError(null);
     setSavedApp(null);
     setDeployError(null);
+    setInspectionRequested(false);
+    setEditedPlanFields(new Set());
   }
 
   const deployMut = useMutation({
@@ -206,13 +272,14 @@ export function CreateAppDialog({
         name: cName,
         slug: cSlug,
         gitRepo: cRepo.trim(),
-        gitBranch: cBranch,
-        port: cPort,
-        buildMode: cBuildMode,
-        buildCmd: cBuildCmd || undefined,
-        startCmd: cStartCmd || undefined,
-        runtimeCmd: cRuntimeCmd || undefined,
-        dockerfilePath: cDockerfilePath,
+        gitBranch: effectiveBranch,
+        port: effectivePort,
+        buildMode: effectiveMode,
+        buildCmd: effectiveBuildCmd || undefined,
+        startCmd: effectiveStartCmd || undefined,
+        runtimeCmd: effectiveRuntimeCmd || undefined,
+        appDirectory: effectiveDirectory,
+        dockerfilePath: effectiveDockerfile,
         dockerTarget: cDockerTarget || undefined,
         // Normalized the same way the Domains tab does, so a pasted URL works
         // here too rather than being rejected as a malformed hostname.
@@ -297,7 +364,7 @@ export function CreateAppDialog({
               e.preventDefault();
               setRepoTouched(true);
               setSlugTouched(true);
-              if (repository.error || !cSlug || !/^[a-z0-9-]+$/.test(cSlug) || slugTaken) return;
+              if (repository.error || !cSlug || !/^[a-z0-9-]+$/.test(cSlug) || slugTaken || !branchReady || !inspectionRequested || !inspection || inspectionQ.isFetching) return;
               const initialVariables = variablesEditor.current?.collect() ?? { vars: cVariables };
               if ("error" in initialVariables) {
                 setVariableError(initialVariables.error);
@@ -414,25 +481,49 @@ export function CreateAppDialog({
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
               <Field label="Branch">
-                <Input value={cBranch} onChange={(e) => {
-                  setCBranch(e.target.value);
-                  setBranchEdited(true);
-                }} required />
-                <span className="text-xs text-muted-foreground">Default: main, or the selected repository's default branch.</span>
+                {branchesQ.isSuccess && branchChoices.length > 0 ? (
+                  <Select value={showManualBranch ? ":manual" : effectiveBranch} onValueChange={(value) => {
+                    setInspectionRequested(false);
+                    if (value === ":manual") {
+                      setManualBranch(true);
+                    } else {
+                      setCBranch(value);
+                      setBranchEdited(true);
+                      setManualBranch(false);
+                    }
+                  }}>
+                    <SelectTrigger><SelectValue placeholder="Choose a branch" /></SelectTrigger>
+                    <SelectContent>
+                      {branchChoices.map((branch) => <SelectItem key={branch} value={branch}>{branch}{branch === branchesQ.data.defaultBranch ? " (default)" : ""}</SelectItem>)}
+                      <SelectItem value=":manual">Enter a branch manually…</SelectItem>
+                    </SelectContent>
+                  </Select>
+                ) : branchesQ.isError || branchesQ.isSuccess ? null : (
+                  <Select disabled><SelectTrigger><SelectValue placeholder="Loading branches…" /></SelectTrigger></Select>
+                )}
+                {showManualBranch || branchesQ.isSuccess && branchChoices.length === 0 ? (
+                  <Input value={effectiveBranch} onChange={(e) => {
+                    setCBranch(e.target.value);
+                    setBranchEdited(true);
+                    setInspectionRequested(false);
+                  }} required placeholder="Branch name" />
+                ) : null}
+                {branchesQ.isError ? <span className="text-xs text-muted-foreground">Could not load branches. Enter a branch name to continue.</span> : null}
+                {branchesQ.data?.truncated ? <span className="text-xs text-muted-foreground">Showing the first 100 branches. Enter another branch manually if needed.</span> : null}
               </Field>
               <Field label="Container port">
                 <Input
                   type="number"
-                  value={cPort}
-                  onChange={(e) => setCPort(Number(e.target.value))}
+                  value={effectivePort}
+                  onChange={(e) => { setCPort(Number(e.target.value)); markEdited("port"); }}
                   min={1}
                   max={65535}
                 />
-                <span className="text-xs text-muted-foreground">Default: 3000. Use the port your app listens on.</span>
+                <span className="text-xs text-muted-foreground">Confirm the port your process listens on; 3000 is the fallback.</span>
               </Field>
             </div>
             <Field label="Build mode">
-              <Select value={cBuildMode} onValueChange={(v) => setCBuildMode(v as BuildMode)}>
+              <Select value={effectiveMode} onValueChange={(v) => { setCBuildMode(v as BuildMode); markEdited("buildMode"); }}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
@@ -442,8 +533,43 @@ export function CreateAppDialog({
                   <SelectItem value="nixpacks">Nixpacks</SelectItem>
                 </SelectContent>
               </Select>
-              <span className="text-xs text-muted-foreground">Auto uses a root Dockerfile when present, otherwise Nixpacks.</span>
+              <span className="text-xs text-muted-foreground">Dockerfile builds always use the repository root as context. Nixpacks uses the root for workspaces.</span>
             </Field>
+            <section className="rounded-xl border border-border bg-muted/20 p-4" aria-label="Repository inspection and build plan">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-semibold">Build plan</h3>
+                  <p className="text-xs text-muted-foreground">Review what Sohwe will build and run before creating the app.</p>
+                </div>
+                {inspectionQ.isFetching ? <span className="text-xs text-muted-foreground" role="status">Inspecting branch…</span> : null}
+              </div>
+              {inspectionQ.isError ? <p className="mt-2 text-xs text-destructive" role="alert">{inspectionQ.error instanceof Error ? inspectionQ.error.message : "Inspection failed."} <button type="button" className="underline" onClick={() => void inspectionQ.refetch()}>Retry</button></p> : null}
+              {inspection && !inspectionQ.isFetching ? (
+                <div className="mt-3 space-y-3 text-sm">
+                  <p className="text-xs text-muted-foreground">{inspection.branch} at <code>{inspection.commitSha.slice(0, 12)}</code> · Docker and workspace context: repository root</p>
+                  <Field label="App directory">
+                    <Select value={effectiveDirectory} onValueChange={(value) => { setCAppDirectory(value); setInspectionRequested(false); markEdited("appDirectory"); }}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>{inspection.candidates.map((item) => <SelectItem key={item.directory} value={item.directory}>{item.directory === "." ? "Repository root" : item.directory}</SelectItem>)}</SelectContent>
+                    </Select>
+                    <span className="text-xs text-muted-foreground">Choose another detected application, or enter a path in Advanced settings.</span>
+                  </Field>
+                  <div className="grid gap-2 rounded-lg border border-border/70 bg-background p-3 text-xs sm:grid-cols-2">
+                    <span>Builder: <strong>{effectiveMode === "auto" ? `Auto (${selectedCandidate?.buildMode ?? "inspect on deploy"})` : effectiveMode}</strong>{editedPlanFields.has("buildMode") ? " · override" : " · suggested"}</span>
+                    <span>App directory: <strong>{effectiveDirectory}</strong>{editedPlanFields.has("appDirectory") ? " · override" : " · suggested"}</span>
+                    <span>Dockerfile: <strong>{effectiveMode === "nixpacks" ? "Not used" : effectiveDockerfile}</strong>{editedPlanFields.has("dockerfilePath") ? " · override" : " · suggested"}</span>
+                    <span>Container port: <strong>{effectivePort}</strong>{editedPlanFields.has("port") ? " · override" : " · suggested"}</span>
+                    <span>Docker target: <strong>{cDockerTarget || "None"}</strong>{editedPlanFields.has("dockerTarget") ? " · override" : ""}</span>
+                    <span className="sm:col-span-2">Start: <strong>{effectiveRuntimeCmd || (effectiveMode === "dockerfile" ? selectedCandidate?.startDisplay || "Image CMD / ENTRYPOINT (verify Dockerfile)" : effectiveStartCmd || "Nixpacks detection")}</strong>{editedPlanFields.has("runtimeCmd") || editedPlanFields.has("startCmd") ? " · override" : " · suggested"}</span>
+                    {effectiveMode !== "dockerfile" ? <span className="sm:col-span-2">Build command: <strong>{effectiveBuildCmd || "Nixpacks detection"}</strong>{editedPlanFields.has("buildCmd") ? " · override" : " · suggested"}</span> : null}
+                  </div>
+                  <div>
+                    <p className="text-xs font-medium">Evidence</p>
+                    <ul className="mt-1 space-y-1 text-xs text-muted-foreground">{selectedCandidate?.evidence.map((item, index) => <li key={`${item.path}-${index}`}><code>{item.path}</code> — {item.detail}</li>)}</ul>
+                  </div>
+                </div>
+              ) : null}
+            </section>
             <InitialVariablesEditor
               ref={variablesEditor}
               value={cVariables}
@@ -457,37 +583,40 @@ export function CreateAppDialog({
             <details className="rounded-lg border border-border/70 bg-muted/20 p-3">
               <summary className="cursor-pointer text-sm font-medium">Advanced settings</summary>
               <div className="mt-3 space-y-3">
-                {cBuildMode !== "dockerfile" ? (
+                <Field label="App directory (repository relative)">
+                  <Input value={effectiveDirectory} onChange={(e) => { setCAppDirectory(e.target.value); setInspectionRequested(false); markEdited("appDirectory"); }} placeholder=". or apps/api" />
+                </Field>
+                {effectiveMode !== "dockerfile" ? (
                   <div className="grid gap-3 sm:grid-cols-2">
                     <Field label="Build command (optional)">
                       <Input
-                        value={cBuildCmd}
-                        onChange={(e) => setCBuildCmd(e.target.value)}
+                        value={effectiveBuildCmd}
+                        onChange={(e) => { setCBuildCmd(e.target.value); markEdited("buildCmd"); }}
                         placeholder="Nixpacks auto-detects"
                       />
                     </Field>
                     <Field label="Start command (optional)">
                       <Input
-                        value={cStartCmd}
-                        onChange={(e) => setCStartCmd(e.target.value)}
+                        value={effectiveStartCmd}
+                        onChange={(e) => { setCStartCmd(e.target.value); markEdited("startCmd"); }}
                         placeholder="Nixpacks auto-detects"
                       />
                     </Field>
                   </div>
                 ) : null}
-                {cBuildMode !== "nixpacks" ? (
+                {effectiveMode !== "nixpacks" ? (
                   <div className="grid gap-3 sm:grid-cols-2">
                     <Field label="Dockerfile path">
                       <Input
-                        value={cDockerfilePath}
-                        onChange={(e) => setCDockerfilePath(e.target.value)}
+                        value={effectiveDockerfile}
+                        onChange={(e) => { setCDockerfilePath(e.target.value); markEdited("dockerfilePath"); }}
                         placeholder="Dockerfile or apps/api/Dockerfile"
                       />
                     </Field>
                     <Field label="Docker target (optional)">
                       <Input
                         value={cDockerTarget}
-                        onChange={(e) => setCDockerTarget(e.target.value)}
+                        onChange={(e) => { setCDockerTarget(e.target.value); markEdited("dockerTarget"); }}
                         placeholder="api, worker, migrate…"
                       />
                     </Field>
@@ -495,8 +624,8 @@ export function CreateAppDialog({
                 ) : null}
                 <Field label="Container command override (optional)">
                   <Input
-                    value={cRuntimeCmd}
-                    onChange={(e) => setCRuntimeCmd(e.target.value)}
+                    value={effectiveRuntimeCmd}
+                    onChange={(e) => { setCRuntimeCmd(e.target.value); markEdited("runtimeCmd"); }}
                     placeholder="node dist/worker.js"
                   />
                 </Field>
@@ -520,7 +649,7 @@ export function CreateAppDialog({
                 />
                 <span>
                   Deploy automatically on every push to{" "}
-                  <code className="text-xs">{cBranch || "the tracked branch"}</code>
+                  <code className="text-xs">{effectiveBranch || "the tracked branch"}</code>
                   <span className="block text-xs text-muted-foreground">
                     Requires the repository to be shared with your GitHub App.
                   </span>
@@ -528,10 +657,10 @@ export function CreateAppDialog({
               </label>
             ) : null}
             <div className="flex justify-end gap-2">
-              <Button type="submit" value="deploy" disabled={pending}>
+              <Button type="submit" value="deploy" disabled={pending || !branchReady || !inspectionRequested || !inspection || inspectionQ.isFetching}>
                 {createMut.isPending ? "Creating…" : "Create and deploy"}
               </Button>
-              <Button type="submit" value="save" variant="outline" disabled={pending}>Save for later</Button>
+              <Button type="submit" value="save" variant="outline" disabled={pending || !branchReady || !inspectionRequested || !inspection || inspectionQ.isFetching}>Save for later</Button>
               <Button type="button" variant="ghost" disabled={pending} onClick={() => onOpenChange(false)}>Cancel</Button>
             </div>
           </form>

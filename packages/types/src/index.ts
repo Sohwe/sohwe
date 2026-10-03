@@ -161,6 +161,15 @@ export const DockerTargetSchema = z
     "Docker target may contain letters, numbers, dots, underscores, and hyphens"
   );
 
+/** An application source directory inside the repository. */
+export const AppDirectorySchema = z
+  .string().trim().min(1).max(512)
+  .refine(
+    (path) => path === "." || (!path.startsWith("/") && !path.includes("\\") &&
+      !path.includes("\0") && !path.split("/").includes("..")),
+    "App directory must stay inside the repository"
+  );
+
 export const CreateApplicationSchema = z.object({
   name: z.string().min(1),
   slug: z.string().regex(/^[a-z0-9-]+$/),
@@ -171,6 +180,7 @@ export const CreateApplicationSchema = z.object({
   buildCmd: z.string().optional(),
   startCmd: z.string().optional(),
   runtimeCmd: z.string().max(4096).optional(),
+  appDirectory: AppDirectorySchema.default("."),
   dockerfilePath: DockerfilePathSchema.default("Dockerfile"),
   dockerTarget: DockerTargetSchema.optional(),
   domain: OptionalDomain,
@@ -199,6 +209,7 @@ export const UpdateApplicationSchema = z
     buildCmd: z.string().nullable().optional(),
     startCmd: z.string().nullable().optional(),
     runtimeCmd: z.string().max(4096).nullable().optional(),
+    appDirectory: AppDirectorySchema.optional(),
     dockerfilePath: DockerfilePathSchema.optional(),
     dockerTarget: DockerTargetSchema.nullable().optional(),
     memoryLimitMb: z

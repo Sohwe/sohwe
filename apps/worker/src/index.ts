@@ -427,6 +427,7 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
       imageTag = buildImageTag(app.slug, deploymentId);
       await buildAppImage({
         contextDir: repoDir,
+        appDirectory: app.appDirectory,
         imageTag,
         mode: (app.buildMode as BuildMode) ?? "auto",
         buildCmd: app.buildCmd,
