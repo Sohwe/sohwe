@@ -544,6 +544,16 @@ export const ServiceLogsQuerySchema = z.object({
 });
 export type ServiceLogsQuery = z.infer<typeof ServiceLogsQuerySchema>;
 
+export const ApplicationLogRangeQuerySchema = z
+  .object({
+    from: z.string().datetime({ offset: true }),
+    to: z.string().datetime({ offset: true })
+  })
+  .refine((range) => Date.parse(range.from) <= Date.parse(range.to), {
+    message: "Start time must be before end time",
+    path: ["to"]
+  });
+
 /** Query for container filesystem browser (Phase 3 preview — running container paths). */
 export const FsPathQuerySchema = z.object({
   path: z

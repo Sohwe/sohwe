@@ -59,6 +59,13 @@ relevant control while keeping the full build log. After a successful container
 start, the drawer also has a port and listening-address check for an app URL
 that does not respond.
 
+On an application's **Logs → Runtime** tab, choose **From** and **To** to view
+output in a local date and time range, or return to the live stream. Range
+results use the current running container's retained Docker logs and show at
+most the latest 1,000 matching lines. Logs from containers removed by later
+deployments are not available through this filter. The **Latest build** tab
+continues to show build output for the most recent deployment.
+
 ## Install on a server (production)
 
 On a fresh Ubuntu 22.04, 24.04, or 26.04 host:

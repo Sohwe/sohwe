@@ -10,6 +10,13 @@ write-ups.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-03
+
+### Added
+
+- Application runtime logs can be filtered by a local date and time range. The API reads timestamped output retained by the current running Docker container, returns the latest 1,000 matching lines, and reports when that result is capped. The dashboard can switch back to the live stream; logs from removed deployment containers remain unavailable.
+- Added a project setup and logs audit with prioritized fixes and acceptance checks in `docs/project-flow-audit.md`.
+
 ### Changed
 
 - Project creation now starts with the repository, suggests its name and slug, and can inspect the branch for service candidates. The form offers explicit HTTP, worker, and release-job actions, keeps advanced settings collapsible, and defaults to build auto-detection. **Create and release** queues the first release with a saved-project retry if queueing fails; **Save draft** remains available. Project cards show the latest release, per-service status, and admin-only selectable build logs. A failed enqueue records a failed attempt instead of leaving a pending release that blocks retry.

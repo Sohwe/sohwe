@@ -38,7 +38,7 @@ export function AppLogsPage() {
         description={
           view === "runtime"
             ? isRunning
-              ? "Live stdout and stderr from the running app container."
+              ? "Live stdout and stderr from the running app container, with a date and time range for retained output."
               : "Deploy or start the app to stream live container output."
             : "Build output from the most recent deployment."
         }

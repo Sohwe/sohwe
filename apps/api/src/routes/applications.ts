@@ -11,6 +11,7 @@ import {
 import {
   appDockerVolumeName,
   appInternalNetworkName,
+  ApplicationLogRangeQuerySchema,
   CreateApplicationSchema,
   VariableEntrySchema,
   RollbackBodySchema,
@@ -35,6 +36,7 @@ import { isUniqueViolation } from "../prisma-errors";
 import { encodeVarBlob, splitScoped } from "./variable-store";
 import { inspectRepository } from "../repository-inspection";
 import { missingRequiredVariables } from "@sohwe/types/required-variables";
+import { filterTimestampedRuntimeLogs, MAX_RUNTIME_HISTORY_LINES } from "../runtime-log-history";
 
 const docker = new Docker();
 
@@ -726,6 +728,42 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
         }
       };
       req.raw.on("close", end);
+    }
+  );
+
+  app.get(
+    "/api/applications/:id/log-history",
+    {
+      preHandler: [requireRole("member")],
+      schema: { params: IdParam, querystring: ApplicationLogRangeQuerySchema }
+    },
+    async (req, reply) => {
+      const { id } = IdParam.parse(req.params);
+      const range = ApplicationLogRangeQuerySchema.parse(req.query);
+      const app = await prisma.application.findFirst({
+        where: { id, organizationId: req.user!.organizationId },
+        select: { id: true }
+      });
+      if (!app) return reply.notFound();
+
+      const container = await getRunningAppContainer(docker, id);
+      if (!container) return { text: "", count: 0, truncated: false };
+      const from = new Date(range.from);
+      const to = new Date(range.to);
+      const logs = (await container.logs({
+        stdout: true,
+        stderr: true,
+        timestamps: true,
+        since: Math.floor(from.getTime() / 1000),
+        until: Math.ceil(to.getTime() / 1000),
+        tail: MAX_RUNTIME_HISTORY_LINES + 1
+      })) as Buffer | NodeJS.ReadableStream;
+      const buffer = Buffer.isBuffer(logs) ? logs : await collectStream(logs);
+      return filterTimestampedRuntimeLogs(
+        decodeDockerLogBuffer(buffer),
+        from,
+        to
+      );
     }
   );
 

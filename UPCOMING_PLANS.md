@@ -13,6 +13,10 @@ and Railway as references. Include a dedicated logs UI improvement for live
 build and runtime logs, with useful search and filtering and access to raw
 output. Review scope and sequencing before implementation.
 
+The [project setup and logs audit](docs/project-flow-audit.md) records the
+current project-flow findings, code evidence, proposed order, and acceptance
+criteria for the next implementation pass.
+
 ## Phase 9 - Monorepo and Multi-Service Deployments
 
 Status: **in progress from a repository audit on 2026-09-10**
