@@ -183,13 +183,20 @@ export const ConfigOverridesSchema = z.array(z.enum(CONFIG_FIELDS)).max(CONFIG_F
   "Duplicate config override"
 );
 
+/** Public OCI image name with a tag or digest; registry credentials stay out of app config. */
+export const ImageReferenceSchema = z.string().trim().min(1).max(255)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/, "Use an image name such as nginx:1.27 or ghcr.io/org/app@sha256:...")
+  .refine((value) => !value.includes("://") && !value.includes("//") && !value.endsWith("/"), "Use a container image reference, not a URL")
+  .refine((value) => !value.includes("@") || /@sha256:[a-f0-9]{64}$/.test(value), "Use a sha256 digest after @, not credentials");
+
 export const CreateApplicationSchema = z.object({
   name: z.string().min(1),
   slug: z.string().regex(/^[a-z0-9-]+$/),
-  gitRepo: z.string().url(),
+  gitRepo: z.string().url().optional(),
+  imageRef: ImageReferenceSchema.optional(),
   gitBranch: z.string().default("main"),
   port: z.coerce.number().int().min(1).max(65535).default(3000),
-  buildMode: z.enum(["auto", "dockerfile", "nixpacks"]).default("auto"),
+  buildMode: z.enum(["auto", "dockerfile", "nixpacks", "image"]).default("auto"),
   buildCmd: z.string().optional(),
   startCmd: z.string().optional(),
   runtimeCmd: z.string().max(4096).optional(),
@@ -203,6 +210,16 @@ export const CreateApplicationSchema = z.object({
   variables: z.array(z.lazy(() => VariableEntrySchema)).max(500).optional(),
   /** Deploy on every push to `gitBranch` (Phase 5; needs a connected GitHub App). */
   autoDeploy: z.boolean().default(false)
+}).superRefine((app, ctx) => {
+  if (app.buildMode === "image") {
+    if (!app.imageRef) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["imageRef"], message: "Choose a public container image" });
+    if (app.gitRepo || app.configPath || app.configOverrides?.length || app.autoDeploy || app.buildCmd || app.startCmd || app.dockerTarget || app.appDirectory !== "." || app.variables?.some((v) => v.scope !== "runtime")) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["buildMode"], message: "Image apps cannot use Git, repository config, push deploys, or build variables" });
+    }
+  } else {
+    if (!app.gitRepo) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["gitRepo"], message: "Choose an HTTPS Git repository" });
+    if (app.imageRef) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["imageRef"], message: "Image reference is only for image apps" });
+  }
 });
 export type CreateApplicationInput = z.infer<typeof CreateApplicationSchema>;
 
@@ -220,7 +237,8 @@ export const UpdateApplicationSchema = z
     name: z.string().min(1).optional(),
     gitBranch: z.string().min(1).optional(),
     port: z.coerce.number().int().min(1).max(65535).optional(),
-    buildMode: z.enum(["auto", "dockerfile", "nixpacks"]).optional(),
+    buildMode: z.enum(["auto", "dockerfile", "nixpacks", "image"]).optional(),
+    imageRef: ImageReferenceSchema.optional(),
     buildCmd: z.string().nullable().optional(),
     startCmd: z.string().nullable().optional(),
     runtimeCmd: z.string().max(4096).nullable().optional(),

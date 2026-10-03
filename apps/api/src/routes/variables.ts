@@ -39,6 +39,7 @@ async function loadMaps(organizationId: string, id: string) {
     select: {
       id: true,
       slug: true,
+      imageRef: true,
       envVarsEncrypted: true,
       buildArgsEncrypted: true
     }
@@ -180,7 +181,7 @@ export async function registerVariableRoutes(app: FastifyInstance) {
       } catch {
         const a = await prisma.application.findFirst({
           where: { id, organizationId: u.organizationId },
-          select: { id: true, slug: true }
+          select: { id: true, slug: true, imageRef: true }
         });
         if (!a) return reply.notFound();
         loaded = { app: { ...a, envVarsEncrypted: null, buildArgsEncrypted: null }, env: {}, build: {} };
@@ -188,6 +189,7 @@ export async function registerVariableRoutes(app: FastifyInstance) {
       if (!loaded) return reply.notFound();
 
       const after = splitScoped(vars);
+      if (loaded.app.imageRef && Object.keys(after.build).length) return reply.badRequest("Image apps support runtime variables only.");
       await persist(req, loaded.app, { env: loaded.env, build: loaded.build }, after, "replace");
       return { ok: true, id: loaded.app.id };
     }
@@ -233,6 +235,7 @@ export async function registerVariableRoutes(app: FastifyInstance) {
         );
       }
       const after = applyScopedPatch(before.env, before.build, set, unset, rescope);
+      if (loaded.app.imageRef && Object.keys(after.build).length) return reply.badRequest("Image apps support runtime variables only.");
       await persist(req, loaded.app, before, after, "patch");
       return { ok: true, id: loaded.app.id };
     }

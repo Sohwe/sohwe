@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Plus, Rocket } from "lucide-react";
+import { Plus, Rocket, Package } from "lucide-react";
 import { AppCard } from "@/components/apps/AppCard";
 import { CreateAppDialog } from "@/components/apps/CreateAppDialog";
+import { CreateImageAppDialog } from "@/components/apps/CreateImageAppDialog";
 import { PageHeader } from "@/components/common/PageHeader";
 import { EmptyState } from "@/components/common/EmptyState";
 import { Button } from "@/components/ui/button";
@@ -16,6 +17,7 @@ import type { AppRow, Me } from "@/lib/types";
 export function AppsListPage() {
   const [deployLink] = useState(() => parseDeployLink(window.location.search));
   const [createOpen, setCreateOpen] = useState(deployLink.kind === "valid");
+  const [imageOpen, setImageOpen] = useState(false);
   const [linkInitial, setLinkInitial] = useState<DeployLinkPrefill | undefined>(
     () => deployLink.kind === "valid" ? deployLink.value : undefined
   );
@@ -39,10 +41,10 @@ export function AppsListPage() {
         description={`Build, deploy, and manage services from Git. New apps receive a your-slug.${baseDomain} address automatically.`}
         actions={
           canCreate ? (
-            <Button onClick={() => setCreateOpen(true)}>
+            <div className="flex gap-2"><Button variant="outline" onClick={() => setImageOpen(true)}><Package className="mr-2 h-4 w-4" />Import image</Button><Button onClick={() => setCreateOpen(true)}>
               <Plus className="mr-2 h-4 w-4" />
               New app
-            </Button>
+            </Button></div>
           ) : undefined
         }
       />
@@ -51,6 +53,7 @@ export function AppsListPage() {
       ) : deployLink.kind === "valid" && me && !canCreate ? (
         <p className="mb-4 rounded-lg border p-3 text-sm text-muted-foreground" role="status">An owner or admin must sign in to use this deploy link.</p>
       ) : null}
+      {canCreate && imageOpen ? <CreateImageAppDialog open={imageOpen} onOpenChange={setImageOpen} /> : null}
       {canCreate ? (
         <CreateAppDialog
           key={linkInitial ? "deploy-link" : "new-app"}

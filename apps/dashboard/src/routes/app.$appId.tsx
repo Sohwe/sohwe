@@ -11,6 +11,7 @@ import { isAdmin } from "@/lib/roles";
 import type { AppRow, Me } from "@/lib/types";
 import { CopyButton } from "@/components/common/CopyButton";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Badge } from "@/components/ui/badge";
 
 type TabDef = {
   path:
@@ -132,6 +133,7 @@ export function AppLayout() {
             </span>
             <h1 className="text-xl font-semibold tracking-[-0.025em]">{app.name}</h1>
             <BuildModeBadge mode={app.buildMode} />
+            {app.previewOfId ? <Badge variant="secondary">Preview</Badge> : null}
             <AppStatusBadge status={app.status} />
           </div>
           <div className="mt-1.5 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">

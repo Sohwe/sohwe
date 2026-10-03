@@ -18,9 +18,9 @@ export function AppVariablesPage() {
     <div className="space-y-6">
       <PageHeader
         title="Variables"
-        description="Encrypted at rest. Variables reach the running container by default; enable build access when needed. Redeploy to apply."
+        description={app.imageRef ? "Encrypted runtime variables. Redeploy to apply." : "Encrypted at rest. Variables reach the running container by default; enable build access when needed. Redeploy to apply."}
       />
-      <VariablesManager path={`/api/applications/${appId}/variables`} onChanged={invalidate} />
+      <VariablesManager path={`/api/applications/${appId}/variables`} onChanged={invalidate} runtimeOnly={!!app.imageRef} />
     </div>
   );
 }

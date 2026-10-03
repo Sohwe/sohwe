@@ -37,7 +37,7 @@ type RevealItem = {
   buildValue?: string;
 };
 
-export function VariablesManager({ path, onChanged }: { path: string; onChanged: () => void }) {
+export function VariablesManager({ path, onChanged, runtimeOnly = false }: { path: string; onChanged: () => void; runtimeOnly?: boolean }) {
   const queryClient = useQueryClient();
   const queryKey = ["scoped-variables", path];
 
@@ -92,17 +92,16 @@ export function VariablesManager({ path, onChanged }: { path: string; onChanged:
         <CardHeader>
           <CardTitle className="text-base">Variables</CardTitle>
           <CardDescription>
-            Encrypted at rest. Variables are available to the running container by default. Enable build access only
-            when the build needs a value. Redeploy to apply changes.
+            Encrypted at rest. {runtimeOnly ? "Values reach the running container. Redeploy to apply changes." : "Variables are available to the running container by default. Enable build access only when the build needs a value. Redeploy to apply changes."}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <Notice className="text-xs">
+          {!runtimeOnly ? <Notice className="text-xs">
             Anything reaching the build is baked into image layers and readable via{" "}
             <span className="font-mono">docker history</span>. Keep credentials on{" "}
             <span className="font-mono">Runtime only</span>. A Dockerfile build additionally only sees a variable it
             declares with a matching <span className="font-mono">ARG</span>.
-          </Notice>
+          </Notice> : null}
 
           {listQuery.isLoading ? <p className="text-sm text-muted-foreground">Loading…</p> : null}
           {listQuery.isError ? <p className="text-sm text-destructive">Could not load variables.</p> : null}
@@ -124,7 +123,7 @@ export function VariablesManager({ path, onChanged }: { path: string; onChanged:
                     ) : null}
                   </div>
                   <div className="flex items-center gap-1">
-                    <BuildAccess
+                    {!runtimeOnly ? <BuildAccess
                       scope={row.scope}
                       variableKey={row.key}
                       disabled={patchMut.isPending}
@@ -132,7 +131,7 @@ export function VariablesManager({ path, onChanged }: { path: string; onChanged:
                         if (scope === row.scope) return;
                         patchMut.mutate({ rescope: [{ key: row.key, scope }] });
                       }}
-                    />
+                    /> : null}
                     <Button type="button" size="sm" variant="ghost" onClick={() => setRemoveKey(row.key)}>
                       Remove
                     </Button>
@@ -156,12 +155,12 @@ export function VariablesManager({ path, onChanged }: { path: string; onChanged:
                       setUnlocked((prev) => prev?.map((r, j) => (j === i ? { ...r, value } : r)) ?? prev);
                     }}
                   />
-                  <ScopeSelect
+                  {!runtimeOnly ? <ScopeSelect
                     value={row.scope}
                     onChange={(scope) =>
                       setUnlocked((prev) => prev?.map((r, j) => (j === i ? { ...r, scope } : r)) ?? prev)
                     }
-                  />
+                  /> : null}
                 </div>
               ))}
               <div className="flex flex-wrap gap-2">
@@ -206,14 +205,14 @@ export function VariablesManager({ path, onChanged }: { path: string; onChanged:
                     spellCheck={false}
                   />
                 </Field>
-                <div className="sm:col-span-2">
+                {!runtimeOnly ? <div className="sm:col-span-2">
                   <BuildAccess scope={newScope} onChange={setNewScope} />
                   <p className="mt-1 text-xs text-muted-foreground">{SCOPE_HINT[newScope]}</p>
-                </div>
-                <details className="text-xs text-muted-foreground sm:col-span-2">
+                </div> : null}
+                {!runtimeOnly ? <details className="text-xs text-muted-foreground sm:col-span-2">
                   <summary className="w-fit cursor-pointer">Advanced scope options</summary>
                   <div className="mt-2"><ScopeSelect value={newScope} onChange={setNewScope} /></div>
-                </details>
+                </details> : null}
                 {newKeyWarn ? (
                   <p className="text-xs text-destructive sm:col-span-2">
                     {newKey.trim()} looks like a credential. Use{" "}
@@ -274,7 +273,7 @@ export function VariablesManager({ path, onChanged }: { path: string; onChanged:
                   />
                 </Field>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <BuildAccess scope={bulkScope} onChange={setBulkScope} />
+                  {!runtimeOnly ? <BuildAccess scope={bulkScope} onChange={setBulkScope} /> : null}
                   <Button
                     type="button"
                     variant="secondary"
@@ -304,10 +303,10 @@ export function VariablesManager({ path, onChanged }: { path: string; onChanged:
                     Add {Object.keys(parseEnvText(bulk)).length || ""} pasted as {SCOPE_LABEL[bulkScope].toLowerCase()}
                   </Button>
                 </div>
-                <details className="mt-2 text-xs text-muted-foreground">
+                {!runtimeOnly ? <details className="mt-2 text-xs text-muted-foreground">
                   <summary className="w-fit cursor-pointer">Advanced scope options</summary>
                   <div className="mt-2"><ScopeSelect value={bulkScope} onChange={setBulkScope} /></div>
-                </details>
+                </details> : null}
                 {bulkScope !== "runtime" && Object.keys(parseEnvText(bulk)).some(looksSecret) ? (
                   <p className="mt-2 text-xs text-destructive">
                     Some pasted keys look like credentials. Build access can expose their values in the image.

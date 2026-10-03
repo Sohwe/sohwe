@@ -44,7 +44,7 @@ export function DeploymentsTable({
             <TableRow>
               <TableHead>Deployment</TableHead>
               <TableHead>Status</TableHead>
-              <TableHead>Git</TableHead>
+              <TableHead>Source</TableHead>
               <TableHead>When</TableHead>
               <TableHead className="w-24 text-right">Actions</TableHead>
             </TableRow>
@@ -73,15 +73,21 @@ export function DeploymentsTable({
                     </p>
                   </TableCell>
                   <TableCell>
-                    <div className="font-mono text-xs">{app.gitBranch}</div>
-                    <div className="mt-0.5 break-all text-xs text-muted-foreground">
-                      {shortCommitSha(d.commitSha)}{" "}
-                      {d.commitMessage ? (
-                        <span className="text-foreground/80">{truncMsg(d.commitMessage, 64)}</span>
-                      ) : d.commitSha ? null : (
-                        "—"
-                      )}
-                    </div>
+                    {app.imageRef ? (
+                      <div className="max-w-64 break-all font-mono text-xs" title={app.imageRef}>{app.imageRef}</div>
+                    ) : (
+                      <>
+                        <div className="font-mono text-xs">{app.gitBranch}</div>
+                        <div className="mt-0.5 break-all text-xs text-muted-foreground">
+                          {shortCommitSha(d.commitSha)}{" "}
+                          {d.commitMessage ? (
+                            <span className="text-foreground/80">{truncMsg(d.commitMessage, 64)}</span>
+                          ) : d.commitSha ? null : (
+                            "—"
+                          )}
+                        </div>
+                      </>
+                    )}
                   </TableCell>
                   <TableCell>
                     <span className="whitespace-nowrap text-sm text-muted-foreground">

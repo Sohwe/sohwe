@@ -749,6 +749,19 @@ describe("v8 repository config", () => {
   });
 });
 
+describe("v9 image source", () => {
+  it("round-trips a public image reference and defaults older bundles to Git", () => {
+    const bundle = buildBundle([sampleApp({ gitRepo: "", buildMode: "image", imageRef: "ghcr.io/acme/web:1.0.0" })], OPTS);
+    assert.equal(bundle.version, 9);
+    const restored = parseBundle(bundle, OPTS.passphrase).apps[0]!;
+    assert.equal(restored.imageRef, "ghcr.io/acme/web:1.0.0");
+    const tampered = structuredClone(bundle);
+    tampered.apps[0]!.imageRef = "ghcr.io/other/web:1.0.0";
+    assert.throws(() => parseBundle(tampered, OPTS.passphrase), /Invalid passphrase or corrupted bundle/);
+    assert.equal(parseBundle(GOLDEN_BUNDLE_V4, GOLDEN_PASSPHRASE).apps[0]!.imageRef, null);
+  });
+});
+
 describe("v6 projects and services", () => {
   it("round-trips the FleetOptics topology and encrypted variables", () => {
     const bundle = buildBundle([], OPTS, [], [FLEET_PROJECT]);

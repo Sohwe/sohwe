@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { randomUUID } from "node:crypto";
 import { prisma } from "@sohwe/db";
 import {
   appLogChannelName,
@@ -11,6 +12,7 @@ import {
   appDockerVolumeName,
   appInternalNetworkName,
   CreateApplicationSchema,
+  VariableEntrySchema,
   RollbackBodySchema,
   UpdateApplicationSchema
 } from "@sohwe/types";
@@ -32,6 +34,7 @@ import { requireRole } from "../rbac";
 import { isUniqueViolation } from "../prisma-errors";
 import { encodeVarBlob, splitScoped } from "./variable-store";
 import { inspectRepository } from "../repository-inspection";
+import { missingRequiredVariables } from "@sohwe/types/required-variables";
 
 const docker = new Docker();
 
@@ -41,6 +44,10 @@ function slugInUseMessage(slug: string): string {
   return `An application with the slug "${slug}" already exists in this organization. Slugs must be unique — pick a different one.`;
 }
 const DepParam = z.object({ deploymentId: z.string().uuid() });
+const PreviewBody = z.object({
+  branch: z.string().trim().min(1).max(255),
+  variables: z.array(VariableEntrySchema).max(500).default([])
+});
 
 function sseData(payload: unknown): string {
   return `data: ${JSON.stringify(payload)}\n\n`;
@@ -248,14 +255,14 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
       if (body.configOverrides?.length && !body.configPath) return reply.badRequest("Config overrides require a config path.");
       if (body.configPath) {
         let inspected;
-        try { inspected = await inspectRepository(u.organizationId, body.gitRepo, body.gitBranch, body.configOverrides?.includes("appDirectory") ? body.appDirectory : undefined, body.configPath); }
+        try { inspected = await inspectRepository(u.organizationId, body.gitRepo!, body.gitBranch, body.configOverrides?.includes("appDirectory") ? body.appDirectory : undefined, body.configPath); }
         catch (error) { return reply.badRequest(error instanceof Error && /sohwe\.yaml:\d+:\d+:/.test(error.message) ? error.message : "Could not validate repository config. Check the branch, file path, and repository access."); }
         if (!inspected.config) return reply.badRequest("Repository config was not found.");
       }
 
       // Denormalized so push webhooks resolve with one indexed lookup; null for
       // non-GitHub remotes, which simply never match a delivery.
-      const ref = parseGitHubRepoUrl(body.gitRepo);
+      const ref = parseGitHubRepoUrl(body.gitRepo ?? "");
       const repoName = ref ? repoFullName(ref) : null;
 
       if (body.autoDeploy) {
@@ -288,8 +295,9 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
         data: {
           name: body.name,
           slug: body.slug,
-          gitRepo: body.gitRepo,
+          gitRepo: body.gitRepo ?? "",
           gitBranch: body.gitBranch,
+          imageRef: body.imageRef ?? null,
           repoFullName: repoName,
           autoDeploy: body.autoDeploy,
           port: body.port,
@@ -334,7 +342,8 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
         targetId: createdId,
         targetLabel: body.slug,
         metadata: {
-          gitRepo: body.gitRepo,
+          gitRepo: body.gitRepo ?? null,
+          imageRef: body.imageRef ?? null,
           gitBranch: body.gitBranch,
           buildMode: body.buildMode,
           autoDeploy: body.autoDeploy,
@@ -342,6 +351,73 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
         }
       });
       return serializeAppListRow(created);
+    }
+  );
+
+  app.get(
+    "/api/applications/:id/previews",
+    { preHandler: [requireRole("member")], schema: { params: IdParam } },
+    async (req, reply) => {
+      const { id } = req.params as z.infer<typeof IdParam>;
+      const parent = await prisma.application.findFirst({ where: { id, organizationId: req.user!.organizationId }, select: { id: true } });
+      if (!parent) return reply.notFound();
+      const previews = await prisma.application.findMany({ where: { previewOfId: id, organizationId: req.user!.organizationId }, orderBy: { createdAt: "desc" }, select: sel20 });
+      return previews.map(serializeAppListRow);
+    }
+  );
+
+  app.post(
+    "/api/applications/:id/previews",
+    { preHandler: [requireRole("admin")], schema: { params: IdParam, body: PreviewBody }, logLevel: "silent" },
+    async (req, reply) => {
+      const { id } = req.params as z.infer<typeof IdParam>;
+      const body = PreviewBody.parse(req.body);
+      const parent = await prisma.application.findFirst({ where: { id, organizationId: req.user!.organizationId } });
+      if (!parent) return reply.notFound();
+      if (parent.imageRef || parent.previewOfId) return reply.badRequest("Create previews from a Git application, not an image or another preview.");
+      const variableKeys = body.variables.map((entry) => entry.key);
+      if (new Set(variableKeys).size !== variableKeys.length) return reply.badRequest("Preview variable keys must be unique.");
+      let inspected;
+      try {
+        inspected = await inspectRepository(req.user!.organizationId, parent.gitRepo, body.branch, parent.configOverrides.includes("appDirectory") ? parent.appDirectory : undefined, parent.configPath ?? undefined);
+      } catch {
+        return reply.badRequest("Could not inspect the preview branch. Check its name and repository access.");
+      }
+      const scoped = splitScoped(body.variables);
+      if (inspected.config) {
+        const missing = missingRequiredVariables(inspected.config, scoped.env, scoped.build);
+        if (missing.length) return reply.badRequest(`Set required preview variables: ${missing.join(", ")}`);
+      }
+      const slug = `${parent.slug.slice(0, 37)}-pv-${randomUUID().slice(0, 8)}`;
+      const preview = await prisma.application.create({
+        data: {
+          organizationId: parent.organizationId,
+          previewOfId: parent.id,
+          name: `${parent.name} preview (${body.branch})`,
+          slug,
+          gitRepo: parent.gitRepo,
+          gitBranch: body.branch,
+          repoFullName: parent.repoFullName,
+          autoDeploy: false,
+          buildMode: parent.buildMode,
+          buildCmd: parent.buildCmd,
+          startCmd: parent.startCmd,
+          runtimeCmd: parent.runtimeCmd,
+          appDirectory: parent.appDirectory,
+          configPath: parent.configPath,
+          configOverrides: parent.configOverrides,
+          dockerfilePath: parent.dockerfilePath,
+          dockerTarget: parent.dockerTarget,
+          port: parent.port,
+          memoryLimitMb: parent.memoryLimitMb,
+          cpuLimit: parent.cpuLimit,
+          envVarsEncrypted: encodeVarBlob(scoped.env),
+          buildArgsEncrypted: encodeVarBlob(scoped.build)
+        },
+        select: sel20
+      });
+      await recordAudit(req, { action: "application.create", targetType: "application", targetId: preview.id, targetLabel: slug, metadata: { previewOfId: parent.id, branch: body.branch, variableKeys } });
+      return reply.status(201).send(serializeAppListRow(preview));
     }
   );
 
@@ -360,6 +436,19 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
         where: { id, organizationId: u.organizationId }
       });
       if (!existing) return reply.notFound();
+      if (existing.previewOfId && body.autoDeploy === true) return reply.badRequest("Preview apps do not deploy on push.");
+      if (existing.imageRef) {
+        if (body.buildMode && body.buildMode !== "image") return reply.badRequest("An image app cannot switch to a Git build mode.");
+        if (
+          body.gitBranch !== undefined || body.configPath !== undefined ||
+          body.configOverrides !== undefined || body.autoDeploy === true ||
+          body.buildCmd !== undefined || body.startCmd !== undefined ||
+          body.appDirectory !== undefined || body.dockerfilePath !== undefined ||
+          body.dockerTarget !== undefined
+        ) return reply.badRequest("Git and build settings are unavailable for image apps.");
+      } else if (body.imageRef || body.buildMode === "image") {
+        return reply.badRequest("A Git app cannot switch to an image source.");
+      }
 
       const data: Record<string, unknown> = {};
       if (body.configPath !== undefined) {
@@ -375,6 +464,7 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
         data.configOverrides = body.configOverrides;
       }
       if (body.name !== undefined) data.name = body.name;
+      if (body.imageRef !== undefined) data.imageRef = body.imageRef;
       if (body.gitBranch !== undefined) data.gitBranch = body.gitBranch;
       if (body.port !== undefined) data.port = body.port;
       if (body.buildMode !== undefined) data.buildMode = body.buildMode;
@@ -484,11 +574,15 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
         select: {
           id: true,
           slug: true,
-          volumes: { select: { id: true } }
+          volumes: { select: { id: true } },
+          previews: { select: { id: true, volumes: { select: { id: true } } } }
         }
       });
       if (!a) return reply.notFound();
       const volIds = a.volumes.map((v) => v.id);
+      for (const preview of a.previews) {
+        await removeDockerForApplication(preview.id, preview.volumes.map((v) => v.id));
+      }
       await removeDockerForApplication(a.id, volIds);
       await prisma.application.delete({ where: { id: a.id } });
       await recordAudit(req, {
@@ -496,7 +590,7 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
         targetType: "application",
         targetId: a.id,
         targetLabel: a.slug,
-        metadata: { volumesRemoved: volIds.length }
+        metadata: { volumesRemoved: volIds.length, previewsRemoved: a.previews.length }
       });
       return { ok: true };
     }

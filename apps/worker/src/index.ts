@@ -53,6 +53,7 @@ import {
 import { createRuntimeLogTailManager } from "./runtime-logs";
 import { createStatsSampler } from "./stats";
 import { createProjectDeployer } from "./project-deploy";
+import { pullPublicImage } from "./image-source";
 
 const _here = dirname(fileURLToPath(import.meta.url));
 config({ path: join(_here, "../../../.env") });
@@ -404,6 +405,10 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
         if (prior.values) activePlan = prior.values;
         await prisma.deployment.update({ where: { id: deploymentId }, data: { resolvedPlan: prev.resolvedPlan as Prisma.InputJsonValue, commitSha, commitMessage } });
       }
+    } else if (app.imageRef) {
+      onLog(`[sohwe] Pulling public container image ${app.imageRef}...`);
+      imageTag = await pullPublicImage(docker, app.imageRef);
+      onLog(`[sohwe] Pulled image ID ${imageTag}; this deployment will use that exact image.`);
     } else {
       workDir = await mkdtemp(join(tmpdir(), "sohwe-"));
       const repoDir = join(workDir, "repo");

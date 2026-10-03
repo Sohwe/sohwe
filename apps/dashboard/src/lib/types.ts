@@ -27,6 +27,8 @@ export type AppRow = {
   slug: string;
   gitRepo: string;
   gitBranch: string;
+  imageRef: string | null;
+  previewOfId: string | null;
   /** `owner/repo` when the remote is GitHub; null otherwise. */
   repoFullName: string | null;
   /** Deploy on every push to `gitBranch`. */

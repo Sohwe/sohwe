@@ -11,8 +11,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { api } from "@/lib/api";
 import type { AppRow, BuildMode } from "@/lib/types";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
+import { ImageAppSettingsForm } from "./ImageAppSettingsForm";
 
 export function AppSettingsForm({ app, onDelete }: { app: AppRow; onDelete?: () => void }) {
+  return app.imageRef ? <ImageAppSettingsForm app={app} onDelete={onDelete} /> : <GitAppSettingsForm app={app} onDelete={onDelete} />;
+}
+
+function GitAppSettingsForm({ app, onDelete }: { app: AppRow; onDelete?: () => void }) {
   const queryClient = useQueryClient();
   const router = useRouter();
   const [buildMode, setBuildMode] = useState<BuildMode>((app.buildMode as BuildMode) ?? "auto");
@@ -268,7 +273,7 @@ export function AppSettingsForm({ app, onDelete }: { app: AppRow; onDelete?: () 
         open={confirmDelete}
         onOpenChange={setConfirmDelete}
         title="Delete application"
-        description="This removes the app, containers, volumes, and network for this app on this host. This cannot be undone."
+        description={app.previewOfId ? "This removes the preview, its container, and its network. This cannot be undone." : "This removes the app, its previews, containers, volumes, and networks on this host. This cannot be undone."}
         confirmLabel="Delete"
         variant="destructive"
         onConfirm={() => void deleteMut.mutateAsync()}

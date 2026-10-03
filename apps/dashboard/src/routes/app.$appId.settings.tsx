@@ -17,11 +17,11 @@ export function AppSettingsPage() {
       <div>
         <PageHeader
           title="Settings"
-          description="Build, runtime, and container limits. Save, then deploy to apply. Custom domains live on the Domains tab."
+          description={app.imageRef ? "Image, runtime, and container limits. Save, then deploy to apply." : "Build, runtime, and container limits. Save, then deploy to apply. Custom domains live on the Domains tab."}
         />
         <AppSettingsForm app={app} />
       </div>
-      <AutoDeployCard app={app} />
+      {!app.imageRef && !app.previewOfId ? <AutoDeployCard app={app} /> : null}
       <AlertsManager appId={appId} />
     </div>
   );

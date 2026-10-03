@@ -119,6 +119,20 @@ describe("CreateApplicationSchema", () => {
     assert.throws(() => CreateApplicationSchema.parse({ ...valid, buildMode: "bazel" }));
   });
 
+  it("accepts a public image source with runtime variables and no Git repository", () => {
+    const pinned = `ghcr.io/acme/web@sha256:${"a".repeat(64)}`;
+    const image = CreateApplicationSchema.parse({ name: "Web", slug: "web", buildMode: "image", imageRef: pinned, variables: [{ key: "TOKEN", value: "secret", scope: "runtime" }] });
+    assert.equal(image.imageRef, pinned);
+    assert.equal(image.gitRepo, undefined);
+    for (const extra of [
+      { gitRepo: "https://github.com/acme/web" },
+      { autoDeploy: true },
+      { configPath: "sohwe.yaml" },
+      { variables: [{ key: "TOKEN", value: "secret", scope: "build" }] }
+    ]) assert.throws(() => CreateApplicationSchema.parse({ name: "Web", slug: "web", buildMode: "image", imageRef: "nginx:1.27", ...extra }));
+    assert.throws(() => CreateApplicationSchema.parse({ name: "Web", slug: "web", buildMode: "image", imageRef: "https://registry.example/image" }));
+  });
+
   it("accepts a nested Dockerfile path and target", () => {
     const out = CreateApplicationSchema.parse({
       ...valid,

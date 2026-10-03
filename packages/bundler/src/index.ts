@@ -33,8 +33,10 @@ export const BUNDLE_FORMAT = "sohwe-backup" as const;
  * - v7: adds the application directory used during repository import.
  * - v8: preserves an application's repository config path and dashboard
  *   override keys across portable restore.
+ * - v9: preserves the public image reference for image-sourced apps. Preview
+ *   apps are ephemeral and excluded from exports.
  */
-export const BUNDLE_VERSION = 8 as const;
+export const BUNDLE_VERSION = 9 as const;
 
 // --- Input shapes (plaintext, supplied by the API) -------------------------
 
@@ -56,6 +58,7 @@ export type BundleAppInput = {
   slug: string;
   gitRepo: string;
   gitBranch: string;
+  imageRef?: string | null;
   buildMode: string;
   buildCmd: string | null;
   startCmd: string | null;
@@ -250,6 +253,8 @@ const AppEntrySchema = z.object({
   slug: z.string(),
   gitRepo: z.string(),
   gitBranch: z.string(),
+  /** v9+. Public image to pull instead of cloning a repository. */
+  imageRef: z.string().nullable().optional(),
   buildMode: z.string(),
   buildCmd: z.string().nullable(),
   startCmd: z.string().nullable(),
@@ -364,6 +369,13 @@ export const BundleManifestV8Schema = z.object({
   projects: z.array(ProjectEntrySchema)
 });
 
+export const BundleManifestV9Schema = z.object({
+  ...ManifestBase,
+  version: z.literal(9),
+  datastores: z.array(DatastoreEntrySchema),
+  projects: z.array(ProjectEntrySchema)
+});
+
 export const BundleManifestSchema = z.discriminatedUnion("version", [
   BundleManifestV1Schema,
   BundleManifestV2Schema,
@@ -372,11 +384,12 @@ export const BundleManifestSchema = z.discriminatedUnion("version", [
   BundleManifestV5Schema,
   BundleManifestV6Schema,
   BundleManifestV7Schema,
-  BundleManifestV8Schema
+  BundleManifestV8Schema,
+  BundleManifestV9Schema
 ]);
 
 /** The manifest `buildBundle` emits (always the current version). */
-export type BundleManifest = z.infer<typeof BundleManifestV8Schema>;
+export type BundleManifest = z.infer<typeof BundleManifestV9Schema>;
 /** Any version `parseBundle` accepts. */
 export type AnyBundleManifest = z.infer<typeof BundleManifestSchema>;
 export type BundleAppEntry = z.infer<typeof AppEntrySchema>;
@@ -394,6 +407,7 @@ export type ParsedBundleApp = Omit<
   | "appDirectory"
   | "configPath"
   | "configOverrides"
+  | "imageRef"
   | "dockerfilePath"
   | "dockerTarget"
 > & {
@@ -409,6 +423,7 @@ export type ParsedBundleApp = Omit<
   appDirectory: string;
   configPath: string | null;
   configOverrides: string[];
+  imageRef: string | null;
   dockerfilePath: string;
   dockerTarget: string | null;
 };
@@ -472,6 +487,7 @@ export function buildBundle(
       slug: a.slug,
       gitRepo: a.gitRepo,
       gitBranch: a.gitBranch,
+      imageRef: a.imageRef ?? null,
       buildMode: a.buildMode,
       buildCmd: a.buildCmd,
       startCmd: a.startCmd,
@@ -671,6 +687,7 @@ export function parseBundle(raw: unknown, passphrase: string): ParsedBundle {
       appDirectory,
       configPath,
       configOverrides,
+      imageRef,
       dockerfilePath,
       dockerTarget,
       ...rest
@@ -684,13 +701,14 @@ export function parseBundle(raw: unknown, passphrase: string): ParsedBundle {
       appDirectory: appDirectory ?? ".",
       configPath: configPath ?? null,
       configOverrides: configOverrides ?? [],
+      imageRef: imageRef ?? null,
       dockerfilePath: dockerfilePath ?? "Dockerfile",
       dockerTarget: dockerTarget ?? null
     };
   });
 
   const projects =
-    (manifest.version === 6 || manifest.version === 7 || manifest.version === 8)
+    (manifest.version === 6 || manifest.version === 7 || manifest.version === 8 || manifest.version === 9)
       ? manifest.projects.map((project) => ({
           name: project.name,
           slug: project.slug,

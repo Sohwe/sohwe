@@ -12,6 +12,8 @@ write-ups.
 
 ### Added
 
+- Application **Branch previews** create an isolated app and generated URL from a selected Git branch. The preview inherits non-secret build settings but no variable values, volumes, domains, or datastore bindings. Preview setup checks required variables before creation; deleting the source cleans up its previews and Docker resources.
+- **Public container image import** creates an app without a Git repository. The worker pulls the image and stores its immutable local image ID for rollback. Image apps expose image, port, command, resource, and runtime-variable settings; build variables and push deploys are unavailable. A forward-only migration adds `image_ref` and the preview parent relation. Portable bundles move to v9 for image references, while previews remain ephemeral and older bundles restore as before.
 - Deploy with Sohwe links can prefill a repository, branch, and `sohwe.yaml` path in the existing application creation flow. Links contain no variable values; repository inspection and required-variable prompts still run before creation. Links survive sign-in and first-run setup, and malformed links show a correction instead of creating an app.
 
 ### Changed

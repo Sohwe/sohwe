@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { ExternalLink, GitBranch, MoreHorizontal, Rocket } from "lucide-react";
+import { ExternalLink, GitBranch, MoreHorizontal, Package, Rocket } from "lucide-react";
 import { toast } from "sonner";
 import { BuildModeBadge, AppStatusBadge } from "./BuildModeBadge";
 import { useAppConfig } from "@/lib/config";
@@ -56,6 +56,7 @@ export function AppCard({ app }: { app: AppRow }) {
                 {app.name}
               </Link>
               <BuildModeBadge mode={app.buildMode} />
+              {app.previewOfId ? <span className="rounded bg-muted px-1.5 py-0.5 text-xs">Preview</span> : null}
             </div>
             <div className="mt-1.5">
               <AppStatusBadge status={app.status} />
@@ -120,9 +121,9 @@ export function AppCard({ app }: { app: AppRow }) {
           </a>
         ) : null}
         <div className="mt-3 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-          <GitBranch className="h-3.5 w-3.5 shrink-0" />
-          <span className="truncate font-mono">{app.gitRepo}</span>
-          <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono">{app.gitBranch}</span>
+          {app.imageRef ? <Package className="h-3.5 w-3.5 shrink-0" /> : <GitBranch className="h-3.5 w-3.5 shrink-0" />}
+          <span className="truncate font-mono">{app.imageRef ?? app.gitRepo}</span>
+          {!app.imageRef ? <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono">{app.gitBranch}</span> : null}
           <span className="shrink-0 font-mono">:{app.port}</span>
         </div>
         {lastDep ? (

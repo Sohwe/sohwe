@@ -25,10 +25,12 @@ export const InitialVariablesEditor = forwardRef<InitialVariablesEditorHandle, {
   value: VariableEntry[];
   onChange: (value: VariableEntry[]) => void;
   disabled: boolean;
+  runtimeOnly?: boolean;
 }>(function InitialVariablesEditor({
   value,
   onChange,
-  disabled
+  disabled,
+  runtimeOnly = false
 }, ref) {
   const [newKey, setNewKey] = useState("");
   const [newValue, setNewValue] = useState("");
@@ -60,6 +62,7 @@ export const InitialVariablesEditor = forwardRef<InitialVariablesEditorHandle, {
     if (entries.length > 500 || entries.some((entry) => !VariableEntrySchema.safeParse(entry).success)) {
       return { error: "Up to 500 variables and 32 KB per value are allowed." };
     }
+    if (runtimeOnly && entries.some((entry) => entry.scope !== "runtime")) return { error: "Image apps support runtime variables only." };
     return { vars: entries };
   }
 
@@ -107,9 +110,9 @@ export const InitialVariablesEditor = forwardRef<InitialVariablesEditorHandle, {
         <p className="mt-1 text-xs text-muted-foreground">
           Optional. Values are encrypted when the app is saved. Runtime only is the safest default.
         </p>
-        <p className="mt-1 text-xs text-muted-foreground">
+        {!runtimeOnly ? <p className="mt-1 text-xs text-muted-foreground">
           Build access can bake values into image layers. Keep credentials at runtime unless the build needs them.
-        </p>
+        </p> : null}
       </div>
       {value.length > 0 ? (
         <div className="space-y-2">
@@ -127,11 +130,11 @@ export const InitialVariablesEditor = forwardRef<InitialVariablesEditorHandle, {
                 onChange={(event) => onChange(value.map((item) => item.key === entry.key ? { ...item, value: event.target.value } : item))}
               />
               <div className="flex items-center gap-2">
-                <ScopeSelect
+                {!runtimeOnly ? <ScopeSelect
                   value={entry.scope}
                   disabled={disabled}
                   onChange={(scope) => onChange(value.map((item) => item.key === entry.key ? { ...item, scope } : item))}
-                />
+                /> : null}
                 <Button type="button" size="sm" variant="ghost" disabled={disabled} onClick={() => onChange(value.filter((item) => item.key !== entry.key))}>
                   Remove
                 </Button>
@@ -179,12 +182,12 @@ export const InitialVariablesEditor = forwardRef<InitialVariablesEditorHandle, {
           />
         </Field>
         <div className="sm:col-span-2">
-          <BuildAccess scope={newScope} onChange={setNewScope} disabled={disabled} />
+          {!runtimeOnly ? <><BuildAccess scope={newScope} onChange={setNewScope} disabled={disabled} />
           <p className="mt-1 text-xs text-muted-foreground">{SCOPE_HINT[newScope]}</p>
           <details className="mt-2 text-xs text-muted-foreground">
             <summary className="w-fit cursor-pointer">Advanced scope options</summary>
             <div className="mt-2"><ScopeSelect value={newScope} onChange={setNewScope} disabled={disabled} /></div>
-          </details>
+          </details></> : null}
         </div>
         {newScope !== "runtime" && looksSecret(newKey.trim()) ? (
           <p className="text-xs text-destructive sm:col-span-2">This name looks like a credential. Use Runtime only unless the build needs it.</p>
@@ -204,11 +207,11 @@ export const InitialVariablesEditor = forwardRef<InitialVariablesEditorHandle, {
             spellCheck={false}
             className="min-h-28 font-mono text-xs"
           />
-          <BuildAccess scope={bulkScope} onChange={setBulkScope} disabled={disabled} />
+          {!runtimeOnly ? <><BuildAccess scope={bulkScope} onChange={setBulkScope} disabled={disabled} />
           <details className="text-xs text-muted-foreground">
             <summary className="w-fit cursor-pointer">Advanced scope options</summary>
             <div className="mt-2"><ScopeSelect value={bulkScope} onChange={setBulkScope} disabled={disabled} /></div>
-          </details>
+          </details></> : null}
           {bulkScope !== "runtime" && Object.keys(parseEnvText(bulk)).some(looksSecret) ? (
             <p className="text-xs text-destructive">Some pasted keys look like credentials. Build access can expose their values in the image.</p>
           ) : null}

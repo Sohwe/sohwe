@@ -23,6 +23,8 @@ Implemented in the current codebase:
 
 [`UPCOMING_PLANS.md`](./UPCOMING_PLANS.md) tracks unfinished work.
 
+Single-application setup also supports [manual branch previews and public container image import](./docs/app-previews-and-images.md). A preview uses its own URL and container without copying secret values from its source application. Image apps pull from a public registry and use runtime variables, without a Git build.
+
 ### Create your first application
 
 Open **Applications → New app**, select a repository shared with your GitHub

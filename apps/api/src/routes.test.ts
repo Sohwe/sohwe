@@ -759,6 +759,8 @@ describe("API routes", { skip }, () => {
         ["PATCH", `/api/applications/${id}`, { name: "Renamed" }],
         ["DELETE", `/api/applications/${id}`, undefined],
         ["POST", `/api/applications/${id}/deploy`, {}],
+        ["GET", `/api/applications/${id}/previews`, undefined],
+        ["POST", `/api/applications/${id}/previews`, { branch: "feature/example" }],
         ["GET", `/api/applications/${id}/env`, undefined],
         ["PUT", `/api/applications/${id}/env`, { vars: { A: "1" } }],
         ["GET", `/api/applications/${id}/build-args`, undefined],
@@ -789,6 +791,29 @@ describe("API routes", { skip }, () => {
       const rows = list.json() as { id: string }[];
       assert.equal(rows.length, 1);
       assert.equal(rows[0]?.id, created.id);
+    });
+
+    it("creates a public image app without a Git remote and keeps runtime values private", async () => {
+      const cookie = await signIn();
+      const res = await app.inject({ method: "POST", url: "/api/applications", headers: { cookie }, payload: {
+        name: "Image web", slug: "image-web", buildMode: "image", imageRef: "ghcr.io/acme/web:1.0.0", port: 8080,
+        variables: [{ key: "API_TOKEN", value: "preview-secret-value", scope: "runtime" }]
+      } });
+      assert.equal(res.statusCode, 200, res.body);
+      assert.ok(!res.body.includes("preview-secret-value"));
+      const row = await prisma.application.findFirstOrThrow({ where: { slug: "image-web" } });
+      assert.equal(row.gitRepo, "");
+      assert.equal(row.repoFullName, null);
+      assert.equal(row.imageRef, "ghcr.io/acme/web:1.0.0");
+      const buildVars = await app.inject({ method: "PUT", url: `/api/applications/${row.id}/build-args`, headers: { cookie }, payload: { vars: { TOKEN: "value" } } });
+      assert.equal(buildVars.statusCode, 400);
+      const gitSettings = await app.inject({ method: "PATCH", url: `/api/applications/${row.id}`, headers: { cookie }, payload: { buildCmd: "npm run build" } });
+      assert.equal(gitSettings.statusCode, 400);
+      const updated = await app.inject({ method: "PATCH", url: `/api/applications/${row.id}`, headers: { cookie }, payload: { imageRef: "nginx:1.27", port: 80 } });
+      assert.equal(updated.statusCode, 200, updated.body);
+      assert.equal((updated.json() as { imageRef: string }).imageRef, "nginx:1.27");
+      const preview = await app.inject({ method: "POST", url: `/api/applications/${row.id}/previews`, headers: { cookie }, payload: { branch: "main" } });
+      assert.equal(preview.statusCode, 400);
     });
 
     it("restricts repository inspection to admins and rejects private network hosts", async () => {

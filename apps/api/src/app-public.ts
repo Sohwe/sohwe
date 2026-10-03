@@ -41,6 +41,8 @@ const applicationScalarSelect = {
   slug: true,
   gitRepo: true,
   gitBranch: true,
+  imageRef: true,
+  previewOfId: true,
   repoFullName: true,
   autoDeploy: true,
   buildMode: true,

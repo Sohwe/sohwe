@@ -40,9 +40,10 @@ export async function registerBuildArgRoutes(app: FastifyInstance) {
 
       const a = await prisma.application.findFirst({
         where: { id, organizationId: u.organizationId },
-        select: { id: true, slug: true, buildArgsEncrypted: true }
+        select: { id: true, slug: true, buildArgsEncrypted: true, imageRef: true }
       });
       if (!a) return reply.notFound();
+      if (a.imageRef) return reply.badRequest("Image apps do not have build variables.");
 
       let map: Record<string, string>;
       try {
@@ -85,9 +86,10 @@ export async function registerBuildArgRoutes(app: FastifyInstance) {
 
       const a = await prisma.application.findFirst({
         where: { id, organizationId: u.organizationId },
-        select: { id: true, slug: true, buildArgsEncrypted: true }
+        select: { id: true, slug: true, buildArgsEncrypted: true, imageRef: true }
       });
       if (!a) return reply.notFound();
+      if (a.imageRef) return reply.badRequest("Image apps do not have build variables.");
 
       // Only to describe the change in the audit trail; the blob is being
       // replaced wholesale whether or not it can still be read.
@@ -134,9 +136,10 @@ export async function registerBuildArgRoutes(app: FastifyInstance) {
 
       const a = await prisma.application.findFirst({
         where: { id, organizationId: u.organizationId },
-        select: { id: true, slug: true, buildArgsEncrypted: true }
+        select: { id: true, slug: true, buildArgsEncrypted: true, imageRef: true }
       });
       if (!a) return reply.notFound();
+      if (a.imageRef) return reply.badRequest("Image apps do not have build variables.");
 
       let before: Record<string, string>;
       try {

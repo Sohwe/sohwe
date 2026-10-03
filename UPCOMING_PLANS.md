@@ -4,9 +4,9 @@ This file tracks work that remains open. Completed Phase 9 items are retained as
 
 The prioritized plan for making single-application setup easier is in
 [`docs/application-onboarding-priorities.md`](./docs/application-onboarding-priorities.md).
-Priorities 1–8 (through Deploy with Sohwe links) are implemented.
+Priorities 1–9 (through manual branch previews and public image import) are implemented.
 Live private-repository and first-deploy fixture validation remains open;
-priority 9 remains planned.
+automatic pull-request preview lifecycle and local-directory import remain possible follow-ups.
 The onboarding plan also records the intended full dashboard redesign: ease of
 use and clean UI, with Vercel and Railway as references and a dedicated logs UI
 improvement. Scope and sequencing will be reviewed before implementation.

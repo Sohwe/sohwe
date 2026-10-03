@@ -45,7 +45,7 @@ export async function gatherBundleApps(
   includeSecrets: boolean
 ): Promise<BundleAppInput[]> {
   const apps = await prisma.application.findMany({
-    where: { organizationId },
+    where: { organizationId, previewOfId: null },
     include: {
       volumes: { orderBy: { createdAt: "asc" } },
       domains: { orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }] },
@@ -59,6 +59,7 @@ export async function gatherBundleApps(
     slug: a.slug,
     gitRepo: a.gitRepo,
     gitBranch: a.gitBranch,
+    imageRef: a.imageRef,
     buildMode: a.buildMode,
     buildCmd: a.buildCmd,
     startCmd: a.startCmd,

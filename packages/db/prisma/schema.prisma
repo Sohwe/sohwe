@@ -237,6 +237,13 @@ model Application {
   slug               String
   gitRepo            String             @map("git_repository")
   gitBranch          String             @default("main") @map("git_branch")
+  // Empty gitRepo and a non-null imageRef identify a public-image application.
+  imageRef           String?            @map("image_ref")
+  // Preview apps have their own container, URL and variables. Deleting the
+  // source application also removes its preview rows.
+  previewOfId        String?            @map("preview_of_id")
+  previewOf          Application?       @relation("ApplicationPreviews", fields: [previewOfId], references: [id], onDelete: Cascade)
+  previews           Application[]      @relation("ApplicationPreviews")
   // `owner/repo` when gitRepo points at GitHub. Denormalized from gitRepo so
   // the push webhook can resolve a delivery to apps with one indexed lookup
   // instead of parsing every repo URL in the org.
@@ -272,6 +279,7 @@ model Application {
 
   @@unique([organizationId, slug])
   @@index([repoFullName])
+  @@index([previewOfId])
   @@map("applications")
 }
 

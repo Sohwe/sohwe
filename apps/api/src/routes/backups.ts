@@ -21,6 +21,7 @@ import {
 } from "@sohwe/backups";
 import {
   BackupExportSchema,
+  ImageReferenceSchema,
   buildDatastoreConnectionUrl,
   DATASTORE_KINDS,
   DATASTORE_PUBLIC_PORT_MAX,
@@ -625,6 +626,9 @@ export async function registerBackupRoutes(app: FastifyInstance) {
       } catch (e) {
         return reply.badRequest(e instanceof Error ? e.message : "Invalid bundle");
       }
+      if (parsed.apps.some((a) => a.buildMode === "image" ? !a.imageRef || !ImageReferenceSchema.safeParse(a.imageRef).success || !!a.gitRepo : !!a.imageRef)) {
+        return reply.badRequest("Bundle contains an invalid image application source.");
+      }
 
       const existing = await prisma.application.findMany({
         where: { organizationId: u.organizationId },
@@ -687,6 +691,9 @@ export async function registerBackupRoutes(app: FastifyInstance) {
         parsed = parseBundle(body.bundle, body.passphrase);
       } catch (e) {
         return reply.badRequest(e instanceof Error ? e.message : "Invalid bundle");
+      }
+      if (parsed.apps.some((a) => a.buildMode === "image" ? !a.imageRef || !ImageReferenceSchema.safeParse(a.imageRef).success || !!a.gitRepo : !!a.imageRef)) {
+        return reply.badRequest("Bundle contains an invalid image application source.");
       }
 
       const result = await prisma.$transaction(async (tx) => {
@@ -752,6 +759,7 @@ export async function registerBackupRoutes(app: FastifyInstance) {
             name: a.name,
             gitRepo: a.gitRepo,
             gitBranch: a.gitBranch,
+            imageRef: a.imageRef,
             // Derived, not carried in the bundle. `autoDeploy` deliberately
             // stays off: a restored app must not start deploying on push
             // against whatever instance it landed on.
