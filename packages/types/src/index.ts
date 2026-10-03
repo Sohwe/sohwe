@@ -174,6 +174,8 @@ export const CreateApplicationSchema = z.object({
   dockerfilePath: DockerfilePathSchema.default("Dockerfile"),
   dockerTarget: DockerTargetSchema.optional(),
   domain: OptionalDomain,
+  /** Initial scoped variables are stored before the first deployment is queued. */
+  variables: z.array(z.lazy(() => VariableEntrySchema)).max(500).optional(),
   /** Deploy on every push to `gitBranch` (Phase 5; needs a connected GitHub App). */
   autoDeploy: z.boolean().default(false)
 });

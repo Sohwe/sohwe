@@ -4,8 +4,9 @@ This file tracks work that remains open. Completed Phase 9 items are retained as
 
 The prioritized plan for making single-application setup easier is in
 [`docs/application-onboarding-priorities.md`](./docs/application-onboarding-priorities.md).
-Priorities 1–2 (Create and deploy; Reduce manual form entry) are implemented.
-Priorities 3–9 remain open.
+Priorities 1–3 (Create and deploy; Reduce manual form entry; Variables before
+first deploy) are implemented. First release fixture validation and priorities
+4–9 remain open.
 The onboarding plan also records the intended full dashboard redesign: ease of
 use and clean UI, with Vercel and Railway as references and a dedicated logs UI
 improvement. Scope and sequencing will be reviewed before implementation.

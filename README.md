@@ -27,9 +27,11 @@ Open **Applications → New app**, select a repository shared with your GitHub
 App or paste a public HTTPS Git URL. Sohwe suggests a name and slug from the
 repository; you can edit both. Review the branch, container port, and build
 mode, then open **Advanced settings** for Dockerfile paths and targets, command
-overrides, or a custom domain. **Create and deploy** saves the app,
-starts its first deployment, and opens the live build log. Use **Save for later**
-when you need to configure the app before its first deploy. If the deploy
+overrides, or a custom domain. Add runtime, build, or shared variables before
+deploying; you can enter them individually or paste `.env` values. Variable
+values are encrypted when the app is created, before the first build is queued.
+**Create and deploy** then opens the live build log. Use **Save for later**
+when you need more setup before the first deploy. If the deploy
 request fails after saving, the dialog shows the saved app with **Retry deploy**
 and **Open saved app**; retrying does not create another application.
 

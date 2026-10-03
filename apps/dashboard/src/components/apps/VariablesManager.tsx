@@ -1,16 +1,17 @@
 import { useState } from "react";
+import type { VariableScope } from "@sohwe/types";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Field } from "@/components/common/Field";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { api, apiGet } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { Notice, ResourceItem, ResourceList } from "@/components/common/Section";
+import { BuildAccess, ScopeSelect } from "./ScopedVariableInputs";
+import { looksSecret, parseEnvText, SCOPE_HINT, SCOPE_LABEL } from "./scoped-variable-utils";
 
 /**
  * One list per application, each variable scoped to the build, the container,
@@ -19,7 +20,7 @@ import { Notice, ResourceItem, ResourceList } from "@/components/common/Section"
  * talks in scopes.
  */
 
-type Scope = "runtime" | "build" | "both";
+type Scope = VariableScope;
 
 type MaskedItem = {
   key: string;
@@ -35,99 +36,6 @@ type RevealItem = {
   conflict?: boolean;
   buildValue?: string;
 };
-
-const SCOPE_LABEL: Record<Scope, string> = {
-  both: "Build + runtime",
-  runtime: "Runtime only",
-  build: "Build only"
-};
-
-const SCOPE_HINT: Record<Scope, string> = {
-  both: "Reaches the image build and the running container.",
-  runtime: "Injected into the container at deploy time. Never reaches the image.",
-  build: "Passed to the build only. Not present at runtime."
-};
-
-function BuildAccess({
-  scope,
-  onChange,
-  disabled,
-  variableKey
-}: {
-  scope: Scope;
-  onChange: (scope: Scope) => void;
-  disabled?: boolean;
-  variableKey?: string;
-}) {
-  if (scope === "build") {
-    return <ScopeSelect value={scope} onChange={onChange} disabled={disabled} />;
-  }
-  return (
-    <label className="flex items-center gap-2 text-xs">
-      <Checkbox
-        checked={scope === "both"}
-        disabled={disabled}
-        aria-label={variableKey ? `Also available during build for ${variableKey}` : undefined}
-        onChange={(event) => onChange(event.target.checked ? "both" : "runtime")}
-      />
-      Also available during build
-    </label>
-  );
-}
-
-/**
- * Keys that usually hold a credential. Only a nudge — the user decides — but
- * "build + runtime" bakes a value into the image, and a leaked token is not a
- * mistake worth making silently.
- */
-const SECRETISH = /(SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL|PRIVATE_KEY|API_KEY|DATABASE_URL|REDIS_URL|_DSN)/;
-const PUBLICISH = /^(NEXT_PUBLIC_|VITE_|PUBLIC_|REACT_APP_)/;
-
-function looksSecret(key: string): boolean {
-  const normalized = key.toUpperCase();
-  return SECRETISH.test(normalized) && !PUBLICISH.test(normalized);
-}
-
-function parseEnvText(raw: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const line of raw.split(/\r?\n/)) {
-    const t = line.trim();
-    if (!t || t.startsWith("#")) continue;
-    const eq = t.indexOf("=");
-    if (eq < 0) continue;
-    const k = t.slice(0, eq).trim();
-    const v = t.slice(eq + 1).replace(/^['"]|['"]$/g, "").trim();
-    if (k) out[k] = v;
-  }
-  return out;
-}
-
-function ScopeSelect({
-  value,
-  onChange,
-  disabled,
-  className
-}: {
-  value: Scope;
-  onChange: (s: Scope) => void;
-  disabled?: boolean;
-  className?: string;
-}) {
-  return (
-    <Select value={value} onValueChange={(v) => onChange(v as Scope)} disabled={disabled}>
-      <SelectTrigger className={className ?? "h-8 w-[9.5rem] text-xs"}>
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        {(["both", "runtime", "build"] as const).map((s) => (
-          <SelectItem key={s} value={s}>
-            {SCOPE_LABEL[s]}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
-}
 
 export function VariablesManager({ path, onChanged }: { path: string; onChanged: () => void }) {
   const queryClient = useQueryClient();

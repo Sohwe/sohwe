@@ -24,6 +24,7 @@ import { getRunningAppContainer } from "../container-fs";
 import { recordAudit } from "../audit";
 import { requireRole } from "../rbac";
 import { isUniqueViolation } from "../prisma-errors";
+import { encodeVarBlob, splitScoped } from "./variable-store";
 
 const docker = new Docker();
 
@@ -208,11 +209,17 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
     "/api/applications",
     {
       preHandler: [requireRole("admin")],
-      schema: { body: CreateApplicationSchema }
+      schema: { body: CreateApplicationSchema },
+      // Creation can now carry variable values. Never log its request body.
+      logLevel: "silent"
     },
     async (req, reply) => {
       const u = req.user!;
       const body = CreateApplicationSchema.parse(req.body);
+      const variableKeys = body.variables?.map((entry) => entry.key) ?? [];
+      const duplicateKey = variableKeys.find((key, index) => variableKeys.indexOf(key) !== index);
+      if (duplicateKey) return reply.badRequest(`Duplicate variable key: ${duplicateKey}`);
+      const initialVariables = splitScoped(body.variables ?? []);
 
       // Denormalized so push webhooks resolve with one indexed lookup; null for
       // non-GitHub remotes, which simply never match a delivery.
@@ -260,6 +267,8 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
           runtimeCmd: body.runtimeCmd ?? null,
           dockerfilePath: body.dockerfilePath,
           dockerTarget: body.dockerTarget ?? null,
+          envVarsEncrypted: encodeVarBlob(initialVariables.env),
+          buildArgsEncrypted: encodeVarBlob(initialVariables.build),
           organizationId: u.organizationId,
           // A domain given at creation becomes the app's primary one. It is
           // created in the same statement so a hostname another app already
@@ -293,7 +302,8 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
           gitRepo: body.gitRepo,
           gitBranch: body.gitBranch,
           buildMode: body.buildMode,
-          autoDeploy: body.autoDeploy
+          autoDeploy: body.autoDeploy,
+          variableKeys: variableKeys.sort()
         }
       });
       return serializeAppListRow(created);

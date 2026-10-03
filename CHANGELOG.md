@@ -12,6 +12,12 @@ write-ups.
 
 ### Changed
 
+- App creation now accepts scoped runtime, build, and shared variables in the
+  new-app dialog, including bulk `.env` paste. Initial values are validated and
+  stored in the existing encrypted maps with the app before its first deploy
+  request. Invalid variable input creates no app; the existing variable APIs
+  and editor remain available after creation.
+
 - The new-app form now suggests name and slug from pasted HTTPS Git URLs while
   preserving manual edits. Repository choice comes first; branch, port, and
   build mode remain visible, while Dockerfile, command, and domain controls

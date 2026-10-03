@@ -1,7 +1,7 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { CreateApplicationSchema, normalizeHostname } from "@sohwe/types";
+import { CreateApplicationSchema, normalizeHostname, type VariableEntry } from "@sohwe/types";
 import { Lock, Search } from "lucide-react";
 import { toast } from "sonner";
 import { Field } from "@/components/common/Field";
@@ -12,6 +12,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { api, apiGet } from "@/lib/api";
 import type { AppRow, BuildMode, GitHubAppStatus, GitHubRepo } from "@/lib/types";
+import { InitialVariablesEditor, type InitialVariablesEditorHandle } from "./InitialVariablesEditor";
 
 /** `my-cool-repo` -> a slug that satisfies the API's `[a-z0-9-]+` rule. */
 function slugFromRepoName(name: string): string {
@@ -56,6 +57,7 @@ export function CreateAppDialog({
 }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const variablesEditor = useRef<InitialVariablesEditorHandle>(null);
   const [cName, setCName] = useState("");
   const [cSlug, setCSlug] = useState("");
   const [cRepo, setCRepo] = useState("");
@@ -69,6 +71,8 @@ export function CreateAppDialog({
   const [cDockerTarget, setCDockerTarget] = useState("");
   const [cDomain, setCDomain] = useState("");
   const [cAutoDeploy, setCAutoDeploy] = useState(false);
+  const [cVariables, setCVariables] = useState<VariableEntry[]>([]);
+  const [variableError, setVariableError] = useState<string | null>(null);
   const [repoSearch, setRepoSearch] = useState("");
   const [selectedRepo, setSelectedRepo] = useState<string | undefined>();
   const [nameEdited, setNameEdited] = useState(false);
@@ -161,6 +165,8 @@ export function CreateAppDialog({
     setCDockerTarget("");
     setCDomain("");
     setCAutoDeploy(false);
+    setCVariables([]);
+    setVariableError(null);
     setRepoSearch("");
     setSelectedRepo(undefined);
     setNameEdited(false);
@@ -194,7 +200,7 @@ export function CreateAppDialog({
   });
 
   const createMut = useMutation({
-    mutationFn: async (intent: "deploy" | "save") => {
+    mutationFn: async ({ intent, variables }: { intent: "deploy" | "save"; variables: VariableEntry[] }) => {
       setSlugError(null);
       const body = CreateApplicationSchema.parse({
         name: cName,
@@ -211,6 +217,7 @@ export function CreateAppDialog({
         // Normalized the same way the Domains tab does, so a pasted URL works
         // here too rather than being rejected as a malformed hostname.
         domain: cDomain.trim() ? normalizeHostname(cDomain) : undefined,
+        variables,
         autoDeploy: cAutoDeploy
       });
       const app = await api<AppRow>("/api/applications", { method: "POST", body: JSON.stringify(body) });
@@ -291,8 +298,17 @@ export function CreateAppDialog({
               setRepoTouched(true);
               setSlugTouched(true);
               if (repository.error || !cSlug || !/^[a-z0-9-]+$/.test(cSlug) || slugTaken) return;
+              const initialVariables = variablesEditor.current?.collect() ?? { vars: cVariables };
+              if ("error" in initialVariables) {
+                setVariableError(initialVariables.error);
+                return;
+              }
+              setVariableError(null);
               const submitter = (e.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
-              createMut.mutate(submitter?.value === "save" ? "save" : "deploy");
+              createMut.mutate({
+                intent: submitter?.value === "save" ? "save" : "deploy",
+                variables: initialVariables.vars
+              });
             }}
           >
             {githubInstalled ? (
@@ -428,6 +444,16 @@ export function CreateAppDialog({
               </Select>
               <span className="text-xs text-muted-foreground">Auto uses a root Dockerfile when present, otherwise Nixpacks.</span>
             </Field>
+            <InitialVariablesEditor
+              ref={variablesEditor}
+              value={cVariables}
+              onChange={(entries) => {
+                setCVariables(entries);
+                setVariableError(null);
+              }}
+              disabled={pending}
+            />
+            {variableError ? <p className="text-xs text-destructive" role="alert">{variableError}</p> : null}
             <details className="rounded-lg border border-border/70 bg-muted/20 p-3">
               <summary className="cursor-pointer text-sm font-medium">Advanced settings</summary>
               <div className="mt-3 space-y-3">

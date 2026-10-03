@@ -71,6 +71,23 @@ describe("CreateApplicationSchema", () => {
     assert.equal(out.dockerTarget, undefined);
     assert.equal(out.autoDeploy, false);
     assert.equal(out.domain, undefined);
+    assert.equal(out.variables, undefined);
+  });
+
+  it("accepts scoped variables at creation and validates them before persistence", () => {
+    const out = CreateApplicationSchema.parse({
+      ...valid,
+      variables: [
+        { key: "DATABASE_URL", value: "postgresql://example", scope: "runtime" },
+        { key: "PUBLIC_URL", value: "https://example.test", scope: "both" },
+        { key: "NODE_VERSION", value: "24", scope: "build" }
+      ]
+    });
+    assert.deepEqual(out.variables?.map((entry) => entry.scope), ["runtime", "both", "build"]);
+    assert.throws(() => CreateApplicationSchema.parse({
+      ...valid,
+      variables: [{ key: "INVALID-NAME", value: "secret", scope: "runtime" }]
+    }));
   });
 
   it("coerces a numeric string port", () => {

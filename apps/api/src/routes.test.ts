@@ -791,6 +791,86 @@ describe("API routes", { skip }, () => {
       assert.equal(rows[0]?.id, created.id);
     });
 
+    it("stores initial scoped variables with creation, without exposing their values", async () => {
+      const cookie = await signIn();
+      const runtimeValue = "runtime-secret-value";
+      const buildValue = "build-secret-value";
+      const sharedValue = "shared-secret-value";
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/applications",
+        headers: { cookie },
+        payload: {
+          name: "Web",
+          slug: "web",
+          gitRepo: "https://github.com/acme/web",
+          variables: [
+            { key: "RUNTIME_TOKEN", value: runtimeValue, scope: "runtime" },
+            { key: "BUILD_TOKEN", value: buildValue, scope: "build" },
+            { key: "SHARED_TOKEN", value: sharedValue, scope: "both" }
+          ]
+        }
+      });
+      assert.equal(res.statusCode, 200, res.body);
+      for (const value of [runtimeValue, buildValue, sharedValue]) {
+        assert.ok(!res.body.includes(value));
+      }
+      const created = res.json() as { id: string };
+      const row = await prisma.application.findUniqueOrThrow({ where: { id: created.id } });
+      assert.deepEqual(decryptJson(row.envVarsEncrypted!), {
+        RUNTIME_TOKEN: runtimeValue,
+        SHARED_TOKEN: sharedValue
+      });
+      assert.deepEqual(decryptJson(row.buildArgsEncrypted!), {
+        BUILD_TOKEN: buildValue,
+        SHARED_TOKEN: sharedValue
+      });
+      const listing = await app.inject({
+        method: "GET",
+        url: `/api/applications/${created.id}/variables`,
+        headers: { cookie }
+      });
+      assert.equal(listing.statusCode, 200, listing.body);
+      assert.deepEqual(
+        (listing.json() as { items: Array<{ key: string; scope: string }> }).items.map(({ key, scope }) => ({ key, scope })),
+        [
+          { key: "BUILD_TOKEN", scope: "build" },
+          { key: "RUNTIME_TOKEN", scope: "runtime" },
+          { key: "SHARED_TOKEN", scope: "both" }
+        ]
+      );
+      for (const value of [runtimeValue, buildValue, sharedValue]) {
+        assert.ok(!listing.body.includes(value));
+      }
+      assert.equal(await prisma.deployment.count(), 0);
+      const auditRows = await prisma.auditLog.findMany({ where: { targetId: created.id } });
+      const auditText = JSON.stringify(auditRows);
+      for (const value of [runtimeValue, buildValue, sharedValue]) {
+        assert.ok(!auditText.includes(value));
+      }
+    });
+
+    it("rejects invalid or duplicate initial variables without creating an app", async () => {
+      const cookie = await signIn();
+      for (const variables of [
+        [{ key: "INVALID-NAME", value: "secret", scope: "runtime" }],
+        [
+          { key: "TOKEN", value: "first", scope: "runtime" },
+          { key: "TOKEN", value: "second", scope: "build" }
+        ]
+      ]) {
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/applications",
+          headers: { cookie },
+          payload: { name: "Web", slug: "web", gitRepo: "https://github.com/acme/web", variables }
+        });
+        assert.equal(res.statusCode, 400, res.body);
+        for (const variable of variables) assert.ok(!res.body.includes(variable.value));
+        assert.equal(await prisma.application.count(), 0);
+      }
+    });
+
     it("creates, returns, and updates Docker monorepo settings", async () => {
       const cookie = await signIn();
       const created = await createApp(cookie, {
