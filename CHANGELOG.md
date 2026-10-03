@@ -10,6 +10,8 @@ write-ups.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-03
+
 ### Added
 
 - Application **Branch previews** create an isolated app and generated URL from a selected Git branch. The preview inherits non-secret build settings but no variable values, volumes, domains, or datastore bindings. Preview setup checks required variables before creation; deleting the source cleans up its previews and Docker resources.
