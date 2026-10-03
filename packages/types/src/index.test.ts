@@ -31,9 +31,22 @@ import {
   UpdateProjectSchema,
   UpdateDatastoreResourcesSchema,
   UpdateMemberRoleSchema,
+  VariablesReplaceSchema,
   VolumeCreateSchema,
   wwwCompanion
 } from "./index";
+
+describe("VariablesReplaceSchema", () => {
+  it("keeps a variable out of the build unless build access is explicit", () => {
+    const parsed = VariablesReplaceSchema.parse({
+      vars: [
+        { key: "DATABASE_URL", value: "postgres://example" },
+        { key: "PUBLIC_URL", value: "https://example.com", scope: "both" }
+      ]
+    });
+    assert.deepEqual(parsed.vars.map(({ scope }) => scope), ["runtime", "both"]);
+  });
+});
 
 /**
  * These schemas are the API's outer boundary — every request body from the

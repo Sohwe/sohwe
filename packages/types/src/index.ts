@@ -551,7 +551,7 @@ export type BuildArgsPatch = z.infer<typeof BuildArgsPatchSchema>;
  *   belong here: nothing about them reaches the image.
  * - `build` — passed to `nixpacks build --env` / `docker build --build-arg`.
  *   Toolchain pins (`NIXPACKS_NODE_VERSION`) and registry credentials.
- * - `both` — the default, for values a framework inlines at build *and* the
+ * - `both` — for values a framework inlines at build *and* the
  *   process reads at runtime (`NEXT_PUBLIC_*`, `NODE_ENV`).
  *
  * The scope is not stored as a field: it is derived from which of the app's two
@@ -563,7 +563,7 @@ export type VariableScope = z.infer<typeof VariableScopeSchema>;
 export const VariableEntrySchema = z.object({
   key: EnvKeySchema,
   value: z.string().max(MAX_ENV_VALUE_LEN),
-  scope: VariableScopeSchema.default("both")
+  scope: VariableScopeSchema.default("runtime")
 });
 export type VariableEntry = z.infer<typeof VariableEntrySchema>;
 

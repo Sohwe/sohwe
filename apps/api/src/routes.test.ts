@@ -423,6 +423,55 @@ describe("API routes", { skip }, () => {
       assert.equal(forbidden.statusCode, 403, forbidden.body);
     });
 
+    it("keeps service variables runtime-only by default and rescopeable without revealing values", async () => {
+      const cookie = await signIn();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        headers: { cookie },
+        payload: fleet
+      });
+      assert.equal(created.statusCode, 200, created.body);
+      const project = created.json() as { services: { id: string }[] };
+      const serviceId = project.services[0]!.id;
+      const url = `/api/services/${serviceId}/scoped-variables`;
+      const put = await app.inject({
+        method: "PUT",
+        url,
+        headers: { cookie },
+        payload: {
+          vars: [
+            { key: "DATABASE_URL", value: "postgres://secret" },
+            { key: "PUBLIC_URL", value: "https://example.test", scope: "both" }
+          ]
+        }
+      });
+      assert.equal(put.statusCode, 200, put.body);
+      const listed = await app.inject({ method: "GET", url, headers: { cookie } });
+      assert.equal(listed.statusCode, 200, listed.body);
+      assert.deepEqual(
+        (listed.json() as { items: { key: string; scope: string }[] }).items.map(({ key, scope }) => [key, scope]),
+        [["DATABASE_URL", "runtime"], ["PUBLIC_URL", "both"]]
+      );
+      assert.equal(listed.body.includes("postgres://secret"), false);
+      const narrowed = await app.inject({
+        method: "PATCH",
+        url,
+        headers: { cookie },
+        payload: { rescope: [{ key: "PUBLIC_URL", scope: "runtime" }] }
+      });
+      assert.equal(narrowed.statusCode, 200, narrowed.body);
+      const row = await prisma.service.findUniqueOrThrow({ where: { id: serviceId } });
+      assert.deepEqual(decryptJson(row.envVarsEncrypted!), {
+        DATABASE_URL: "postgres://secret",
+        PUBLIC_URL: "https://example.test"
+      });
+      assert.equal(row.buildArgsEncrypted, null);
+      const memberCookie = await signInAs("member");
+      const forbidden = await app.inject({ method: "GET", url, headers: { cookie: memberCookie } });
+      assert.equal(forbidden.statusCode, 403);
+    });
+
     it("keeps projects organization-scoped", async () => {
       const ownerCookie = await signIn();
       const created = await app.inject({
@@ -1055,7 +1104,7 @@ describe("API routes", { skip }, () => {
         headers: { cookie },
         payload: {
           vars: [
-            { key: "DATABASE_URL", value: "postgres://secret", scope: "runtime" },
+            { key: "DATABASE_URL", value: "postgres://secret" },
             { key: "NIXPACKS_NODE_VERSION", value: "22", scope: "build" },
             { key: "NEXT_PUBLIC_API_URL", value: "https://api.example.test", scope: "both" }
           ]
@@ -1063,8 +1112,8 @@ describe("API routes", { skip }, () => {
       });
       assert.equal(put.statusCode, 200, put.body);
 
-      // The scope is derived from the two columns, so this is also a check
-      // that the write landed in the right ones.
+      // Omitted scope defaults to runtime. The derived scope also checks that
+      // the write landed in the correct encrypted column.
       const row = await prisma.application.findUniqueOrThrow({
         where: { id: created.id },
         select: { envVarsEncrypted: true, buildArgsEncrypted: true }

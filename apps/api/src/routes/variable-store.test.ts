@@ -93,4 +93,14 @@ describe("scoped variables", () => {
     assert.deepEqual(mergeScoped({}, {}), []);
     assert.deepEqual(splitScoped([]), { env: {}, build: {} });
   });
+
+  it("keeps a key with an empty value when listing and changing scope", () => {
+    const merged = mergeScoped({ EMPTY: "" }, {});
+    assert.deepEqual(merged, [{ key: "EMPTY", scope: "runtime", value: "" }]);
+    assert.equal(maskedScopedListing(merged).items[0]?.preview, "—");
+    assert.deepEqual(
+      applyScopedPatch({ EMPTY: "" }, {}, undefined, undefined, [{ key: "EMPTY", scope: "both" }]),
+      { env: { EMPTY: "" }, build: { EMPTY: "" } }
+    );
+  });
 });

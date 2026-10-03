@@ -94,17 +94,18 @@ names* and counts, never values.
 An app's **Variables** page is one list, encrypted at rest and admin-and-above.
 Every variable carries a scope that says where it applies:
 
-- **Runtime only** — decrypted into the container's environment at deploy time.
-  Nothing in the build sees it. Credentials belong here.
+- **Runtime only (default)** — decrypted into the container's environment at
+  deploy time. Nothing in the build sees it. Credentials belong here.
 - **Build only** — passed to the image build: `nixpacks build --env KEY=value`,
   or `docker build --build-arg KEY` for a Dockerfile (the name-only form, so
   values never reach the command line).
-- **Build + runtime** — the default, for a value that is inlined at build time
+- **Build + runtime** — for a value that is inlined at build time
   *and* read by the running process. Set it once instead of twice.
 
 The scope of an existing variable can be changed from the list without
-revealing its value. Reach for build scope when the build needs to know
-something before the container exists:
+revealing its value. Check **Also available during build** when the build needs
+to know something before the container exists. Build-only scope remains under
+**Advanced scope options**:
 
 | Need | Set |
 | --- | --- |
@@ -124,6 +125,11 @@ Anything scoped to the build ends up in the built image and is readable with
 `docker history`, so keep credentials on **Runtime only** — the editor flags a
 key that looks like a secret. A Dockerfile build additionally only sees a
 variable it declares with a matching `ARG`. Either way, redeploy to apply.
+
+Project services use the same scoped variable list in the project create and
+edit forms. Project-wide shared variables remain runtime-only and are inherited
+by each service. Editing an existing service's variables saves them immediately;
+release the project to apply the changes.
 
 ### Monorepo Docker builds
 

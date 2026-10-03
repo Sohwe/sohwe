@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Field } from "@/components/common/Field";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { api, apiGet } from "@/lib/api";
@@ -47,6 +48,33 @@ const SCOPE_HINT: Record<Scope, string> = {
   build: "Passed to the build only. Not present at runtime."
 };
 
+function BuildAccess({
+  scope,
+  onChange,
+  disabled,
+  variableKey
+}: {
+  scope: Scope;
+  onChange: (scope: Scope) => void;
+  disabled?: boolean;
+  variableKey?: string;
+}) {
+  if (scope === "build") {
+    return <ScopeSelect value={scope} onChange={onChange} disabled={disabled} />;
+  }
+  return (
+    <label className="flex items-center gap-2 text-xs">
+      <Checkbox
+        checked={scope === "both"}
+        disabled={disabled}
+        aria-label={variableKey ? `Also available during build for ${variableKey}` : undefined}
+        onChange={(event) => onChange(event.target.checked ? "both" : "runtime")}
+      />
+      Also available during build
+    </label>
+  );
+}
+
 /**
  * Keys that usually hold a credential. Only a nudge — the user decides — but
  * "build + runtime" bakes a value into the image, and a leaked token is not a
@@ -56,7 +84,8 @@ const SECRETISH = /(SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL|PRIVATE_KEY|API_KEY|
 const PUBLICISH = /^(NEXT_PUBLIC_|VITE_|PUBLIC_|REACT_APP_)/;
 
 function looksSecret(key: string): boolean {
-  return SECRETISH.test(key) && !PUBLICISH.test(key);
+  const normalized = key.toUpperCase();
+  return SECRETISH.test(normalized) && !PUBLICISH.test(normalized);
 }
 
 function parseEnvText(raw: string): Record<string, string> {
@@ -100,10 +129,9 @@ function ScopeSelect({
   );
 }
 
-export function VariablesManager({ appId, onChanged }: { appId: string; onChanged: () => void }) {
+export function VariablesManager({ path, onChanged }: { path: string; onChanged: () => void }) {
   const queryClient = useQueryClient();
-  const path = `/api/applications/${appId}/variables`;
-  const queryKey = ["app-variables", appId];
+  const queryKey = ["scoped-variables", path];
 
   const listQuery = useQuery({
     queryKey,
@@ -113,7 +141,7 @@ export function VariablesManager({ appId, onChanged }: { appId: string; onChange
   const [unlocked, setUnlocked] = useState<RevealItem[] | null>(null);
   const [newKey, setNewKey] = useState("");
   const [newVal, setNewVal] = useState("");
-  const [newScope, setNewScope] = useState<Scope>("both");
+  const [newScope, setNewScope] = useState<Scope>("runtime");
   const [removeKey, setRemoveKey] = useState<string | null>(null);
   const [bulk, setBulk] = useState("");
   const [bulkScope, setBulkScope] = useState<Scope>("runtime");
@@ -156,8 +184,8 @@ export function VariablesManager({ appId, onChanged }: { appId: string; onChange
         <CardHeader>
           <CardTitle className="text-base">Variables</CardTitle>
           <CardDescription>
-            Encrypted at rest. Each variable reaches the image build, the running container, or both — set it once and
-            pick where it applies. Redeploy to apply changes.
+            Encrypted at rest. Variables are available to the running container by default. Enable build access only
+            when the build needs a value. Redeploy to apply changes.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -178,7 +206,9 @@ export function VariablesManager({ appId, onChanged }: { appId: string; onChange
                 <ResourceItem key={row.key} className="text-sm">
                   <div className="min-w-0">
                     <span className="font-mono text-foreground">{row.key}</span>
-                    <span className="ml-2 text-muted-foreground">{row.preview}</span>
+                    <span className="ml-2 text-muted-foreground">
+                      {row.preview === "—" ? "(empty)" : row.preview}
+                    </span>
                     {row.conflict ? (
                       <span className="ml-2 text-xs text-destructive">
                         build holds a different value ({row.buildPreview}) — save this key to reconcile
@@ -186,8 +216,9 @@ export function VariablesManager({ appId, onChanged }: { appId: string; onChange
                     ) : null}
                   </div>
                   <div className="flex items-center gap-1">
-                    <ScopeSelect
-                      value={row.scope}
+                    <BuildAccess
+                      scope={row.scope}
+                      variableKey={row.key}
                       disabled={patchMut.isPending}
                       onChange={(scope) => {
                         if (scope === row.scope) return;
@@ -211,6 +242,7 @@ export function VariablesManager({ appId, onChanged }: { appId: string; onChange
                   <Input
                     className="font-mono text-xs"
                     value={row.value}
+                    placeholder="Empty value"
                     onChange={(e) => {
                       const value = e.target.value;
                       setUnlocked((prev) => prev?.map((r, j) => (j === i ? { ...r, value } : r)) ?? prev);
@@ -246,7 +278,7 @@ export function VariablesManager({ appId, onChanged }: { appId: string; onChange
 
           {unlocked == null ? (
             <div className="space-y-3">
-              <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+              <div className="grid gap-2 sm:grid-cols-2 sm:items-end">
                 <Field label="New key">
                   <Input
                     className="font-mono text-sm"
@@ -256,7 +288,7 @@ export function VariablesManager({ appId, onChanged }: { appId: string; onChange
                     spellCheck={false}
                   />
                 </Field>
-                <Field label="Value">
+                <Field label="Value (can be empty)">
                   <Input
                     className="font-mono text-sm"
                     value={newVal}
@@ -266,24 +298,28 @@ export function VariablesManager({ appId, onChanged }: { appId: string; onChange
                     spellCheck={false}
                   />
                 </Field>
-                <Field label="Applies to">
-                  <ScopeSelect value={newScope} onChange={setNewScope} className="h-9 w-[9.5rem] text-xs" />
-                </Field>
-                <p className="text-xs text-muted-foreground sm:col-span-3">{SCOPE_HINT[newScope]}</p>
+                <div className="sm:col-span-2">
+                  <BuildAccess scope={newScope} onChange={setNewScope} />
+                  <p className="mt-1 text-xs text-muted-foreground">{SCOPE_HINT[newScope]}</p>
+                </div>
+                <details className="text-xs text-muted-foreground sm:col-span-2">
+                  <summary className="w-fit cursor-pointer">Advanced scope options</summary>
+                  <div className="mt-2"><ScopeSelect value={newScope} onChange={setNewScope} /></div>
+                </details>
                 {newKeyWarn ? (
-                  <p className="text-xs text-destructive sm:col-span-3">
+                  <p className="text-xs text-destructive sm:col-span-2">
                     {newKey.trim()} looks like a credential. Use{" "}
                     <button type="button" className="underline" onClick={() => setNewScope("runtime")}>
                       Runtime only
                     </button>{" "}
-                    unless the build genuinely needs it — build values end up in the image.
+                    unless the build genuinely needs it — build values can end up in the image.
                   </p>
                 ) : null}
                 <Button
                   type="button"
-                  className="sm:col-span-3 w-fit"
+                  className="sm:col-span-2 w-fit"
                   variant="secondary"
-                  disabled={patchMut.isPending || !newKey.trim() || !newVal}
+                  disabled={patchMut.isPending || !newKey.trim()}
                   onClick={() => {
                     const key = newKey.trim();
                     if (!key) return;
@@ -293,6 +329,7 @@ export function VariablesManager({ appId, onChanged }: { appId: string; onChange
                         onSuccess: () => {
                           setNewKey("");
                           setNewVal("");
+                          setNewScope("runtime");
                         }
                       }
                     );
@@ -329,7 +366,7 @@ export function VariablesManager({ appId, onChanged }: { appId: string; onChange
                   />
                 </Field>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <ScopeSelect value={bulkScope} onChange={setBulkScope} />
+                  <BuildAccess scope={bulkScope} onChange={setBulkScope} />
                   <Button
                     type="button"
                     variant="secondary"
@@ -347,13 +384,27 @@ export function VariablesManager({ appId, onChanged }: { appId: string; onChange
                       }
                       patchMut.mutate(
                         { set: keys.map((key) => ({ key, value: parsed[key] ?? "", scope: bulkScope })) },
-                        { onSuccess: () => setBulk("") }
+                        {
+                          onSuccess: () => {
+                            setBulk("");
+                            setBulkScope("runtime");
+                          }
+                        }
                       );
                     }}
                   >
                     Add {Object.keys(parseEnvText(bulk)).length || ""} pasted as {SCOPE_LABEL[bulkScope].toLowerCase()}
                   </Button>
                 </div>
+                <details className="mt-2 text-xs text-muted-foreground">
+                  <summary className="w-fit cursor-pointer">Advanced scope options</summary>
+                  <div className="mt-2"><ScopeSelect value={bulkScope} onChange={setBulkScope} /></div>
+                </details>
+                {bulkScope !== "runtime" && Object.keys(parseEnvText(bulk)).some(looksSecret) ? (
+                  <p className="mt-2 text-xs text-destructive">
+                    Some pasted keys look like credentials. Build access can expose their values in the image.
+                  </p>
+                ) : null}
               </div>
             </div>
           ) : null}

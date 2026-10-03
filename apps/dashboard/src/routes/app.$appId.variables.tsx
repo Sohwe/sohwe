@@ -18,9 +18,9 @@ export function AppVariablesPage() {
     <div className="space-y-6">
       <PageHeader
         title="Variables"
-        description="Encrypted at rest. One list — each variable applies to the build, the running container, or both. Redeploy to apply."
+        description="Encrypted at rest. Variables reach the running container by default; enable build access when needed. Redeploy to apply."
       />
-      <VariablesManager appId={appId} onChanged={invalidate} />
+      <VariablesManager path={`/api/applications/${appId}/variables`} onChanged={invalidate} />
     </div>
   );
 }

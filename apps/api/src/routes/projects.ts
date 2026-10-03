@@ -15,11 +15,14 @@ import {
   CreateServiceSchema,
   EnvVarsPatchSchema,
   EnvVarsReplaceSchema,
+  EnvQuerySchema,
   ProjectRollbackBodySchema,
   ServiceDomainsReplaceSchema,
   ServiceLogsQuerySchema,
   UpdateProjectSchema,
   UpdateServiceSchema,
+  VariablesPatchSchema,
+  VariablesReplaceSchema,
   projectInternalNetworkName
 } from "@sohwe/types";
 import { z } from "zod";
@@ -29,9 +32,15 @@ import { requireRole } from "../rbac";
 import { autoDeployBlocker } from "./applications";
 import {
   applyVarPatch,
+  applyScopedPatch,
   encodeVarBlob,
   maskedListing,
-  readVarBlob
+  maskedScopedListing,
+  mergeScoped,
+  readVarBlob,
+  revealedScopedListing,
+  splitScoped,
+  unknownRescopeKeys
 } from "./variable-store";
 
 const IdParam = z.object({ id: z.string().uuid() });
@@ -879,6 +888,151 @@ export async function registerProjectRoutes(app: FastifyInstance) {
         metadata: { projectId: service.project.id, kind: service.kind }
       });
       return { ok: true };
+    }
+  );
+
+  // One scoped service variable list over the existing encrypted runtime and
+  // build maps. Older per-map routes remain for JSON import and bundle restore.
+  async function loadScopedService(serviceId: string, organizationId: string) {
+    const service = await prisma.service.findFirst({
+      where: { id: serviceId, project: { organizationId } },
+      select: {
+        id: true,
+        slug: true,
+        envVarsEncrypted: true,
+        buildArgsEncrypted: true,
+        project: { select: { slug: true } }
+      }
+    });
+    if (!service) return null;
+    return {
+      service,
+      env: readVarBlob(service.envVarsEncrypted),
+      build: readVarBlob(service.buildArgsEncrypted)
+    };
+  }
+
+  async function saveScopedService(
+    req: Parameters<typeof recordAudit>[0],
+    loaded: NonNullable<Awaited<ReturnType<typeof loadScopedService>>>,
+    after: { env: Record<string, string>; build: Record<string, string> }
+  ) {
+    await prisma.service.update({
+      where: { id: loaded.service.id },
+      data: {
+        envVarsEncrypted: encodeVarBlob(after.env),
+        buildArgsEncrypted: encodeVarBlob(after.build)
+      }
+    });
+    const targetLabel = `${loaded.service.project.slug}/${loaded.service.slug}`;
+    for (const [kind, before, next] of [
+      ["runtime", loaded.env, after.env],
+      ["build", loaded.build, after.build]
+    ] as const) {
+      if (JSON.stringify(before) === JSON.stringify(next)) continue;
+      await recordAudit(req, {
+        action: kind === "runtime" ? "service.variables.update" : "build_args.update",
+        targetType: kind === "runtime" ? "service" : "build_args",
+        targetId: loaded.service.id,
+        targetLabel,
+        metadata: { keys: Object.keys(next).sort(), count: Object.keys(next).length, via: "scoped-variables" }
+      });
+    }
+  }
+
+  app.get(
+    "/api/services/:serviceId/scoped-variables",
+    {
+      preHandler: [requireRole("admin")],
+      schema: { params: ServiceParam, querystring: EnvQuerySchema },
+      logLevel: "silent"
+    },
+    async (req, reply) => {
+      const { serviceId } = ServiceParam.parse(req.params);
+      const { reveal } = req.query as z.infer<typeof EnvQuerySchema>;
+      let loaded: Awaited<ReturnType<typeof loadScopedService>>;
+      try {
+        loaded = await loadScopedService(serviceId, req.user!.organizationId);
+      } catch {
+        return reply.status(500).send({ message: "Failed to read service variables" });
+      }
+      if (!loaded) return reply.notFound();
+      const merged = mergeScoped(loaded.env, loaded.build);
+      if (!reveal) return maskedScopedListing(merged);
+      const targetLabel = `${loaded.service.project.slug}/${loaded.service.slug}`;
+      for (const [kind, vars] of [
+        ["runtime", loaded.env],
+        ["build", loaded.build]
+      ] as const) {
+        if (Object.keys(vars).length === 0) continue;
+        await recordAudit(req, {
+          action: kind === "runtime" ? "env.reveal" : "build_args.reveal",
+          targetType: kind === "runtime" ? "env" : "build_args",
+          targetId: loaded.service.id,
+          targetLabel,
+          metadata: { keys: Object.keys(vars).sort(), via: "scoped-variables" }
+        });
+      }
+      return revealedScopedListing(merged);
+    }
+  );
+
+  app.put(
+    "/api/services/:serviceId/scoped-variables",
+    {
+      preHandler: [requireRole("admin")],
+      schema: { params: ServiceParam, body: VariablesReplaceSchema },
+      logLevel: "silent"
+    },
+    async (req, reply) => {
+      const { serviceId } = ServiceParam.parse(req.params);
+      const { vars } = VariablesReplaceSchema.parse(req.body);
+      if (new Set(vars.map(({ key }) => key)).size !== vars.length) {
+        return reply.badRequest("Duplicate variable key");
+      }
+      let loaded: Awaited<ReturnType<typeof loadScopedService>>;
+      try {
+        loaded = await loadScopedService(serviceId, req.user!.organizationId);
+      } catch {
+        return reply.status(500).send({ message: "Failed to read service variables" });
+      }
+      if (!loaded) return reply.notFound();
+      await saveScopedService(req, loaded, splitScoped(vars));
+      return { ok: true, id: serviceId };
+    }
+  );
+
+  app.patch(
+    "/api/services/:serviceId/scoped-variables",
+    {
+      preHandler: [requireRole("admin")],
+      schema: { params: ServiceParam, body: VariablesPatchSchema },
+      logLevel: "silent"
+    },
+    async (req, reply) => {
+      const { serviceId } = ServiceParam.parse(req.params);
+      const { set, rescope, unset } = VariablesPatchSchema.parse(req.body);
+      if (!set?.length && !rescope?.length && !unset?.length) {
+        return reply.badRequest("Provide set, rescope, and/or unset");
+      }
+      if (set && new Set(set.map(({ key }) => key)).size !== set.length) {
+        return reply.badRequest("Duplicate variable key");
+      }
+      let loaded: Awaited<ReturnType<typeof loadScopedService>>;
+      try {
+        loaded = await loadScopedService(serviceId, req.user!.organizationId);
+      } catch {
+        return reply.status(500).send({ message: "Failed to read service variables" });
+      }
+      if (!loaded) return reply.notFound();
+      const missing = unknownRescopeKeys(loaded.env, loaded.build, rescope);
+      if (missing.length > 0) return reply.badRequest(`No such variable: ${missing.join(", ")}`);
+      await saveScopedService(
+        req,
+        loaded,
+        applyScopedPatch(loaded.env, loaded.build, set, unset, rescope)
+      );
+      return { ok: true, id: serviceId };
     }
   );
 

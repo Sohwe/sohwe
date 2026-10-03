@@ -10,6 +10,10 @@ write-ups.
 
 ## [Unreleased]
 
+### Changed
+
+- App and project service variables now use one scoped list in the dashboard. New values default to runtime access; **Also available during build** opts in to build access, and build-only scope remains in advanced options. Existing variable scopes are unchanged. Service variables can be rescoped without revealing their values.
+
 ### Added
 
 - **Phase 9 projects and coordinated services.** A new Project owns one Git

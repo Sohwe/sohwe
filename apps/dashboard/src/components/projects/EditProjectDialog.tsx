@@ -12,6 +12,7 @@ import {
 import { FileJson, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
+import { VariablesManager } from "@/components/apps/VariablesManager";
 import { Field } from "@/components/common/Field";
 import { Button } from "@/components/ui/button";
 import {
@@ -60,8 +61,6 @@ type ServiceDraft = {
   healthCheckTimeoutSeconds: string;
   healthCheckRetries: string;
   healthCheckStartPeriodSeconds: string;
-  variableChanges: string;
-  buildArgChanges: string;
 };
 
 type MaskedVariablePreview = { key: string; preview: string };
@@ -193,9 +192,7 @@ function draftFrom(service: ProjectService): ServiceDraft {
     healthCheckIntervalSeconds: String(service.healthCheckIntervalSeconds),
     healthCheckTimeoutSeconds: String(service.healthCheckTimeoutSeconds),
     healthCheckRetries: String(service.healthCheckRetries),
-    healthCheckStartPeriodSeconds: String(service.healthCheckStartPeriodSeconds),
-    variableChanges: "",
-    buildArgChanges: ""
+    healthCheckStartPeriodSeconds: String(service.healthCheckStartPeriodSeconds)
   };
 }
 
@@ -483,13 +480,6 @@ export function EditProjectDialog({
                 ? commaSeparated(service.domains).map(normalizeHostname)
                 : []
           });
-          const variables = EnvVarsPatchSchema.parse(
-            variablePatchLines(service.variableChanges)
-          );
-          const buildArgs = BuildArgsPatchSchema.parse(
-            variablePatchLines(service.buildArgChanges)
-          );
-
           await api(`/api/services/${service.id}`, {
             method: "PATCH",
             body: JSON.stringify(servicePatch)
@@ -498,18 +488,6 @@ export function EditProjectDialog({
             method: "PUT",
             body: JSON.stringify(domains)
           });
-          if (hasPatch(variables)) {
-            await api(`/api/services/${service.id}/variables`, {
-              method: "PATCH",
-              body: JSON.stringify(variables)
-            });
-          }
-          if (hasPatch(buildArgs)) {
-            await api(`/api/services/${service.id}/build-args`, {
-              method: "PATCH",
-              body: JSON.stringify(buildArgs)
-            });
-          }
         })
       );
     },
@@ -837,27 +815,15 @@ export function EditProjectDialog({
                       required
                     />
                   </Field>
-                  <Field label="Runtime variable changes" className="sm:col-span-3">
-                    <Textarea
-                      value={service.variableChanges}
-                      onChange={(event) =>
-                        updateService(service.id, { variableChanges: event.target.value })
-                      }
-                      placeholder={"SUPPORT_EMAIL=support@example.com\n-OLD_KEY"}
+                  <div className="sm:col-span-3">
+                    <VariablesManager
+                      path={`/api/services/${service.id}/scoped-variables`}
+                      onChanged={() => setJsonPreviewsLoaded(false)}
                     />
-                    <span className="text-xs font-normal text-muted-foreground">
-                      Existing secret values stay hidden. Only the keys listed here will change.
-                    </span>
-                  </Field>
-                  <Field label="Build argument changes" className="sm:col-span-3">
-                    <Textarea
-                      value={service.buildArgChanges}
-                      onChange={(event) =>
-                        updateService(service.id, { buildArgChanges: event.target.value })
-                      }
-                      placeholder={"PUBLIC_URL=https://example.com\n-OLD_BUILD_ARG"}
-                    />
-                  </Field>
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      Variable changes save immediately. Release the project to apply them.
+                    </p>
+                  </div>
                 </div>
               </details>
             ))}

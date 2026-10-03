@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CreateProjectSchema, normalizeHostname } from "@sohwe/types";
+import { CreateProjectSchema, normalizeHostname, type VariableEntry } from "@sohwe/types";
 import { Boxes, FileJson, Plus, Rocket, RotateCcw, Settings, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/common/PageHeader";
 import { EmptyState } from "@/components/common/EmptyState";
 import { Field } from "@/components/common/Field";
 import { EditProjectDialog } from "@/components/projects/EditProjectDialog";
+import { ServiceVariableDraftEditor } from "@/components/projects/ServiceVariableDraftEditor";
+import { splitServiceVariables } from "@/components/projects/service-variables";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -57,8 +59,7 @@ type ServiceDraft = {
   healthCheckTimeoutSeconds: string;
   healthCheckRetries: string;
   healthCheckStartPeriodSeconds: string;
-  envVars: string;
-  buildArgs: string;
+  variables: VariableEntry[];
 };
 
 const PROJECT_JSON_TEMPLATE = JSON.stringify(
@@ -126,8 +127,7 @@ function makeServiceDraft(
     healthCheckTimeoutSeconds: "5",
     healthCheckRetries: "3",
     healthCheckStartPeriodSeconds: "2",
-    envVars: "",
-    buildArgs: ""
+    variables: []
   };
 }
 
@@ -221,8 +221,7 @@ function serviceInput(service: ServiceDraft) {
     healthCheckStartPeriodSeconds: optionalNumber(
       service.healthCheckStartPeriodSeconds
     ),
-    envVars: variableLines(service.envVars),
-    buildArgs: variableLines(service.buildArgs)
+    ...splitServiceVariables(service.variables)
   };
 }
 
@@ -664,27 +663,10 @@ function CreateProjectDialog({
                           placeholder="curl --fail http://localhost:3000/health"
                         />
                       </Field>
-                      <Field label="Service runtime variables (KEY=value)">
-                        <Textarea
-                          value={service.envVars}
-                          onChange={(event) =>
-                            updateService(service.key, { envVars: event.target.value })
-                          }
-                          placeholder={"API_INTERNAL_URL=http://api:4000\nCONCURRENCY=2"}
-                        />
-                      </Field>
-                      <Field label="Build arguments (KEY=value)">
-                        <Textarea
-                          value={service.buildArgs}
-                          onChange={(event) =>
-                            updateService(service.key, { buildArgs: event.target.value })
-                          }
-                          placeholder="PUBLIC_API_URL=https://api.example.com"
-                        />
-                        <span className="text-xs font-normal text-muted-foreground">
-                          Build arguments can remain visible in image layers.
-                        </span>
-                      </Field>
+                      <ServiceVariableDraftEditor
+                        entries={service.variables}
+                        onChange={(variables) => updateService(service.key, { variables })}
+                      />
                     </div>
                     {service.healthCheckCmd.trim() ? (
                       <div className="mt-3 grid gap-3 sm:grid-cols-4">
