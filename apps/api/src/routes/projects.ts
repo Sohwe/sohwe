@@ -1444,7 +1444,8 @@ export async function registerProjectRoutes(app: FastifyInstance) {
 
   app.get(
     "/api/project-releases/:releaseId",
-    { preHandler: [requireRole("member")], schema: { params: ReleaseParam } },
+    // This detail includes raw build output, which is secret-adjacent.
+    { preHandler: [requireRole("admin")], schema: { params: ReleaseParam } },
     async (req, reply) => {
       const { releaseId } = ReleaseParam.parse(req.params);
       const row = await prisma.projectRelease.findFirst({

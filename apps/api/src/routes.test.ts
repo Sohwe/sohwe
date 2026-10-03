@@ -526,6 +526,11 @@ describe("API routes", { skip }, () => {
       assert.equal(release.status, "pending");
       assert.equal(release.serviceDeployments.length, 3);
       assert.equal(new Set(release.serviceDeployments.map((d) => d.serviceId)).size, 3);
+      const memberCookie = await signInAs("member", "project-member@example.test");
+      const memberDetail = await app.inject({ method: "GET", url: `/api/project-releases/${release.id}`, headers: { cookie: memberCookie } });
+      assert.equal(memberDetail.statusCode, 403);
+      const adminDetail = await app.inject({ method: "GET", url: `/api/project-releases/${release.id}`, headers: { cookie } });
+      assert.equal(adminDetail.statusCode, 200);
     });
 
     it("binds one datastore consistently to selected project services", async () => {

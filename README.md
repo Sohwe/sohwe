@@ -233,7 +233,9 @@ view; build, health, dependency, domain, and variable settings expand when
 needed. **Create and release** saves the project and queues its first release;
 **Save draft** defers deployment. If queueing fails, retrying uses the saved
 project instead of creating another one. The project card shows the latest
-release and each service's status.
+release and each service's status. Admins can open **Build logs** there to follow an
+individual service's build and diagnose failures; **Service logs** shows
+container output after startup.
 
 For larger pnpm monorepos, both the **New project** dialog and an existing
 project's **Settings** dialog have a JSON mode. Paste the complete project

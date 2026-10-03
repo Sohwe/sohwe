@@ -12,7 +12,7 @@ write-ups.
 
 ### Changed
 
-- Project creation now starts with the repository, suggests its name and slug, and can inspect the branch for service candidates. The form offers explicit HTTP, worker, and release-job actions, keeps advanced settings collapsible, and defaults to build auto-detection. **Create and release** queues the first release with a saved-project retry if queueing fails; **Save draft** remains available. Project cards show the latest release and per-service status. A failed enqueue records a failed attempt instead of leaving a pending release that blocks retry.
+- Project creation now starts with the repository, suggests its name and slug, and can inspect the branch for service candidates. The form offers explicit HTTP, worker, and release-job actions, keeps advanced settings collapsible, and defaults to build auto-detection. **Create and release** queues the first release with a saved-project retry if queueing fails; **Save draft** remains available. Project cards show the latest release, per-service status, and admin-only selectable build logs. A failed enqueue records a failed attempt instead of leaving a pending release that blocks retry.
 
 ## [0.10.0] - 2026-10-03
 

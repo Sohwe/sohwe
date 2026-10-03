@@ -31,7 +31,7 @@ import {
 } from "@/components/ui/select";
 import { api, apiGet, fetchMe } from "@/lib/api";
 import { isAdmin } from "@/lib/roles";
-import type { Me, ProjectRow, RepositoryInspection, RepositoryInspectionCandidate } from "@/lib/types";
+import type { Me, ProjectRelease, ProjectRow, RepositoryInspection, RepositoryInspectionCandidate } from "@/lib/types";
 
 type ServiceDraft = {
   key: string;
@@ -963,14 +963,46 @@ function ProjectLogs({ project }: { project: ProjectRow }) {
   );
 }
 
+type ProjectReleaseDetails = Omit<ProjectRelease, "serviceDeployments"> & {
+  serviceDeployments: (ProjectRelease["serviceDeployments"][number] & { buildLogs: string })[];
+};
+
+function ProjectBuildLogs({ releaseId, active }: { releaseId: string; active: boolean }) {
+  const [serviceId, setServiceId] = useState("");
+  const release = useQuery({
+    queryKey: ["project-release", releaseId],
+    queryFn: () => apiGet<ProjectReleaseDetails>(`/api/project-releases/${releaseId}`),
+    refetchInterval: active ? 2_000 : false
+  });
+  const deployments = release.data?.serviceDeployments ?? [];
+  const selected = deployments.find((deployment) => deployment.serviceId === serviceId) ?? deployments[0];
+  return <div className="mt-3 space-y-2 rounded-md border border-border/70 p-3">
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <p className="text-sm font-medium">Build logs for this release</p>
+      {deployments.length ? <Select value={selected?.serviceId} onValueChange={setServiceId}>
+        <SelectTrigger className="w-full sm:w-56"><SelectValue /></SelectTrigger>
+        <SelectContent>{deployments.map((deployment) => <SelectItem key={deployment.serviceId} value={deployment.serviceId}>{deployment.service.name} · {deployment.status}</SelectItem>)}</SelectContent>
+      </Select> : null}
+    </div>
+    {release.isLoading ? <p className="text-xs text-muted-foreground" role="status">Loading build logs…</p> : null}
+    {release.isError ? <p className="text-xs text-destructive" role="alert">Could not load build logs. Close and reopen this panel to retry.</p> : null}
+    {selected?.errorMessage ? <p className="text-xs text-destructive">{selected.errorMessage}</p> : null}
+    {selected ? <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted p-3 text-xs" aria-label={`${selected.service.name} build log`}>{selected.buildLogs || (active ? "Waiting for build output…" : "No build output was recorded.")}</pre> : null}
+  </div>;
+}
+
 function ProjectCard({ project, canEdit, justReleased }: { project: ProjectRow; canEdit: boolean; justReleased: boolean }) {
   const client = useQueryClient();
   const [logs, setLogs] = useState(false);
+  const [buildLogsOverride, setBuildLogsOverride] = useState<boolean | null>(null);
   const [editing, setEditing] = useState(false);
+  const latest = project.releases[0];
+  const buildLogsOpen = buildLogsOverride ?? justReleased;
   const deploy = useMutation({
     mutationFn: () => api(`/api/projects/${project.id}/deploy`, { method: "POST" }),
     onSuccess: () => {
       toast.success("Coordinated release queued");
+      setBuildLogsOverride(true);
       void client.invalidateQueries({ queryKey: ["projects"] });
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "Deploy failed")
@@ -978,7 +1010,6 @@ function ProjectCard({ project, canEdit, justReleased }: { project: ProjectRow; 
   const previous = project.releases.find(
     (release) => release.status === "success" && release.id !== project.currentReleaseId
   );
-  const latest = project.releases[0];
   const rollback = useMutation({
     mutationFn: () =>
       api(`/api/projects/${project.id}/rollback`, {
@@ -1047,12 +1078,16 @@ function ProjectCard({ project, canEdit, justReleased }: { project: ProjectRow; 
           <Button size="sm" variant="ghost" onClick={() => setLogs((value) => !value)}>
             {logs ? "Hide logs" : "Service logs"}
           </Button>
+          {canEdit && latest ? <Button size="sm" variant="outline" onClick={() => setBuildLogsOverride(!buildLogsOpen)}>
+            {buildLogsOpen ? "Hide build logs" : "Build logs"}
+          </Button> : null}
           {canEdit ? (
             <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
               <Settings className="mr-2 h-4 w-4" /> Configure
             </Button>
           ) : null}
         </div>
+        {canEdit && buildLogsOpen && latest ? <ProjectBuildLogs key={latest.id} releaseId={latest.id} active={["pending", "building", "releasing", "deploying"].includes(latest.status)} /> : null}
         {logs ? <ProjectLogs project={project} /> : null}
         {editing ? (
           <EditProjectDialog project={project} open={editing} onOpenChange={setEditing} />
