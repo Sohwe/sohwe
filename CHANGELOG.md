@@ -10,6 +10,12 @@ write-ups.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-03
+
+This entry consolidates changes documented since v0.6.0; several were also
+published in the v0.6.x patch tags. The repository inspection and build-plan
+preview, including the branch picker, first ships in v0.7.0.
+
 ### Changed
 
 - App creation now accepts scoped runtime, build, and shared variables in the
