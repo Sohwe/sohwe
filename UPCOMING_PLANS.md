@@ -2,6 +2,14 @@
 
 This file tracks work that remains open. Completed Phase 9 items are retained as context for the remaining acceptance criteria. See `CHANGELOG.md` for release history.
 
+The prioritized plan for making single-application setup easier is in
+[`docs/application-onboarding-priorities.md`](./docs/application-onboarding-priorities.md).
+Priorities 1–2 (Create and deploy; Reduce manual form entry) are implemented.
+Priorities 3–9 remain open.
+The onboarding plan also records the intended full dashboard redesign: ease of
+use and clean UI, with Vercel and Railway as references and a dedicated logs UI
+improvement. Scope and sequencing will be reviewed before implementation.
+
 ## Phase 9 - Monorepo and Multi-Service Deployments
 
 Status: **in progress from a repository audit on 2026-09-10**

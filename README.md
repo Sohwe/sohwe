@@ -21,6 +21,18 @@ Implemented in the current codebase:
 
 [`UPCOMING_PLANS.md`](./UPCOMING_PLANS.md) tracks unfinished work.
 
+### Create your first application
+
+Open **Applications → New app**, select a repository shared with your GitHub
+App or paste a public HTTPS Git URL. Sohwe suggests a name and slug from the
+repository; you can edit both. Review the branch, container port, and build
+mode, then open **Advanced settings** for Dockerfile paths and targets, command
+overrides, or a custom domain. **Create and deploy** saves the app,
+starts its first deployment, and opens the live build log. Use **Save for later**
+when you need to configure the app before its first deploy. If the deploy
+request fails after saving, the dialog shows the saved app with **Retry deploy**
+and **Open saved app**; retrying does not create another application.
+
 ## Install on a server (production)
 
 On a fresh Ubuntu 22.04, 24.04, or 26.04 host:

@@ -12,6 +12,17 @@ write-ups.
 
 ### Changed
 
+- The new-app form now suggests name and slug from pasted HTTPS Git URLs while
+  preserving manual edits. Repository choice comes first; branch, port, and
+  build mode remain visible, while Dockerfile, command, and domain controls
+  sit under Advanced settings. Invalid URLs and known slug collisions appear
+  beside the relevant fields before creation.
+
+- New application setup defaults to **Create and deploy** and opens the first
+  deployment's live build log. **Save for later** keeps an app idle. If the
+  deploy request fails after creation, the dialog retains the saved app and
+  offers a deployment retry without submitting app creation again.
+
 - App and project service variables now use one scoped list in the dashboard. New values default to runtime access; **Also available during build** opts in to build access, and build-only scope remains in advanced options. Existing variable scopes are unchanged. Service variables can be rescoped without revealing their values.
 
 ### Added
