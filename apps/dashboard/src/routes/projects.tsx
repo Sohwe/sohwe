@@ -31,7 +31,7 @@ import {
 } from "@/components/ui/select";
 import { api, apiGet, fetchMe } from "@/lib/api";
 import { isAdmin } from "@/lib/roles";
-import type { Me, ProjectRow } from "@/lib/types";
+import type { Me, ProjectRow, RepositoryInspection, RepositoryInspectionCandidate } from "@/lib/types";
 
 type ServiceDraft = {
   key: string;
@@ -106,7 +106,7 @@ function makeServiceDraft(
     name: kind === "http" ? `Web${suffix}` : kind === "worker" ? `Worker${suffix}` : "Release",
     slug: kind === "http" ? `web${suffix}` : kind === "worker" ? `worker${suffix}` : "release",
     kind,
-    buildMode: "dockerfile",
+    buildMode: "auto",
     serviceDirectory: ".",
     workspaceSelector: "",
     dockerfilePath: "Dockerfile",
@@ -128,6 +128,47 @@ function makeServiceDraft(
     healthCheckRetries: "3",
     healthCheckStartPeriodSeconds: "2",
     variables: []
+  };
+}
+
+function suggestedProjectName(repo: string): string {
+  try {
+    const url = new URL(repo.trim());
+    if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) return "";
+    const name = decodeURIComponent(url.pathname.split("/").filter(Boolean).at(-1) ?? "").replace(/\.git$/i, "");
+    return name === "." || name === ".." ? "" : name;
+  } catch {
+    return "";
+  }
+}
+
+function suggestedProjectSlug(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 50).replace(/-+$/, "");
+}
+
+function candidateName(candidate: RepositoryInspectionCandidate): string {
+  const raw = candidate.directory === "." ? "Web" : candidate.directory.split("/").at(-1) ?? "Web";
+  return raw.slice(0, 1).toUpperCase() + raw.slice(1);
+}
+
+function availableServiceSlug(name: string, services: ServiceDraft[], exceptKey?: string): string {
+  const base = suggestedProjectSlug(name).slice(0, 42) || "service";
+  const used = new Set(services.filter((service) => service.key !== exceptKey).map((service) => service.slug));
+  let candidate = base;
+  let suffix = 2;
+  while (used.has(candidate)) candidate = `${base}-${suffix++}`;
+  return candidate;
+}
+
+function candidateSettings(candidate: RepositoryInspectionCandidate): Partial<ServiceDraft> {
+  return {
+    buildMode: candidate.buildMode,
+    serviceDirectory: candidate.directory,
+    dockerfilePath: candidate.dockerfilePath,
+    buildCmd: candidate.buildCmd ?? "",
+    startCmd: candidate.startCmd ?? "",
+    runtimeCmd: candidate.runtimeCmd ?? "",
+    port: String(candidate.port)
   };
 }
 
@@ -227,14 +268,18 @@ function serviceInput(service: ServiceDraft) {
 
 function CreateProjectDialog({
   open,
-  onOpenChange
+  onOpenChange,
+  onReleased
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onReleased: (projectId: string) => void;
 }) {
   const client = useQueryClient();
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
+  const [nameEdited, setNameEdited] = useState(false);
+  const [slugEdited, setSlugEdited] = useState(false);
   const [repo, setRepo] = useState("");
   const [branch, setBranch] = useState("main");
   const [autoDeploy, setAutoDeploy] = useState(false);
@@ -242,7 +287,32 @@ function CreateProjectDialog({
   const [services, setServices] = useState<ServiceDraft[]>(() => [makeServiceDraft()]);
   const [inputMode, setInputMode] = useState<"form" | "json">("form");
   const [jsonConfig, setJsonConfig] = useState(PROJECT_JSON_TEMPLATE);
+  const [inspectionRequested, setInspectionRequested] = useState(false);
+  const [savedProject, setSavedProject] = useState<ProjectRow | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const jsonFileInput = useRef<HTMLInputElement>(null);
+
+  function resetForm() {
+    setName("");
+    setSlug("");
+    setNameEdited(false);
+    setSlugEdited(false);
+    setRepo("");
+    setBranch("main");
+    setAutoDeploy(false);
+    setProjectVariables("");
+    setServices([makeServiceDraft()]);
+    setInputMode("form");
+    setJsonConfig(PROJECT_JSON_TEMPLATE);
+    setInspectionRequested(false);
+    setSavedProject(null);
+    setError(null);
+  }
+
+  function closeDialog() {
+    resetForm();
+    onOpenChange(false);
+  }
 
   function updateService(key: string, patch: Partial<ServiceDraft>) {
     setServices((current) =>
@@ -250,8 +320,63 @@ function CreateProjectDialog({
     );
   }
 
+  function addService(kind: ServiceDraft["kind"]) {
+    setServices((current) => [
+      ...current,
+      makeServiceDraft(kind, current.filter((service) => service.kind === kind).length + 1)
+    ]);
+  }
+
+  function applyCandidate(candidate: RepositoryInspectionCandidate, action: "first" | "http" | "worker") {
+    setServices((current) => {
+      if (action === "first") {
+        const first = current[0];
+        if (!first) return current;
+        const name = first.name === "Web" ? candidateName(candidate) : first.name;
+        return current.map((service, index) => index === 0 ? {
+          ...service,
+          ...candidateSettings(candidate),
+          name,
+          slug: first.slug === "web" ? availableServiceSlug(name, current, first.key) : first.slug,
+          port: first.kind === "http" ? String(candidate.port) : ""
+        } : service);
+      }
+      const name = candidateName(candidate);
+      const draft = makeServiceDraft(action);
+      return [...current, {
+        ...draft,
+        ...candidateSettings(candidate),
+        name,
+        slug: availableServiceSlug(name, current),
+        port: action === "http" ? String(candidate.port) : ""
+      }];
+    });
+  }
+
+  const inspection = useQuery({
+    queryKey: ["project-repository-inspection", repo.trim(), branch.trim()],
+    queryFn: () => api<RepositoryInspection>("/api/repositories/inspect", {
+      method: "POST",
+      body: JSON.stringify({ gitRepo: repo.trim(), branch: branch.trim() })
+    }),
+    enabled: open && inspectionRequested && !!repo.trim() && !!branch.trim() && !savedProject,
+    retry: false,
+    staleTime: 60_000
+  });
+
+  const release = useMutation({
+    mutationFn: (project: ProjectRow) => api(`/api/projects/${project.id}/deploy`, { method: "POST" }),
+    onSuccess: (_result, project) => {
+      void client.invalidateQueries({ queryKey: ["projects"] });
+      onReleased(project.id);
+      closeDialog();
+      toast.success("First project release queued");
+    },
+    onError: (cause) => setError(cause instanceof Error ? cause.message : "Could not start the first release")
+  });
+
   const create = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (intent: "release" | "save") => {
       const payload = CreateProjectSchema.parse(
         inputMode === "json"
           ? (JSON.parse(jsonConfig) as unknown)
@@ -265,38 +390,47 @@ function CreateProjectDialog({
               services: services.map(serviceInput)
             }
       );
-      return api<ProjectRow>("/api/projects", {
+      const project = await api<ProjectRow>("/api/projects", {
         method: "POST",
         body: JSON.stringify(payload)
       });
+      return { project, intent };
     },
-    onSuccess: () => {
+    onSuccess: ({ project, intent }) => {
+      setSavedProject(project);
       void client.invalidateQueries({ queryKey: ["projects"] });
-      setName("");
-      setSlug("");
-      setRepo("");
-      setBranch("main");
-      setAutoDeploy(false);
-      setProjectVariables("");
-      setServices([makeServiceDraft()]);
-      setInputMode("form");
-      setJsonConfig(PROJECT_JSON_TEMPLATE);
-      onOpenChange(false);
-      toast.success("Project created");
+      if (intent === "release") release.mutate(project);
+      else {
+        closeDialog();
+        toast.success("Project saved as a draft");
+      }
     },
-    onError: (error) => toast.error(projectConfigError(error))
+    onError: (cause) => setError(projectConfigError(cause))
   });
 
+  const pending = create.isPending || release.isPending;
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(next) => { if (!pending && !next) closeDialog(); }}>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl">
         <DialogHeader>
           <DialogTitle>New project</DialogTitle>
           <DialogDescription>
-            Compose the services this repository needs. Every service is built from the same commit
-            and released on one private project network.
+            Start with a repository and the services it runs. You can refine build, health, and resource settings later.
           </DialogDescription>
         </DialogHeader>
+        {savedProject ? (
+          <div className="space-y-3 text-sm">
+            <p><strong>{savedProject.name}</strong> was created. Its services and variables are saved.</p>
+            {error ? <p className="text-destructive" role="alert">{error}</p> : null}
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" disabled={pending} onClick={() => { setError(null); release.mutate(savedProject); }}>
+                {release.isPending ? "Starting release…" : "Retry release"}
+              </Button>
+              <Button type="button" variant="outline" disabled={pending} onClick={closeDialog}>View project</Button>
+            </div>
+          </div>
+        ) : <>
         <div className="flex w-fit rounded-md border p-1">
           <Button
             type="button"
@@ -319,43 +453,74 @@ function CreateProjectDialog({
           className="space-y-4"
           onSubmit={(event) => {
             event.preventDefault();
-            create.mutate();
+            setError(null);
+            const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
+            create.mutate(submitter?.value === "save" ? "save" : "release");
           }}
         >
           {inputMode === "form" ? (
             <>
+          <Field label="Git repository URL">
+            <Input value={repo} onChange={(event) => {
+              const next = event.target.value;
+              setRepo(next);
+              setInspectionRequested(false);
+              const suggestedName = suggestedProjectName(next);
+              if (!nameEdited) setName(suggestedName);
+              if (!slugEdited) setSlug(suggestedProjectSlug(suggestedName));
+            }} type="url" placeholder="https://github.com/org/repository" required />
+          </Field>
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Project name">
-              <Input value={name} onChange={(e) => setName(e.target.value)} required />
+              <Input value={name} onChange={(e) => { setNameEdited(true); setName(e.target.value); }} required />
             </Field>
             <Field label="Project slug">
               <Input
                 value={slug}
-                onChange={(e) => setSlug(e.target.value.toLowerCase())}
+                onChange={(e) => { setSlugEdited(true); setSlug(e.target.value.toLowerCase()); }}
                 pattern="[a-z0-9-]+"
                 required
               />
             </Field>
           </div>
-          <Field label="Git repository URL">
-            <Input value={repo} onChange={(e) => setRepo(e.target.value)} type="url" required />
-          </Field>
           <Field label="Branch">
-            <Input value={branch} onChange={(e) => setBranch(e.target.value)} required />
+            <Input value={branch} onChange={(e) => { setBranch(e.target.value); setInspectionRequested(false); }} required />
           </Field>
-          <label className="flex items-center gap-2 text-sm">
-            <Checkbox
-              checked={autoDeploy}
-              onChange={(event) => setAutoDeploy(event.target.checked)}
-            />
-            Deploy this project when its configured branch receives a push
-          </label>
-
+          <div className="space-y-2 rounded-md border border-border/70 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-sm font-medium">Find services in this repository</p>
+                <p className="text-xs text-muted-foreground">Inspect the branch to suggest directories, builders, commands, and ports.</p>
+              </div>
+              <Button type="button" size="sm" variant="outline" disabled={!suggestedProjectName(repo) || !branch.trim() || inspection.isFetching} onClick={() => { if (inspection.data) void inspection.refetch(); else setInspectionRequested(true); }}>
+                {inspection.isFetching ? "Inspecting…" : inspection.data ? "Inspect again" : "Inspect repository"}
+              </Button>
+            </div>
+            {inspection.isError ? <p className="text-xs text-destructive" role="alert">{projectConfigError(inspection.error)}</p> : null}
+            {inspection.data ? <>
+              <p className="text-xs text-muted-foreground">Found {inspection.data.candidates.length} candidate{inspection.data.candidates.length === 1 ? "" : "s"} at commit {inspection.data.commitSha.slice(0, 12)}. Choose only the processes this project needs, then review their settings.</p>
+              <div className="max-h-64 space-y-2 overflow-y-auto">
+                {inspection.data.candidates.map((candidate) => (
+                  <div key={candidate.directory} className="rounded-md bg-muted/40 p-2 text-xs">
+                    <p className="font-mono font-medium">{candidate.directory} <span className="font-sans font-normal text-muted-foreground">· {candidate.buildMode} · port {candidate.port}</span></p>
+                    <p className="mt-1 text-muted-foreground">{candidate.evidence[0]?.detail ?? "Review this directory before release."}</p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <Button type="button" size="sm" variant="outline" onClick={() => applyCandidate(candidate, "first")}>Use for first service</Button>
+                      <Button type="button" size="sm" variant="outline" disabled={services.length >= 32} onClick={() => applyCandidate(candidate, "http")}>Add HTTP</Button>
+                      <Button type="button" size="sm" variant="outline" disabled={services.length >= 32} onClick={() => applyCandidate(candidate, "worker")}>Add worker</Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </> : null}
+          </div>
           <details className="rounded-md bg-muted/40 p-3">
-            <summary className="cursor-pointer text-sm font-medium">
-              Shared runtime variables
-            </summary>
+            <summary className="cursor-pointer text-sm font-medium">Project options and shared variables</summary>
             <div className="mt-3">
+              <label className="mb-3 flex items-center gap-2 text-sm">
+                <Checkbox checked={autoDeploy} onChange={(event) => setAutoDeploy(event.target.checked)} />
+                Release this project when its configured branch receives a push
+              </label>
               <Field label="One KEY=value per line (optional)">
                 <Textarea
                   value={projectVariables}
@@ -370,30 +535,24 @@ function CreateProjectDialog({
             </div>
           </details>
 
-          <div className="flex items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <p className="text-sm font-medium">Services</p>
               <p className="text-xs text-muted-foreground">
                 HTTP services are routed publicly; workers and release jobs remain private.
               </p>
             </div>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={services.length >= 32}
-              onClick={() =>
-                setServices((current) => [
-                  ...current,
-                  makeServiceDraft(
-                    "worker",
-                    current.filter((service) => service.kind === "worker").length + 1
-                  )
-                ])
-              }
-            >
-              <Plus className="mr-2 h-4 w-4" /> Add service
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" size="sm" variant="outline" disabled={services.length >= 32} onClick={() => addService("http")}>
+                <Plus className="mr-1 h-4 w-4" /> HTTP
+              </Button>
+              <Button type="button" size="sm" variant="outline" disabled={services.length >= 32} onClick={() => addService("worker")}>
+                <Plus className="mr-1 h-4 w-4" /> Worker
+              </Button>
+              <Button type="button" size="sm" variant="outline" disabled={services.length >= 32 || services.some((service) => service.kind === "release")} onClick={() => addService("release")}>
+                <Plus className="mr-1 h-4 w-4" /> Release job
+              </Button>
+            </div>
           </div>
 
           <div className="space-y-4">
@@ -404,7 +563,7 @@ function CreateProjectDialog({
               return (
                 <div key={service.key} className="rounded-lg border p-4">
                   <div className="mb-4 flex items-center justify-between gap-3">
-                    <p className="text-sm font-medium">Service {index + 1}</p>
+                    <p className="text-sm font-medium">{service.name || `Service ${index + 1}`} <span className="font-normal text-muted-foreground">· {service.kind === "http" ? "Public HTTP" : service.kind === "worker" ? "Private worker" : "One-time release job"}</span></p>
                     <Button
                       type="button"
                       size="icon"
@@ -464,24 +623,7 @@ function CreateProjectDialog({
                     </Field>
                   </div>
 
-                  <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                    <Field label="Build mode">
-                      <Select
-                        value={service.buildMode}
-                        onValueChange={(value) =>
-                          updateService(service.key, {
-                            buildMode: value as ServiceDraft["buildMode"]
-                          })
-                        }
-                      >
-                        <SelectTrigger><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="dockerfile">Dockerfile</SelectItem>
-                          <SelectItem value="auto">Auto-detect</SelectItem>
-                          <SelectItem value="nixpacks">Nixpacks</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </Field>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
                     <Field label="Service directory">
                       <Input
                         value={service.serviceDirectory}
@@ -492,74 +634,39 @@ function CreateProjectDialog({
                         required
                       />
                     </Field>
-                    <Field label="Workspace selector (optional)">
-                      <Input
-                        value={service.workspaceSelector}
-                        onChange={(event) =>
-                          updateService(service.key, { workspaceSelector: event.target.value })
-                        }
-                        placeholder="@acme/api"
-                      />
-                    </Field>
-                    <Field label="Dockerfile path">
-                      <Input
-                        value={service.dockerfilePath}
-                        onChange={(event) =>
-                          updateService(service.key, { dockerfilePath: event.target.value })
-                        }
-                        placeholder="apps/api/Dockerfile"
-                        required
-                      />
-                    </Field>
-                    <Field label="Docker target (optional)">
-                      <Input
-                        value={service.dockerTarget}
-                        onChange={(event) =>
-                          updateService(service.key, { dockerTarget: event.target.value })
-                        }
-                        placeholder="runtime"
-                      />
-                    </Field>
-                    <Field label="Shared image group (optional)">
-                      <Input
-                        value={service.imageGroup}
-                        onChange={(event) =>
-                          updateService(service.key, { imageGroup: event.target.value })
-                        }
-                        placeholder="backend"
-                      />
-                    </Field>
+                    {service.kind === "http" ? <Field label="Container port">
+                      <Input type="number" min={1} max={65535} value={service.port} onChange={(event) => updateService(service.key, { port: event.target.value })} required />
+                    </Field> : null}
                   </div>
 
-                  {service.kind === "http" ? (
-                    <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                      <Field label="Container port">
-                        <Input
-                          type="number"
-                          min={1}
-                          max={65535}
-                          value={service.port}
-                          onChange={(event) =>
-                            updateService(service.key, { port: event.target.value })
-                          }
-                          required
-                        />
-                      </Field>
-                      <Field label="Custom domains (comma-separated)" className="sm:col-span-2">
-                        <Input
-                          value={service.domains}
-                          onChange={(event) =>
-                            updateService(service.key, { domains: event.target.value })
-                          }
-                          placeholder="api.example.com, alternate.example.com"
-                        />
-                      </Field>
-                    </div>
-                  ) : null}
-
                   <details className="mt-4 rounded-md bg-muted/40 p-3">
-                    <summary className="cursor-pointer text-sm font-medium">Advanced settings</summary>
+                    <summary className="cursor-pointer text-sm font-medium">Build, variables, and advanced settings</summary>
                     <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                      <Field label="Build mode">
+                        <Select value={service.buildMode} onValueChange={(value) => updateService(service.key, { buildMode: value as ServiceDraft["buildMode"] })}>
+                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="auto">Auto-detect</SelectItem>
+                            <SelectItem value="dockerfile">Dockerfile</SelectItem>
+                            <SelectItem value="nixpacks">Nixpacks</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </Field>
+                      <Field label="Workspace selector (optional)">
+                        <Input value={service.workspaceSelector} onChange={(event) => updateService(service.key, { workspaceSelector: event.target.value })} placeholder="@acme/api" />
+                      </Field>
+                      <Field label="Dockerfile path">
+                        <Input value={service.dockerfilePath} onChange={(event) => updateService(service.key, { dockerfilePath: event.target.value })} placeholder="apps/api/Dockerfile" required />
+                      </Field>
+                      <Field label="Docker target (optional)">
+                        <Input value={service.dockerTarget} onChange={(event) => updateService(service.key, { dockerTarget: event.target.value })} placeholder="runtime" />
+                      </Field>
+                      <Field label="Shared image group (optional)">
+                        <Input value={service.imageGroup} onChange={(event) => updateService(service.key, { imageGroup: event.target.value })} placeholder="backend" />
+                      </Field>
+                      {service.kind === "http" ? <Field label="Custom domains (comma-separated)">
+                        <Input value={service.domains} onChange={(event) => updateService(service.key, { domains: event.target.value })} placeholder="api.example.com, alternate.example.com" />
+                      </Field> : null}
                       <Field label="Build command (optional)">
                         <Input
                           value={service.buildCmd}
@@ -782,10 +889,15 @@ function CreateProjectDialog({
               </div>
             </div>
           )}
-          <Button type="submit" disabled={create.isPending}>
-            {create.isPending ? "Creating…" : "Create project"}
-          </Button>
+          {error ? <p className="text-sm text-destructive" role="alert">{error}</p> : null}
+          <div className="flex flex-wrap gap-2">
+            <Button type="submit" value="release" disabled={pending}>
+              <Rocket className="mr-2 h-4 w-4" />{create.isPending ? "Creating…" : "Create and release"}
+            </Button>
+            <Button type="submit" value="save" variant="outline" disabled={pending}>Save draft</Button>
+          </div>
         </form>
+        </>}
       </DialogContent>
     </Dialog>
   );
@@ -851,7 +963,7 @@ function ProjectLogs({ project }: { project: ProjectRow }) {
   );
 }
 
-function ProjectCard({ project, canEdit }: { project: ProjectRow; canEdit: boolean }) {
+function ProjectCard({ project, canEdit, justReleased }: { project: ProjectRow; canEdit: boolean; justReleased: boolean }) {
   const client = useQueryClient();
   const [logs, setLogs] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -866,6 +978,7 @@ function ProjectCard({ project, canEdit }: { project: ProjectRow; canEdit: boole
   const previous = project.releases.find(
     (release) => release.status === "success" && release.id !== project.currentReleaseId
   );
+  const latest = project.releases[0];
   const rollback = useMutation({
     mutationFn: () =>
       api(`/api/projects/${project.id}/rollback`, {
@@ -877,7 +990,7 @@ function ProjectCard({ project, canEdit }: { project: ProjectRow; canEdit: boole
   });
 
   return (
-    <Card>
+    <Card className={justReleased ? "border-primary/60" : undefined}>
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between gap-3">
           <div>
@@ -898,8 +1011,28 @@ function ProjectCard({ project, canEdit }: { project: ProjectRow; canEdit: boole
             </Badge>
           ))}
         </div>
+        {latest ? (
+          <div className="mt-4 rounded-md border border-border/70 bg-muted/20 p-3 text-sm" aria-live="polite">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-medium">Latest release</span>
+              <Badge variant="outline">{latest.status}</Badge>
+              {latest.commitSha ? <span className="font-mono text-xs text-muted-foreground">{latest.commitSha.slice(0, 12)}</span> : null}
+            </div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {latest.serviceDeployments.map((deployment) => (
+                <span key={deployment.id} className="rounded bg-background px-2 py-1 text-xs">
+                  {deployment.service.slug}: {deployment.status}
+                </span>
+              ))}
+            </div>
+            {latest.errorMessage ? <p className="mt-2 text-destructive">{latest.errorMessage}</p> : null}
+            {latest.serviceDeployments.filter((deployment) => deployment.errorMessage).map((deployment) => (
+              <p key={deployment.id} className="mt-1 text-xs text-destructive">{deployment.service.name}: {deployment.errorMessage}</p>
+            ))}
+          </div>
+        ) : <p className="mt-4 text-xs text-muted-foreground">Draft · ready for its first release</p>}
         <div className="mt-4 flex flex-wrap gap-2">
-          <Button size="sm" onClick={() => deploy.mutate()} disabled={deploy.isPending}>
+          <Button size="sm" onClick={() => deploy.mutate()} disabled={deploy.isPending || latest?.status === "pending" || latest?.status === "building" || latest?.status === "releasing" || latest?.status === "deploying"}>
             <Rocket className="mr-2 h-4 w-4" /> Release
           </Button>
           <Button
@@ -920,9 +1053,6 @@ function ProjectCard({ project, canEdit }: { project: ProjectRow; canEdit: boole
             </Button>
           ) : null}
         </div>
-        {project.releases[0]?.errorMessage ? (
-          <p className="mt-3 text-sm text-destructive">{project.releases[0].errorMessage}</p>
-        ) : null}
         {logs ? <ProjectLogs project={project} /> : null}
         {editing ? (
           <EditProjectDialog project={project} open={editing} onOpenChange={setEditing} />
@@ -934,6 +1064,7 @@ function ProjectCard({ project, canEdit }: { project: ProjectRow; canEdit: boole
 
 export function ProjectsPage() {
   const [open, setOpen] = useState(false);
+  const [justReleasedId, setJustReleasedId] = useState<string | null>(null);
   const projects = useQuery({
     queryKey: ["projects"],
     queryFn: () => apiGet<ProjectRow[]>("/api/projects"),
@@ -956,7 +1087,7 @@ export function ProjectsPage() {
           ) : undefined
         }
       />
-      <CreateProjectDialog open={open} onOpenChange={setOpen} />
+      <CreateProjectDialog open={open} onOpenChange={setOpen} onReleased={setJustReleasedId} />
       {projects.isError ? <p className="text-destructive">Could not load projects.</p> : null}
       {projects.data?.length === 0 ? (
         <EmptyState
@@ -968,7 +1099,7 @@ export function ProjectsPage() {
       ) : null}
       <div className="grid gap-4 xl:grid-cols-2">
         {projects.data?.map((project) => (
-          <ProjectCard key={project.id} project={project} canEdit={isAdmin(me)} />
+          <ProjectCard key={project.id} project={project} canEdit={isAdmin(me)} justReleased={justReleasedId === project.id} />
         ))}
       </div>
     </div>

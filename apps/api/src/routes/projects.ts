@@ -1343,15 +1343,32 @@ export async function registerProjectRoutes(app: FastifyInstance) {
         }
       }
     });
-    await queue().add(
-      input.trigger === "rollback" ? "project-promote" : "project-deploy",
-      {
-        projectId: project.id,
-        releaseId: release.id,
-        promoteFromReleaseId: input.sourceReleaseId
-      },
-      { jobId: release.id, removeOnComplete: 200, removeOnFail: 100 }
-    );
+    try {
+      await queue().add(
+        input.trigger === "rollback" ? "project-promote" : "project-deploy",
+        {
+          projectId: project.id,
+          releaseId: release.id,
+          promoteFromReleaseId: input.sourceReleaseId
+        },
+        { jobId: release.id, removeOnComplete: 200, removeOnFail: 100 }
+      );
+    } catch {
+      // A failed enqueue must not leave a pending release blocking the user's
+      // retry after project creation. Keep a readable failed attempt instead.
+      const finishedAt = new Date();
+      await prisma.$transaction([
+        prisma.projectRelease.update({
+          where: { id: release.id },
+          data: { status: "failed", errorMessage: "Could not queue the release. Retry from the project card.", finishedAt }
+        }),
+        prisma.serviceDeployment.updateMany({
+          where: { releaseId: release.id },
+          data: { status: "failed", errorMessage: "Release did not start.", finishedAt }
+        })
+      ]);
+      return { queueFailure: true } as const;
+    }
     return { release, project } as const;
   }
 
@@ -1369,6 +1386,7 @@ export async function registerProjectRoutes(app: FastifyInstance) {
       if ("conflict" in result) {
         return reply.conflict(`Release ${result.conflict} is already in progress`);
       }
+      if ("queueFailure" in result) return reply.serviceUnavailable("Could not queue the release. Retry from the project card.");
       await recordAudit(req, {
         action: "project.release",
         targetType: "projectRelease",
@@ -1409,6 +1427,7 @@ export async function registerProjectRoutes(app: FastifyInstance) {
       });
       if (!result) return reply.notFound();
       if ("conflict" in result) return reply.conflict("A release is already in progress");
+      if ("queueFailure" in result) return reply.serviceUnavailable("Could not queue the release. Retry from the project card.");
       await recordAudit(req, {
         action: "project.rollback",
         targetType: "projectRelease",

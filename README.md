@@ -224,6 +224,17 @@ inherited by every service, with service values taking precedence. Managed
 Postgres/Redis bindings may target every service or a selected subset. External
 S3/R2 settings belong in encrypted project/service variables.
 
+In **Projects → New project**, paste the Git URL first. Sohwe suggests a project
+name and slug. **Inspect repository** lists candidate service directories with
+builder, command, and port suggestions; apply one to the first service or add
+it as an HTTP service or private worker. Add a release job separately when the
+repository needs a one-time migration command. Common service fields stay in
+view; build, health, dependency, domain, and variable settings expand when
+needed. **Create and release** saves the project and queues its first release;
+**Save draft** defers deployment. If queueing fails, retrying uses the saved
+project instead of creating another one. The project card shows the latest
+release and each service's status.
+
 For larger pnpm monorepos, both the **New project** dialog and an existing
 project's **Settings** dialog have a JSON mode. Paste the complete project
 object or upload a `.json` file instead of filling every service field
