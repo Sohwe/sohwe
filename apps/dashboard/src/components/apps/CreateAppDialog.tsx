@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { api, apiGet } from "@/lib/api";
+import type { DeployLinkPrefill } from "@/lib/deploy-link";
 import type { AppRow, BuildMode, GitHubAppStatus, GitHubRepo, RepositoryInspection } from "@/lib/types";
 import { InitialVariablesEditor, type InitialVariablesEditorHandle } from "./InitialVariablesEditor";
 
@@ -62,19 +63,21 @@ function githubRepoNameFromUrl(url: string): string | undefined {
 export function CreateAppDialog({
   open,
   onOpenChange,
-  onCreated
+  onCreated,
+  initial
 }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
   onCreated?: (app: AppRow) => void;
+  initial?: DeployLinkPrefill;
 }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const variablesEditor = useRef<InitialVariablesEditorHandle>(null);
-  const [cName, setCName] = useState("");
-  const [cSlug, setCSlug] = useState("");
-  const [cRepo, setCRepo] = useState("");
-  const [cBranch, setCBranch] = useState("main");
+  const [cName, setCName] = useState(() => repositoryNameFromUrl(initial?.repo ?? "").name ?? "");
+  const [cSlug, setCSlug] = useState(() => slugFromRepoName(repositoryNameFromUrl(initial?.repo ?? "").name ?? ""));
+  const [cRepo, setCRepo] = useState(initial?.repo ?? "");
+  const [cBranch, setCBranch] = useState(initial?.branch ?? "main");
   const [cPort, setCPort] = useState(3000);
   const [cBuildMode, setCBuildMode] = useState<BuildMode>("auto");
   const [cBuildCmd, setCBuildCmd] = useState("");
@@ -86,13 +89,13 @@ export function CreateAppDialog({
   const [cDomain, setCDomain] = useState("");
   const [cAutoDeploy, setCAutoDeploy] = useState(false);
   const [cVariables, setCVariables] = useState<VariableEntry[]>([]);
-  const [cConfigPath, setCConfigPath] = useState("");
+  const [cConfigPath, setCConfigPath] = useState(initial?.configPath ?? "");
   const [variableError, setVariableError] = useState<string | null>(null);
   const [repoSearch, setRepoSearch] = useState("");
   const [selectedRepo, setSelectedRepo] = useState<string | undefined>();
   const [nameEdited, setNameEdited] = useState(false);
   const [slugEdited, setSlugEdited] = useState(false);
-  const [branchEdited, setBranchEdited] = useState(false);
+  const [branchEdited, setBranchEdited] = useState(!!initial?.branch);
   const [manualBranch, setManualBranch] = useState(false);
   const [branchLookupRequested, setBranchLookupRequested] = useState(false);
   const [repoTouched, setRepoTouched] = useState(false);
@@ -352,7 +355,9 @@ export function CreateAppDialog({
       <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>New application</DialogTitle>
-          <DialogDescription>Choose a Git repository, then deploy now or save the app for later.</DialogDescription>
+          <DialogDescription>{initial
+            ? "Review this deploy link's repository and suggested settings, then deploy or save the app for later."
+            : "Choose a Git repository, then deploy now or save the app for later."}</DialogDescription>
         </DialogHeader>
         {savedApp ? (
           <div className="mt-2 space-y-4">

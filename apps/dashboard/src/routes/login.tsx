@@ -5,6 +5,7 @@ import { Field } from "@/components/common/Field";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { api, fetchMe } from "@/lib/api";
+import { consumeDeployLink } from "@/lib/deploy-link";
 import { useState } from "react";
 import { Shell } from "@/components/common/Shell";
 import { toast } from "sonner";
@@ -20,7 +21,7 @@ export function LoginPage() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["me"] });
       void queryClient.fetchQuery({ queryKey: ["me"], queryFn: () => fetchMe<Me | null>() }).then((m) => {
-        if (m) window.location.assign("/apps");
+        if (m) window.location.assign(consumeDeployLink() ?? "/apps");
       });
     },
     onError: (e) => {

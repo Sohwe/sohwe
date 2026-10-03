@@ -2,6 +2,7 @@ import { createRootRouteWithContext, createRoute, createRouter, Outlet, redirect
 import type { QueryClient } from "@tanstack/react-query";
 import { fetchMe } from "@/lib/api";
 import { fetchSetupStatus } from "@/lib/setup-queries";
+import { rememberDeployLink } from "@/lib/deploy-link";
 import type { Me, SetupStatus } from "@/lib/types";
 import { AuthedLayout } from "@/components/layout/AuthedLayout";
 import { SetupPage } from "@/routes/setup";
@@ -87,9 +88,15 @@ const authedLayoutRoute = createRoute({
       queryKey: ["setup", "status"],
       queryFn: fetchSetupStatus
     });
-    if (s.needsSetup) throw redirect({ to: "/setup" });
+    if (s.needsSetup) {
+      rememberDeployLink();
+      throw redirect({ to: "/setup" });
+    }
     const me = await queryClient.fetchQuery<Me | null>({ queryKey: ["me"], queryFn: () => fetchMe<Me | null>() });
-    if (!me) throw redirect({ to: "/login" });
+    if (!me) {
+      rememberDeployLink();
+      throw redirect({ to: "/login" });
+    }
   },
   component: AuthedLayout
 });

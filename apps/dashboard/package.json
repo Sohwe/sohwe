@@ -6,6 +6,7 @@
     "dev": "vite --port 3000",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
+    "test": "node --experimental-strip-types --test src/lib/deploy-link.test.ts",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview"
   },

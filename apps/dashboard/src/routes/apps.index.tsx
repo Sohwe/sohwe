@@ -9,11 +9,16 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, fetchMe } from "@/lib/api";
 import { useBaseDomain } from "@/lib/config";
+import { parseDeployLink, type DeployLinkPrefill } from "@/lib/deploy-link";
 import { isAdmin } from "@/lib/roles";
 import type { AppRow, Me } from "@/lib/types";
 
 export function AppsListPage() {
-  const [createOpen, setCreateOpen] = useState(false);
+  const [deployLink] = useState(() => parseDeployLink(window.location.search));
+  const [createOpen, setCreateOpen] = useState(deployLink.kind === "valid");
+  const [linkInitial, setLinkInitial] = useState<DeployLinkPrefill | undefined>(
+    () => deployLink.kind === "valid" ? deployLink.value : undefined
+  );
   const baseDomain = useBaseDomain();
   const q = useQuery({ queryKey: ["applications"], queryFn: () => api<AppRow[]>("/api/applications") });
   const { data: me } = useQuery({ queryKey: ["me"], queryFn: () => fetchMe<Me | null>() });
@@ -41,7 +46,22 @@ export function AppsListPage() {
           ) : undefined
         }
       />
-      {canCreate ? <CreateAppDialog open={createOpen} onOpenChange={setCreateOpen} /> : null}
+      {deployLink.kind === "invalid" ? (
+        <p className="mb-4 rounded-lg border border-destructive/50 p-3 text-sm text-destructive" role="alert">{deployLink.message}</p>
+      ) : deployLink.kind === "valid" && me && !canCreate ? (
+        <p className="mb-4 rounded-lg border p-3 text-sm text-muted-foreground" role="status">An owner or admin must sign in to use this deploy link.</p>
+      ) : null}
+      {canCreate ? (
+        <CreateAppDialog
+          key={linkInitial ? "deploy-link" : "new-app"}
+          open={createOpen}
+          initial={linkInitial}
+          onOpenChange={(next) => {
+            setCreateOpen(next);
+            if (!next) setLinkInitial(undefined);
+          }}
+        />
+      ) : null}
       {q.isLoading ? (
         <div className="grid gap-4 sm:grid-cols-1 lg:grid-cols-2">
           {[1, 2, 3].map((i) => (

@@ -10,6 +10,10 @@ write-ups.
 
 ## [Unreleased]
 
+### Added
+
+- Deploy with Sohwe links can prefill a repository, branch, and `sohwe.yaml` path in the existing application creation flow. Links contain no variable values; repository inspection and required-variable prompts still run before creation. Links survive sign-in and first-run setup, and malformed links show a correction instead of creating an app.
+
 ### Changed
 
 - New application setup offers push-to-deploy only for repositories shared with a connected GitHub installation, shows the selected branch, and explains that future push deploys are off by default. The API verifies repository access before enabling auto-deploy, including installations limited to selected repositories.
