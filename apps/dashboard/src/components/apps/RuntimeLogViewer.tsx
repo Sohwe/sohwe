@@ -95,7 +95,7 @@ export function RuntimeLogViewer({
       <Button type="submit" size="sm">Apply range</Button>
       {range ? <Button type="button" variant="outline" size="sm" onClick={() => { setRange(null); setError(null); }}>Back to live</Button> : null}
       {error ? <p role="alert" className="w-full text-xs text-destructive">{error}</p> : null}
-      <p className="w-full text-xs text-muted-foreground">Range inputs use your local timezone; log timestamps are UTC. Results come from the current running container's retained Docker logs. Logs from removed deployments are unavailable.</p>
+      <p className="w-full text-xs text-muted-foreground">Range inputs use your local timezone; log timestamps are UTC. Results come from the latest container's retained Docker logs, including after a crash. Logs from removed deployments are unavailable.</p>
     </form>
     {range ? <HistoricalRuntimeLogs appId={appId} appSlug={appSlug} range={range} className={className} /> : <LiveRuntimeLogs appId={appId} appSlug={appSlug} className={className} />}
   </div>;

@@ -54,6 +54,23 @@ export async function getRunningAppContainer(
   return docker.getContainer(c.Id);
 }
 
+/** Logs remain available on the latest app container after its process exits. */
+export async function getLatestAppContainer(
+  docker: Docker,
+  appId: string
+): Promise<Docker.Container | null> {
+  const list = await docker.listContainers({
+    all: true,
+    filters: { label: [`sohwe.app=${appId}`] }
+  });
+  const latest = list.reduce<(typeof list)[number] | null>(
+    (selected, container) =>
+      !selected || container.Created > selected.Created ? container : selected,
+    null
+  );
+  return latest ? docker.getContainer(latest.Id) : null;
+}
+
 type ModemDemux = {
   demuxStream: (
     stream: Readable,

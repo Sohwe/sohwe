@@ -237,6 +237,16 @@ describe("nixpacksArgv", () => {
     });
     assert.equal(argv.at(-1), "OPTS=a=1&b=2");
   });
+
+  it("sets the static export start command without changing normal builds", () => {
+    const args = nixpacksArgv("/ctx", "img:1", {
+      startCmd: "node /app/sohwe-static.cjs"
+    });
+    assert.deepEqual(args, [
+      "build", "/ctx", "--name", "img:1",
+      "--start-cmd", "node /app/sohwe-static.cjs"
+    ]);
+  });
 });
 
 describe("dockerBuildArgv", () => {

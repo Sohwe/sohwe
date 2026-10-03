@@ -1,6 +1,37 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { FsError, normalizeContainerPath } from "./container-fs";
+import type Docker from "dockerode";
+import { FsError, getLatestAppContainer, normalizeContainerPath } from "./container-fs";
+
+describe("getLatestAppContainer", () => {
+  it("selects the newest app container even when it has exited", async () => {
+    let filters: unknown;
+    const docker = {
+      listContainers: async (options: unknown) => {
+        filters = options;
+        return [
+          { Id: "old-running", Created: 100 },
+          { Id: "new-exited", Created: 200 }
+        ];
+      },
+      getContainer: (id: string) => ({ id })
+    } as unknown as Docker;
+
+    const container = await getLatestAppContainer(docker, "app-1");
+    assert.equal(container?.id, "new-exited");
+    assert.deepEqual(filters, {
+      all: true,
+      filters: { label: ["sohwe.app=app-1"] }
+    });
+  });
+
+  it("returns null when the app has no retained container", async () => {
+    const docker = {
+      listContainers: async () => []
+    } as unknown as Docker;
+    assert.equal(await getLatestAppContainer(docker, "app-1"), null);
+  });
+});
 
 /**
  * `normalizeContainerPath` is the only thing between a user-supplied string and

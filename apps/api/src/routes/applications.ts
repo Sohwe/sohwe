@@ -29,7 +29,7 @@ import Docker from "dockerode";
 import IORedis from "ioredis";
 import { z } from "zod";
 import { defaultApplicationSelect, serializeAppListRow } from "../app-public";
-import { getRunningAppContainer } from "../container-fs";
+import { getLatestAppContainer } from "../container-fs";
 import { recordAudit } from "../audit";
 import { requireRole } from "../rbac";
 import { isUniqueViolation } from "../prisma-errors";
@@ -95,7 +95,7 @@ function decodeDockerLogBuffer(buf: Buffer): string {
 }
 
 async function readRecentRuntimeLogs(applicationId: string): Promise<string> {
-  const container = await getRunningAppContainer(docker, applicationId);
+  const container = await getLatestAppContainer(docker, applicationId);
   if (!container) return "";
   const logs = (await container.logs({
     stdout: true,
@@ -746,7 +746,7 @@ export async function registerApplicationRoutes(app: FastifyInstance) {
       });
       if (!app) return reply.notFound();
 
-      const container = await getRunningAppContainer(docker, id);
+      const container = await getLatestAppContainer(docker, id);
       if (!container) return { text: "", count: 0, truncated: false };
       const from = new Date(range.from);
       const to = new Date(range.to);

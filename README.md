@@ -59,9 +59,13 @@ relevant control while keeping the full build log. After a successful container
 start, the drawer also has a port and listening-address check for an app URL
 that does not respond.
 
+Nixpacks application deployments of Next.js sites with `output: "export"` automatically
+serve the generated static files on the configured container port.
+No static-server dependency or custom start command is needed in the repo.
+
 On an application's **Logs → Runtime** tab, choose **From** and **To** to view
 output in a local date and time range, or return to the live stream. Range
-results use the current running container's retained Docker logs and show at
+results use the latest container's retained Docker logs, even after a crash, and show at
 most the latest 1,000 matching lines. Logs from containers removed by later
 deployments are not available through this filter. The **Latest build** tab
 continues to show build output for the most recent deployment.

@@ -1,8 +1,11 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { NODE_VERSION_KEY, resolveNodeVersion } from "./node-version";
+import { detectNextStaticExport, nextStaticServerSource } from "./next-static";
 
 export type LogHandler = (line: string) => void;
 
@@ -19,6 +22,8 @@ export type BuildOptions = {
   buildCmd?: string | null;
   /** Optional start command override (nixpacks only). */
   startCmd?: string | null;
+  /** Enable static export hosting for a single HTTP app on this container port. */
+  staticSitePort?: number;
   /** Dockerfile path relative to `contextDir`. Defaults to `Dockerfile`. */
   dockerfilePath?: string | null;
   /** Optional named stage from a multi-stage Dockerfile. */
@@ -357,6 +362,7 @@ export async function buildAppImage(opts: BuildOptions): Promise<BuildResult> {
     mode,
     buildCmd,
     startCmd,
+    staticSitePort,
     dockerfilePath,
     dockerTarget,
     buildArgs,
@@ -433,14 +439,38 @@ export async function buildAppImage(opts: BuildOptions): Promise<BuildResult> {
     );
   }
 
-  await nixpacksBuild({
-    contextDir: sourceDir,
-    imageTag,
-    buildCmd,
-    startCmd,
-    buildArgs: resolvedArgs,
-    onLogLine
-  });
+  const appDir = realpathSync(resolve(contextDir, appDirectory?.trim() || "."));
+  const staticOutput = staticSitePort
+    ? detectNextStaticExport(sourceDir, appDir, startCmd)
+    : null;
+  const serverSource = staticOutput
+    ? nextStaticServerSource(staticOutput, staticSitePort!)
+    : null;
+  // A stable name keeps Docker's install/build layers cacheable on redeploy.
+  const serverName = serverSource
+    ? `sohwe-static-${createHash("sha256").update(serverSource).digest("hex").slice(0, 16)}.cjs`
+    : null;
+  const serverPath = serverName ? join(sourceDir, serverName) : null;
+  let wroteServer = false;
+  try {
+    if (staticOutput && serverPath && serverName && serverSource) {
+      await writeFile(serverPath, serverSource, { flag: "wx" });
+      wroteServer = true;
+      onLogLine(`[sohwe] Next.js static export detected; serving ${staticOutput}/ on port ${staticSitePort}.`);
+    }
+    await nixpacksBuild({
+      contextDir: sourceDir,
+      imageTag,
+      buildCmd,
+      startCmd: serverName
+        ? `node /app/${serverName}`
+        : startCmd,
+      buildArgs: resolvedArgs,
+      onLogLine
+    });
+  } finally {
+    if (wroteServer && serverPath) await rm(serverPath, { force: true });
+  }
   return { imageTag, engine: "nixpacks" };
 }
 

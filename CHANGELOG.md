@@ -10,6 +10,16 @@ write-ups.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-03
+
+### Added
+
+- Nixpacks application deployments now detect literal Next.js static exports and serve their built files on the configured port without adding a dependency to the repository. Explicit custom start and container commands retain priority.
+
+### Fixed
+
+- Application runtime log replay and date-range history now read the latest retained container after it exits, so a crashed app's output remains visible. Deployment build logs now retain container startup and post-build failure messages.
+
 ## [0.11.0] - 2026-10-03
 
 ### Added

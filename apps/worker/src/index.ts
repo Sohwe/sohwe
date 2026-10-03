@@ -473,6 +473,7 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
         mode: (activePlan.buildMode as BuildMode) ?? "auto",
         buildCmd: activePlan.buildCmd,
         startCmd: activePlan.startCmd,
+        staticSitePort: activePlan.runtimeCmd?.trim() ? undefined : activePlan.port,
         dockerfilePath: activePlan.dockerfilePath,
         dockerTarget: activePlan.dockerTarget,
         buildArgs: readEncryptedVars(app.buildArgsEncrypted),
@@ -480,7 +481,6 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
       });
     }
 
-    await sink.end();
     onLog(`[sohwe] Stopping old containers for this app (if any)...`);
     logTails.stop(app.id);
     oldContainersStopped = true;
@@ -536,6 +536,8 @@ async function runDeploy(job: { data: DeployJobData }): Promise<void> {
       applicationId: app.id,
       deploymentId
     });
+    onLog(`[sohwe] Container started (${c.id.slice(0, 12)}); deployment successful.`);
+    await sink.end();
   } catch (e) {
     const raw = e instanceof Error ? e.message : String(e);
     // The error can be derived from a tokenized clone URL, so redact before it
