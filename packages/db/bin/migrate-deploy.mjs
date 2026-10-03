@@ -32,7 +32,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // The `init` migration reproduces the schema that every published tag up to and
-// including v0.3.8 shipped. Never renumber it -- see CLAUDE.md.
+// including v0.3.8 shipped. Never renumber it -- see AGENTS.md.
 const BASELINE_MIGRATION = "20260722000000_init";
 
 // Resolve the package root from this file rather than trusting the caller's

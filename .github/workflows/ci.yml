@@ -12,7 +12,7 @@ name: ci
 ##                  Postgres, on both the fresh-install and the upgrade path
 ##   scripts     -- shellcheck + bash syntax for the installer and host CLI
 ##
-## Keep this in sync with the "Verification Checklist" in CLAUDE.md.
+## Keep this in sync with the checks described in AGENTS.md.
 
 on:
   push:

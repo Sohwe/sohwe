@@ -1,25 +1,25 @@
 # Sohwe
 
-Sohwe is an open-source, self-hostable deployment platform (PaaS): connect a repo, deploy to your own infrastructure, and get live URLs with HTTPS, logs, and sensible defaults—without vendor lock-in. The product vision and roadmap live in [`sohwe-prd.md`](./sohwe-prd.md).
+Sohwe is an open-source, self-hostable deployment platform (PaaS): connect a repo, deploy to your own infrastructure, and get live URLs with HTTPS, logs, and sensible defaults—without vendor lock-in.
 
-This repository is a **pnpm + Turborepo** monorepo. The detailed bootstrap and phased implementation guide is [`sohwe-getting-started.md`](./sohwe-getting-started.md).
+This repository is a **pnpm + Turborepo** monorepo. For setup, see [Development](#development) or the [fresh-machine guide](./docs/fresh-machine-setup.md). Current work is tracked in [`UPCOMING_PLANS.md`](./UPCOMING_PLANS.md).
 
 ## Current status
 
-**v0.3.8** is the latest tagged release. Everything below Phase 4 is in it; Phases 4, 4.5, and 5 are complete on `main` and staged as **v0.6.0**, pending a manual verification pass on a real host.
+The current codebase includes Phases 0–8, with Phase 9 in progress. See [`CHANGELOG.md`](./CHANGELOG.md) for release history.
 
-Shipped through **Phase 5**:
+Implemented in the current codebase:
 
 - **Phases 0–3** — deploys from Git, Dockerfile + Nixpacks builds, custom domains with opt-in HTTPS, encrypted env vars and build variables, named persistent volumes, memory/CPU limits, per-app internal Docker networks.
 - **Phase 3.5 (packaging & install)** — production Dockerfiles, `docker-compose.prod.yml` + HTTPS overlay, multi-arch GHCR publishing on tag, and a one-command installer for fresh Ubuntu 22.04/24.04 hosts.
 - **Phase 4 (observability)** — runtime log streaming, live CPU/memory metrics, and crash/OOM webhook alerts.
 - **Phase 4.5 (portable bundles)** — signed, passphrase-encrypted config bundles with local and S3-compatible destinations, restore preflight/apply, and scheduled exports with retention.
 - **Phase 5 (git-push deploys)** — per-instance GitHub App created through GitHub's manifest flow, private-repo cloning with short-lived installation tokens, a signed push webhook that deploys the tracked branch, and commit statuses reported back to GitHub.
-- **Phase 6 (multi-user)** — owner/admin/member roles enforced on every route, copy-link invitations, member management, and an org-scoped audit log. On `main` for **v0.7.0**.
-- **Phase 7 (managed datastores)** — one-click Postgres/Redis on the host with encrypted generated credentials, private app bindings that inject `DATABASE_URL`/`REDIS_URL` into encrypted env vars, opt-in public host ports, and password rotation. On `main` for **v0.8.0**.
-- **Phase 8 (custom domains)** — a dedicated **Domains** tab per app holding as many hostnames as the app needs, each validated on entry, checked against DNS on the spot, and re-checkable from its row. Sohwe detects where a domain's DNS is hosted (Cloudflare, Namecheap, GoDaddy, Route 53, and more), shows the exact record to create with copy-paste values and a deep link into that provider's console, and — with an org-level API token stored encrypted — creates or updates the record in one click for Cloudflare, DigitalOcean, and Hetzner. On `main`, unreleased.
+- **Phase 6 (multi-user)** — owner/admin/member roles enforced on every route, copy-link invitations, member management, and an org-scoped audit log.
+- **Phase 7 (managed datastores)** — one-click Postgres/Redis on the host with encrypted generated credentials, private app bindings that inject `DATABASE_URL`/`REDIS_URL` into encrypted env vars, opt-in public host ports, and password rotation.
+- **Phase 8 (custom domains)** — a dedicated **Domains** tab per app holding as many hostnames as the app needs, each validated on entry, checked against DNS on the spot, and re-checkable from its row. Sohwe detects where a domain's DNS is hosted (Cloudflare, Namecheap, GoDaddy, Route 53, and more), shows the exact record to create with copy-paste values and a deep link into that provider's console, and — with an org-level API token stored encrypted — creates or updates the record in one click for Cloudflare, DigitalOcean, and Hetzner.
 
-[`ROADMAP.md`](./ROADMAP.md) is the authoritative per-item checklist; see also [`CHANGELOG.md`](./CHANGELOG.md).
+[`UPCOMING_PLANS.md`](./UPCOMING_PLANS.md) tracks unfinished work.
 
 ## Install on a server (production)
 
@@ -354,13 +354,10 @@ Certificates are only requested for apps on a real public domain — Let's Encry
 
 ## Documentation
 
-- [`CLAUDE.md`](./CLAUDE.md) — working rules and context for coding agents
-- [`ROADMAP.md`](./ROADMAP.md) — per-phase checklist with file-level evidence
+- [`AGENTS.md`](./AGENTS.md) — working rules and context for coding agents
+- [`UPCOMING_PLANS.md`](./UPCOMING_PLANS.md) — Phase 9 and longer-term plans
 - [`DEVELOPMENT.md`](./DEVELOPMENT.md) — local environment setup and dev deploy notes
 - [`docs/fresh-machine-setup.md`](./docs/fresh-machine-setup.md) — zero-to-running dev setup on a fresh Windows/macOS/Linux machine
-- [`sohwe-getting-started.md`](./sohwe-getting-started.md) — architecture, decisions, and unbuilt-phase design
-- [`sohwe-prd.md`](./sohwe-prd.md) — product requirements and release plan
-- [`docs/vps-smoke-test.md`](./docs/vps-smoke-test.md) — manual VPS verification checklist
 
 ## License
 

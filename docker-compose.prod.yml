@@ -231,7 +231,7 @@ services:
 networks:
   # Public-facing: Traefik + dashboard + every managed user app attach here.
   # Name is fixed so managed containers created by the worker can join it by
-  # name (matches packages/types/src — see Phase 1 in sohwe-getting-started.md).
+  # name (matches packages/types/src).
   sohwe_proxy:
     name: sohwe_proxy
   # Platform-internal: postgres, redis, api, worker, dashboard. User apps

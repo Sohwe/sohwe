@@ -183,8 +183,8 @@ write-ups.
 The first release since v0.3.8, covering everything that accumulated on `main`
 behind it: Phase 4 (observability), Phase 4.5 (portable bundles), Phase 5
 (git-push deploys), a versioned migration pipeline, a security batch, and test
-coverage across every workspace package. The intermediate versions sketched in
-`ROADMAP.md` — v0.3.9 (base domain), v0.4.0–v0.4.3 (logs, metrics, alerts,
+coverage across every workspace package. The intermediate versions originally planned —
+v0.3.9 (base domain), v0.4.0–v0.4.3 (logs, metrics, alerts,
 build-log UX), and v0.5.0 (bundles) — were never tagged; this release contains
 all of them.
 

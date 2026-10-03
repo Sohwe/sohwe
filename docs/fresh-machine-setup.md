@@ -179,4 +179,4 @@ steps `scripts/dev-setup.mjs` automates.
 
 - [DEVELOPMENT.md](../DEVELOPMENT.md) — dev-only gotchas, schema-change workflow
 - [README.md](../README.md) — production install, env var reference, repo layout
-- [sohwe-getting-started.md](../sohwe-getting-started.md) — architecture and design decisions
+- [UPCOMING_PLANS.md](../UPCOMING_PLANS.md) — active and longer-term plans

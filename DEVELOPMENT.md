@@ -82,8 +82,6 @@ Point the tunnel at the **dashboard** (port 3000) — Vite proxies `/api` to the
 
 That value is baked into the GitHub App's webhook and redirect URLs when GitHub creates the app, so it has to be right *before* you connect. Tunnel URLs change on every restart unless you have a named tunnel: with an ephemeral URL you will be deleting and recreating the test app each session. Delete stale test apps from GitHub's Developer settings.
 
-## Roadmap Pointer
+## Upcoming work
 
-Phases 0 through 5 are implemented. The next milestone is **Phase 6 — multi-user** (invitations, role guards, audit log).
-
-See [`ROADMAP.md`](./ROADMAP.md) for the per-item checklist.
+See [`UPCOMING_PLANS.md`](./UPCOMING_PLANS.md) for the active Phase 9 checklist and later plans.
