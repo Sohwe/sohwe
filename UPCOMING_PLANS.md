@@ -95,7 +95,23 @@ separate settings layered on top of that root context.
 - [ ] Show the resolved context, Dockerfile, target, package manager, service
       kind, and commands in the build plan before deployment.
 
+### Project workspace
+
+- [x] Open projects as full pages with Overview, Releases, Logs, Domains,
+      Variables, Datastores, and Settings; preserve direct links to releases.
+- [x] Manage generated/custom service URLs, add/remove/primary domains and DNS
+      checks without editing project JSON.
+- [x] Browse selected-service build logs and persisted runtime/job output with
+      filters, pause/resume, history, search, follow, copy and bounded downloads.
+- [x] Add services through a form and manage shared/scoped variables and private
+      datastore bindings from dedicated tabs.
+
 ### Coordinated deployment
+
+- [x] Keep HTTP probes disabled in Traefik, then create routed instances with the
+      proxy network attached before startup; recheck readiness before retiring
+      the previous release.
+      Reproduced and verified with disposable Docker/Traefik containers.
 
 - [x] Build every required service image before changing the running release.
 - [x] Run the release command/migration exactly once, after required datastores

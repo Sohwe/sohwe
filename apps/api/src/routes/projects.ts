@@ -19,6 +19,7 @@ import {
   ProjectRollbackBodySchema,
   ServiceDomainsReplaceSchema,
   ServiceLogsQuerySchema,
+  ProjectReleasesQuerySchema,
   UpdateProjectSchema,
   UpdateServiceSchema,
   VariablesPatchSchema,
@@ -1442,6 +1443,44 @@ export async function registerProjectRoutes(app: FastifyInstance) {
     }
   );
 
+  const ProjectReleaseParams = IdParam.extend({ releaseId: z.string().uuid() });
+  app.get("/api/projects/:id/releases", {
+    preHandler: [requireRole("member")],
+    schema: { params: IdParam, querystring: ProjectReleasesQuerySchema }
+  }, async (req, reply) => {
+    const { id } = IdParam.parse(req.params);
+    const { cursor, limit } = req.query as { cursor?: string; limit: number };
+    const project = await prisma.project.findFirst({ where: { id, organizationId: req.user!.organizationId }, select: { id: true } });
+    if (!project) return reply.notFound();
+    if (cursor && !await prisma.projectRelease.findFirst({ where: { id: cursor, projectId: id }, select: { id: true } })) return reply.badRequest("Invalid release cursor");
+    const rows = await prisma.projectRelease.findMany({
+      where: { projectId: id }, orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}), take: limit + 1, select: releaseSelect
+    });
+    const releases = rows.slice(0, limit);
+    return { releases, nextCursor: rows.length > limit ? releases.at(-1)?.id : null };
+  });
+
+  app.get("/api/projects/:id/releases/:releaseId", {
+    preHandler: [requireRole("member")], schema: { params: ProjectReleaseParams }
+  }, async (req, reply) => {
+    const { id, releaseId } = ProjectReleaseParams.parse(req.params);
+    return await prisma.projectRelease.findFirst({
+      where: { id: releaseId, projectId: id, project: { organizationId: req.user!.organizationId } }, select: releaseSelect
+    }) ?? reply.notFound();
+  });
+
+  app.get("/api/projects/:id/releases/:releaseId/services/:serviceId/build-logs", {
+    preHandler: [requireRole("admin")], schema: { params: ProjectReleaseParams.extend({ serviceId: z.string().uuid() }) }
+  }, async (req, reply) => {
+    const { id, releaseId, serviceId } = req.params as { id: string; releaseId: string; serviceId: string };
+    const row = await prisma.serviceDeployment.findFirst({
+      where: { releaseId, serviceId, release: { projectId: id, project: { organizationId: req.user!.organizationId } } },
+      select: { id: true, status: true, errorMessage: true, buildLogs: true }
+    });
+    return row ?? reply.notFound();
+  });
+
   app.get(
     "/api/project-releases/:releaseId",
     // This detail includes raw build output, which is secret-adjacent.
@@ -1487,6 +1526,7 @@ export async function registerProjectRoutes(app: FastifyInstance) {
           projectId: id,
           serviceId: query.serviceId,
           releaseId: query.releaseId,
+          createdAt: { gte: query.from ? new Date(query.from) : undefined, lte: query.to ? new Date(query.to) : undefined },
           stream: query.stream,
           level: query.level,
           id: {
@@ -1494,10 +1534,10 @@ export async function registerProjectRoutes(app: FastifyInstance) {
             lt: query.before
           }
         },
-        orderBy: { id: query.before ? "desc" : "asc" },
+        orderBy: { id: query.after === undefined ? "desc" : "asc" },
         take: query.limit
       });
-      if (query.before) rows.reverse();
+      if (query.after === undefined) rows.reverse();
       return { logs: rows.map(serializeLog), hasMore: rows.length === query.limit };
     }
   );
@@ -1533,7 +1573,10 @@ export async function registerProjectRoutes(app: FastifyInstance) {
             releaseId?: string;
             stream?: string;
             level?: string;
+            createdAt?: string;
           };
+          if (query.from && (!event.createdAt || Date.parse(event.createdAt) < Date.parse(query.from))) return;
+          if (query.to && (!event.createdAt || Date.parse(event.createdAt) > Date.parse(query.to))) return;
           if (query.serviceId && event.serviceId !== query.serviceId) return;
           if (query.releaseId && event.releaseId !== query.releaseId) return;
           if (query.stream && event.stream !== query.stream) return;
@@ -1565,6 +1608,7 @@ export async function registerProjectRoutes(app: FastifyInstance) {
           projectId: id,
           serviceId: query.serviceId,
           releaseId: query.releaseId,
+          createdAt: { gte: query.from ? new Date(query.from) : undefined, lte: query.to ? new Date(query.to) : undefined },
           stream: query.stream,
           level: query.level,
           id: query.after === undefined ? undefined : { gt: query.after }

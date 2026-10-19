@@ -98,6 +98,8 @@ export function buildProjectServiceContainerSpec(input: {
   imageTag: string;
   envList: string[];
   routing: RoutingConfig;
+  /** Enable only for the final HTTP instance after all private probes pass. */
+  routeReady?: boolean;
 }): Docker.ContainerCreateOptions {
   const {
     project,
@@ -119,13 +121,16 @@ export function buildProjectServiceContainerSpec(input: {
     Cmd: service.runtimeCmd?.trim()
       ? ["/bin/sh", "-lc", service.runtimeCmd.trim()]
       : undefined,
-    Labels: projectServiceLabels({
-      project,
-      service,
-      releaseId,
-      serviceDeploymentId,
-      routing
-    }),
+    Labels: {
+      ...projectServiceLabels({
+        project,
+        service,
+        releaseId,
+        serviceDeploymentId,
+        routing
+      }),
+      ...(isHttp && !input.routeReady ? { "traefik.enable": "false" } : {})
+    },
     ExposedPorts:
       isHttp && service.port ? { [`${service.port}/tcp`]: {} } : undefined,
     Env: envList.length > 0 ? envList : undefined,
@@ -139,8 +144,8 @@ export function buildProjectServiceContainerSpec(input: {
         }
       : undefined,
     HostConfig: {
-      // Every candidate starts privately. A healthy HTTP candidate joins the
-      // Traefik network only at the promotion boundary.
+      // Probe candidates stay private and disabled in Traefik. The final HTTP
+      // container joins both networks before its first start event.
       NetworkMode: privateNetwork,
       RestartPolicy: {
         Name: restartName as "no" | "on-failure" | "unless-stopped" | "always"
@@ -153,7 +158,8 @@ export function buildProjectServiceContainerSpec(input: {
     },
     NetworkingConfig: {
       EndpointsConfig: {
-        [privateNetwork]: { Aliases: [service.slug] }
+        [privateNetwork]: { Aliases: [service.slug] },
+        ...(isHttp && input.routeReady ? { [routing.network]: {} } : {})
       }
     }
   };

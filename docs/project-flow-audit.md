@@ -2,7 +2,18 @@
 
 Date: 2026-10-03
 
-Status: findings and proposed work; no implementation in this audit
+Status: original audit with implementation progress recorded below
+
+## Implementation progress — 2026-10-19
+
+The project workspace, release history/detail links, full log viewer, selected
+service build-log reads, domain management/DNS inspection, variable and datastore
+pages, and full-page settings/service creation are implemented locally. Routing
+promotion keeps probes private and creates routed containers with both networks
+attached before startup, then rechecks readiness, with a real Docker regression test. Role and organization checks are
+covered by disposable-database API tests. This does not complete the workspace
+build-selection or guided-onboarding findings below, nor the three acceptance
+repository deployments. The remaining sections preserve the original findings.
 
 ## Why this exists
 
@@ -203,4 +214,4 @@ restart/log continuity, and rollback. The existing acceptance notes also
 require retaining the old live release when a migration fails
 (`UPCOMING_PLANS.md:162`).
 
-No code changes or live fixture validation were performed for this audit.
+The original audit performed no code changes or live fixture validation. See the implementation progress note above for subsequent local work.

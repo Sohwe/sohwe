@@ -27,6 +27,12 @@ import { MembersPage } from "@/routes/members";
 import { AuditPage } from "@/routes/audit";
 import { DeploymentsPage } from "@/components/apps/DeploymentsPage";
 import { ProjectsPage } from "@/routes/projects";
+import { ProjectLayout } from "@/routes/project.$projectId";
+import { ProjectOverviewPage } from "@/components/projects/ProjectOverview";
+import { ProjectReleasesPage, ProjectReleasePage } from "@/components/projects/ProjectReleases";
+import { ProjectLogsPage } from "@/components/projects/ProjectLogs";
+import { ProjectDomainsPage } from "@/components/projects/ProjectDomains";
+import { ProjectSettingsPage, ProjectVariablesPage, ProjectDatastoresPage } from "@/components/projects/ProjectSettings";
 
 const rootRoute = createRootRouteWithContext<{ queryClient: QueryClient }>()({
   component: () => <Outlet />
@@ -128,8 +134,20 @@ const backupsRoute = createRoute({
 const projectsRoute = createRoute({
   getParentRoute: () => authedLayoutRoute,
   path: "projects",
-  component: ProjectsPage
+  component: () => <Outlet />
 });
+
+const projectsIndexRoute = createRoute({ getParentRoute: () => projectsRoute, path: "/", component: ProjectsPage });
+const projectRoute = createRoute({ getParentRoute: () => projectsRoute, path: "$projectId", component: ProjectLayout });
+const projectIndexRoute = createRoute({ getParentRoute: () => projectRoute, path: "/", beforeLoad: ({ params }) => { throw redirect({ to: "/projects/$projectId/overview", params }); } });
+const projectOverviewRoute = createRoute({ getParentRoute: () => projectRoute, path: "overview", component: ProjectOverviewPage });
+const projectReleasesRoute = createRoute({ getParentRoute: () => projectRoute, path: "releases", component: ProjectReleasesPage });
+const projectReleaseRoute = createRoute({ getParentRoute: () => projectRoute, path: "releases/$releaseId", component: ProjectReleasePage });
+const projectLogsRoute = createRoute({ getParentRoute: () => projectRoute, path: "logs", component: ProjectLogsPage, validateSearch: (search: Record<string, unknown>): { serviceId?: string; releaseId?: string } => ({ serviceId: typeof search.serviceId === "string" ? search.serviceId : undefined, releaseId: typeof search.releaseId === "string" ? search.releaseId : undefined }) });
+const projectDomainsRoute = createRoute({ getParentRoute: () => projectRoute, path: "domains", component: ProjectDomainsPage });
+const projectVariablesRoute = createRoute({ getParentRoute: () => projectRoute, path: "variables", component: ProjectVariablesPage });
+const projectDatastoresRoute = createRoute({ getParentRoute: () => projectRoute, path: "datastores", component: ProjectDatastoresPage });
+const projectSettingsRoute = createRoute({ getParentRoute: () => projectRoute, path: "settings", component: ProjectSettingsPage });
 
 const datastoresRoute = createRoute({
   getParentRoute: () => authedLayoutRoute,
@@ -273,7 +291,7 @@ const routeTree = rootRoute.addChildren([
         deploymentsLayoutRoute.addChildren([deploymentsIndexRoute, deploymentsWithIdRoute])
       ])
     ]),
-    projectsRoute,
+    projectsRoute.addChildren([projectsIndexRoute, projectRoute.addChildren([projectIndexRoute, projectOverviewRoute, projectReleasesRoute, projectReleaseRoute, projectLogsRoute, projectDomainsRoute, projectVariablesRoute, projectDatastoresRoute, projectSettingsRoute])]),
     backupsRoute,
     datastoresRoute,
     datastoreDetailRoute,

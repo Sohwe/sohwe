@@ -10,6 +10,18 @@ write-ups.
 
 ## [Unreleased]
 
+### Added
+
+- Projects have full Overview, Releases, Logs, Domains, Variables, Datastores, and Settings pages, with deep links, release history and rollback, per-service URLs, domain add/remove/primary and DNS inspection, encrypted variable management, datastore bindings, and a service creation form.
+- Project logs have service/release/stream/severity/time filters, paged retained history, live pause/resume with cursor reconnects, loaded-line search, follow, copy and bounded download. Release pages fetch only the selected service's admin-only build output; release summaries remain member-readable.
+- Added a real Docker/Traefik routing regression check through `pnpm --filter @sohwe/worker test:routing`.
+
+### Fixed
+
+- Project HTTP probes stay private and disabled in Traefik until initial readiness passes. Promotion creates routed instances with both networks attached before startup, then rechecks HTTP and dependent-service readiness before retiring the previous release. This prevents a successful release from keeping an unreachable project-private backend cached in Traefik.
+- Project log-history queries start at the newest retained events and support older cursors and validated date ranges. Live log events include their persisted timestamp for consistent history and streaming display.
+
+
 ## [0.12.0] - 2026-10-03
 
 ### Added

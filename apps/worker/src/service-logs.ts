@@ -14,6 +14,7 @@ export type ServiceLogMeta = {
 
 export type ServiceLogEvent = ServiceLogMeta & {
   id?: string;
+  createdAt?: Date;
   stream: "stdout" | "stderr" | "system";
   level: "debug" | "info" | "warn" | "error";
   message: string;

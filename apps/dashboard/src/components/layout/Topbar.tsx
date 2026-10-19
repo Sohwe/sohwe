@@ -15,7 +15,7 @@ import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useTheme } from "./ThemeProvider";
 import { MobileNav } from "./Sidebar";
-import type { AppRow, Me } from "@/lib/types";
+import type { AppRow, Me, ProjectRow } from "@/lib/types";
 import { shortDepId } from "@/lib/format";
 
 function tabLabel(tab: string | undefined, sub: string | undefined): string {
@@ -56,6 +56,8 @@ export function Topbar({ me }: { me: Me }) {
     enabled: Boolean(appId),
     staleTime: 30_000
   });
+  const projectId = pathname.match(/^\/projects\/([^/]+)/)?.[1];
+  const projectQuery = useQuery({ queryKey: ["project", projectId], queryFn: () => api<ProjectRow>(`/api/projects/${projectId}`), enabled: Boolean(projectId), staleTime: 5_000 });
   const app = appId ? appsQuery.data?.find((a) => a.id === appId) : undefined;
 
   const { segments, appNameLabel } = useMemo(() => {
@@ -113,7 +115,7 @@ export function Topbar({ me }: { me: Me }) {
         <MobileNav me={me} />
       </div>
       <nav className="flex min-w-0 flex-1 items-center gap-1 text-sm" aria-label="Breadcrumb">
-        {crumbs.map((c, i) => {
+        {projectId ? <div className="flex min-w-0 items-center gap-1"><Link to="/projects" className="text-muted-foreground hover:text-foreground">Projects</Link><ChevronRight className="size-3.5 shrink-0 text-muted-foreground" /><Link to="/projects/$projectId/overview" params={{ projectId }} className="max-w-40 truncate text-muted-foreground hover:text-foreground">{projectQuery.data?.name ?? "Project"}</Link><ChevronRight className="size-3.5 shrink-0 text-muted-foreground" /><span className="truncate font-medium">{pathname.includes("/releases/") ? `Release ${pathname.split("/")[4]?.slice(0, 8)}` : pathname.split("/")[3] ? pathname.split("/")[3]!.charAt(0).toUpperCase() + pathname.split("/")[3]!.slice(1) : "Overview"}</span></div> : crumbs.map((c, i) => {
           const isLast = i === crumbs.length - 1;
           return (
             <div key={i} className="flex min-w-0 items-center gap-1">

@@ -533,7 +533,14 @@ export const ProjectRollbackBodySchema = z.object({
 });
 export type ProjectRollbackBody = z.infer<typeof ProjectRollbackBodySchema>;
 
+export const ProjectReleasesQuerySchema = z.object({
+  cursor: z.string().uuid().optional(),
+  limit: z.coerce.number().int().min(1).max(50).default(20)
+});
+
 export const ServiceLogsQuerySchema = z.object({
+  from: z.string().datetime({ offset: true }).optional(),
+  to: z.string().datetime({ offset: true }).optional(),
   serviceId: z.string().uuid().optional(),
   releaseId: z.string().uuid().optional(),
   stream: z.enum(["stdout", "stderr", "system"]).optional(),
@@ -541,6 +548,8 @@ export const ServiceLogsQuerySchema = z.object({
   after: z.coerce.bigint().nonnegative().optional(),
   before: z.coerce.bigint().positive().optional(),
   limit: z.coerce.number().int().min(1).max(1000).default(200)
+}).refine((query) => !query.from || !query.to || Date.parse(query.from) <= Date.parse(query.to), {
+  message: "Start time must be before end time", path: ["to"]
 });
 export type ServiceLogsQuery = z.infer<typeof ServiceLogsQuerySchema>;
 

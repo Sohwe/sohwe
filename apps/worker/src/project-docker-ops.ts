@@ -1,3 +1,4 @@
+import type Docker from "dockerode";
 import { DATASTORE_LABEL, projectInternalNetworkName } from "@sohwe/types";
 
 type ProjectDocker = {
@@ -80,16 +81,18 @@ export async function ensureProjectNetwork(
   return name;
 }
 
-export async function connectHttpServiceToRoutingNetwork(
-  docker: ProjectDocker,
-  routingNetwork: string,
-  containerId: string
-): Promise<void> {
-  try {
-    await docker.getNetwork(routingNetwork).connect({ Container: containerId });
-  } catch (error) {
-    if (statusCodeOf(error) !== 403) throw error;
-  }
+/** Replace the validated private probe with its routed instance. Docker labels
+ * are immutable, so a new container enables Traefik only at promotion. Its
+ * spec already includes both networks: the first start event exposes the
+ * correct address to Traefik, with no network-connect refresh race. */
+export async function promoteProjectHttpContainer(
+  docker: Pick<Docker, "createContainer">,
+  probe: Pick<Docker.Container, "stop" | "remove">,
+  routedSpec: Docker.ContainerCreateOptions
+): Promise<Docker.Container> {
+  await probe.stop({ t: 10 });
+  await probe.remove();
+  return docker.createContainer(routedSpec);
 }
 
 /** Remove project containers except an optional newly promoted release. */

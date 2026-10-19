@@ -243,18 +243,49 @@ repository needs a one-time migration command. Common service fields stay in
 view; build, health, dependency, domain, and variable settings expand when
 needed. **Create and release** saves the project and queues its first release;
 **Save draft** defers deployment. If queueing fails, retrying uses the saved
-project instead of creating another one. The project card shows the latest
-release and each service's status. Admins can open **Build logs** there to follow an
-individual service's build and diagnose failures; **Service logs** shows
-container output after startup.
+project instead of creating another one. Projects now open a full workspace with **Overview**, **Releases**, **Logs**,
+**Domains**, **Variables**, **Datastores**, and **Settings** tabs. The overview
+shows generated and custom URLs for each HTTP service, the current release,
+and the latest attempt. Project creation opens the new release directly, or
+Settings for a saved draft.
+
+Release history has stable detail URLs, cursor pagination, per-service results,
+rollback actions, admin-only selected-service build output, and links to retained
+runtime and release-job output. Logs support service/release/stream/severity and
+date-range filters, live pause/resume, older pages, search, follow, copy and
+bounded downloads. Time ranges use local inputs and UTC log timestamps.
+
+Use **Domains** to add or remove a hostname, choose a primary domain, check DNS,
+and copy the required record for each HTTP service. DNS must point at the host
+before certificate issuance. Routing changes take effect on the next release.
+**Variables** separates shared runtime values from scoped service values;
+**Datastores** manages private bindings. **Settings** provides the existing form
+and JSON configuration on a full page, plus a form to add services. Admin-only
+sections are hidden from members and their endpoints retain role checks.
 
 For larger pnpm monorepos, both the **New project** dialog and an existing
-project's **Settings** dialog have a JSON mode. Paste the complete project
+project's **Settings** page have a JSON mode. Paste the complete project
 object or upload a `.json` file instead of filling every service field
 individually. The new-project editor starts with a pnpm workspace example and
 uses the same validation and defaults as the visual form. When updating an
 existing project, services are matched by slug, new slugs create services, and
 omitted services are preserved.
+
+At promotion, validated private HTTP probes are replaced with routed containers
+that have both networks attached before their first start. Readiness is checked
+again before retiring the old release. Traefik's Docker provider does not refresh a
+cached backend on a network-connect event alone; the start event makes it use
+the correct proxy-network address. The old release remains until routed
+HTTP candidates and their dependent services pass readiness. This applies to
+normal releases and coordinated rollbacks. The refresh is logged in service
+output. To run the isolated real-Docker regression check (requires the local
+`traefik:v3.7` and `node:24-bookworm-slim` images):
+
+```sh
+docker pull traefik:v3.7
+docker pull node:24-bookworm-slim
+pnpm --filter @sohwe/worker test:routing
+```
 
 Project service logs are persisted separately from build logs, tagged by
 service and release, and available as both bounded history and authenticated

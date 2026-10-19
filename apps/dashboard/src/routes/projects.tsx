@@ -1,12 +1,13 @@
-import { useEffect, useRef, useState } from "react";
+import { Link, useNavigate } from "@tanstack/react-router";
+import { useAppConfig } from "@/lib/config";
+import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CreateProjectSchema, normalizeHostname, type VariableEntry } from "@sohwe/types";
-import { Boxes, FileJson, Plus, Rocket, RotateCcw, Settings, Trash2, Upload } from "lucide-react";
+import { Boxes, FileJson, Plus, Rocket, ExternalLink, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/common/PageHeader";
 import { EmptyState } from "@/components/common/EmptyState";
 import { Field } from "@/components/common/Field";
-import { EditProjectDialog } from "@/components/projects/EditProjectDialog";
 import { ServiceVariableDraftEditor } from "@/components/projects/ServiceVariableDraftEditor";
 import { splitServiceVariables } from "@/components/projects/service-variables";
 import { Badge } from "@/components/ui/badge";
@@ -31,7 +32,7 @@ import {
 } from "@/components/ui/select";
 import { api, apiGet, fetchMe } from "@/lib/api";
 import { isAdmin } from "@/lib/roles";
-import type { Me, ProjectRelease, ProjectRow, RepositoryInspection, RepositoryInspectionCandidate } from "@/lib/types";
+import type { Me, ProjectRow, RepositoryInspection, RepositoryInspectionCandidate } from "@/lib/types";
 
 type ServiceDraft = {
   key: string;
@@ -273,7 +274,7 @@ function CreateProjectDialog({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onReleased: (projectId: string) => void;
+  onReleased: (projectId: string, releaseId?: string) => void;
 }) {
   const client = useQueryClient();
   const [name, setName] = useState("");
@@ -365,10 +366,10 @@ function CreateProjectDialog({
   });
 
   const release = useMutation({
-    mutationFn: (project: ProjectRow) => api(`/api/projects/${project.id}/deploy`, { method: "POST" }),
-    onSuccess: (_result, project) => {
+    mutationFn: (project: ProjectRow) => api<{ release: { id: string } }>(`/api/projects/${project.id}/deploy`, { method: "POST" }),
+    onSuccess: (result, project) => {
       void client.invalidateQueries({ queryKey: ["projects"] });
-      onReleased(project.id);
+      onReleased(project.id, result.release.id);
       closeDialog();
       toast.success("First project release queued");
     },
@@ -403,6 +404,7 @@ function CreateProjectDialog({
       else {
         closeDialog();
         toast.success("Project saved as a draft");
+        onReleased(project.id);
       }
     },
     onError: (cause) => setError(projectConfigError(cause))
@@ -903,203 +905,15 @@ function CreateProjectDialog({
   );
 }
 
-function ProjectLogs({ project }: { project: ProjectRow }) {
-  const [lines, setLines] = useState<string[]>([]);
-  const [serviceId, setServiceId] = useState("all");
-  const projectId = project.id;
-  const serviceLabelKey = JSON.stringify(
-    project.services.map((service) => [service.id, service.slug])
-  );
-  useEffect(() => {
-    const serviceLabels = new Map<string, string>(JSON.parse(serviceLabelKey));
-    const query = new URLSearchParams({ limit: "200" });
-    if (serviceId !== "all") query.set("serviceId", serviceId);
-    const source = new EventSource(`/api/projects/${projectId}/logs?${query.toString()}`);
-    source.onmessage = (event) => {
-      const payload = JSON.parse(event.data) as {
-        type: string;
-        logs?: { stream: string; message: string; serviceId: string }[];
-        stream?: string;
-        message?: string;
-        serviceId?: string;
-      };
-      const serviceName = (id: string | undefined) =>
-        (id ? serviceLabels.get(id) : undefined) ?? id?.slice(0, 8) ?? "service";
-      const next =
-        payload.type === "replay"
-          ? (payload.logs ?? []).map(
-              (line) => `[${serviceName(line.serviceId)} ${line.stream}] ${line.message}`
-            )
-          : payload.message
-            ? [`[${serviceName(payload.serviceId)} ${payload.stream ?? "stdout"}] ${payload.message}`]
-            : [];
-      setLines((current) => [...(payload.type === "replay" ? [] : current), ...next].slice(-500));
-    };
-    return () => source.close();
-  }, [projectId, serviceId, serviceLabelKey]);
-  return (
-    <div className="mt-3 space-y-2">
-      <Select
-        value={serviceId}
-        onValueChange={(value) => {
-          setLines([]);
-          setServiceId(value);
-        }}
-      >
-        <SelectTrigger className="w-full sm:w-56"><SelectValue /></SelectTrigger>
-        <SelectContent>
-          <SelectItem value="all">All services</SelectItem>
-          {project.services.map((service) => (
-            <SelectItem key={service.id} value={service.id}>
-              {service.name} ({service.kind})
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      <pre className="max-h-64 overflow-auto rounded-md bg-muted p-3 text-xs">
-        {lines.length ? lines.join("\n") : "No service logs yet."}
-      </pre>
-    </div>
-  );
-}
-
-type ProjectReleaseDetails = Omit<ProjectRelease, "serviceDeployments"> & {
-  serviceDeployments: (ProjectRelease["serviceDeployments"][number] & { buildLogs: string })[];
-};
-
-function ProjectBuildLogs({ releaseId, active }: { releaseId: string; active: boolean }) {
-  const [serviceId, setServiceId] = useState("");
-  const release = useQuery({
-    queryKey: ["project-release", releaseId],
-    queryFn: () => apiGet<ProjectReleaseDetails>(`/api/project-releases/${releaseId}`),
-    refetchInterval: active ? 2_000 : false
-  });
-  const deployments = release.data?.serviceDeployments ?? [];
-  const selected = deployments.find((deployment) => deployment.serviceId === serviceId) ?? deployments[0];
-  return <div className="mt-3 space-y-2 rounded-md border border-border/70 p-3">
-    <div className="flex flex-wrap items-center justify-between gap-2">
-      <p className="text-sm font-medium">Build logs for this release</p>
-      {deployments.length ? <Select value={selected?.serviceId} onValueChange={setServiceId}>
-        <SelectTrigger className="w-full sm:w-56"><SelectValue /></SelectTrigger>
-        <SelectContent>{deployments.map((deployment) => <SelectItem key={deployment.serviceId} value={deployment.serviceId}>{deployment.service.name} · {deployment.status}</SelectItem>)}</SelectContent>
-      </Select> : null}
-    </div>
-    {release.isLoading ? <p className="text-xs text-muted-foreground" role="status">Loading build logs…</p> : null}
-    {release.isError ? <p className="text-xs text-destructive" role="alert">Could not load build logs. Close and reopen this panel to retry.</p> : null}
-    {selected?.errorMessage ? <p className="text-xs text-destructive">{selected.errorMessage}</p> : null}
-    {selected ? <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted p-3 text-xs" aria-label={`${selected.service.name} build log`}>{selected.buildLogs || (active ? "Waiting for build output…" : "No build output was recorded.")}</pre> : null}
-  </div>;
-}
-
-function ProjectCard({ project, canEdit, justReleased }: { project: ProjectRow; canEdit: boolean; justReleased: boolean }) {
-  const client = useQueryClient();
-  const [logs, setLogs] = useState(false);
-  const [buildLogsOverride, setBuildLogsOverride] = useState<boolean | null>(null);
-  const [editing, setEditing] = useState(false);
-  const latest = project.releases[0];
-  const buildLogsOpen = buildLogsOverride ?? justReleased;
-  const deploy = useMutation({
-    mutationFn: () => api(`/api/projects/${project.id}/deploy`, { method: "POST" }),
-    onSuccess: () => {
-      toast.success("Coordinated release queued");
-      setBuildLogsOverride(true);
-      void client.invalidateQueries({ queryKey: ["projects"] });
-    },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "Deploy failed")
-  });
-  const previous = project.releases.find(
-    (release) => release.status === "success" && release.id !== project.currentReleaseId
-  );
-  const rollback = useMutation({
-    mutationFn: () =>
-      api(`/api/projects/${project.id}/rollback`, {
-        method: "POST",
-        body: JSON.stringify({ sourceReleaseId: previous?.id })
-      }),
-    onSuccess: () => toast.success("Coordinated rollback queued"),
-    onError: (error) => toast.error(error instanceof Error ? error.message : "Rollback failed")
-  });
-
-  return (
-    <Card className={justReleased ? "border-primary/60" : undefined}>
-      <CardHeader className="pb-3">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <CardTitle className="text-base">{project.name}</CardTitle>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {project.repoFullName ?? project.gitRepo} · {project.gitBranch}
-            </p>
-          </div>
-          <Badge variant="outline">{project.status}</Badge>
-        </div>
-      </CardHeader>
-      <CardContent>
-        <div className="flex flex-wrap gap-2">
-          {project.services.map((service) => (
-            <Badge key={service.id} variant="secondary">
-              {service.slug}: {service.kind}
-              {service.dockerTarget ? ` / ${service.dockerTarget}` : ""}
-            </Badge>
-          ))}
-        </div>
-        {latest ? (
-          <div className="mt-4 rounded-md border border-border/70 bg-muted/20 p-3 text-sm" aria-live="polite">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="font-medium">Latest release</span>
-              <Badge variant="outline">{latest.status}</Badge>
-              {latest.commitSha ? <span className="font-mono text-xs text-muted-foreground">{latest.commitSha.slice(0, 12)}</span> : null}
-            </div>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {latest.serviceDeployments.map((deployment) => (
-                <span key={deployment.id} className="rounded bg-background px-2 py-1 text-xs">
-                  {deployment.service.slug}: {deployment.status}
-                </span>
-              ))}
-            </div>
-            {latest.errorMessage ? <p className="mt-2 text-destructive">{latest.errorMessage}</p> : null}
-            {latest.serviceDeployments.filter((deployment) => deployment.errorMessage).map((deployment) => (
-              <p key={deployment.id} className="mt-1 text-xs text-destructive">{deployment.service.name}: {deployment.errorMessage}</p>
-            ))}
-          </div>
-        ) : <p className="mt-4 text-xs text-muted-foreground">Draft · ready for its first release</p>}
-        <div className="mt-4 flex flex-wrap gap-2">
-          <Button size="sm" onClick={() => deploy.mutate()} disabled={deploy.isPending || latest?.status === "pending" || latest?.status === "building" || latest?.status === "releasing" || latest?.status === "deploying"}>
-            <Rocket className="mr-2 h-4 w-4" /> Release
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={!previous || rollback.isPending}
-            onClick={() => rollback.mutate()}
-            title="Database migrations remain forward-only"
-          >
-            <RotateCcw className="mr-2 h-4 w-4" /> Roll back services
-          </Button>
-          <Button size="sm" variant="ghost" onClick={() => setLogs((value) => !value)}>
-            {logs ? "Hide logs" : "Service logs"}
-          </Button>
-          {canEdit && latest ? <Button size="sm" variant="outline" onClick={() => setBuildLogsOverride(!buildLogsOpen)}>
-            {buildLogsOpen ? "Hide build logs" : "Build logs"}
-          </Button> : null}
-          {canEdit ? (
-            <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
-              <Settings className="mr-2 h-4 w-4" /> Configure
-            </Button>
-          ) : null}
-        </div>
-        {canEdit && buildLogsOpen && latest ? <ProjectBuildLogs key={latest.id} releaseId={latest.id} active={["pending", "building", "releasing", "deploying"].includes(latest.status)} /> : null}
-        {logs ? <ProjectLogs project={project} /> : null}
-        {editing ? (
-          <EditProjectDialog project={project} open={editing} onOpenChange={setEditing} />
-        ) : null}
-      </CardContent>
-    </Card>
-  );
+function ProjectCard({ project }: { project: ProjectRow }) {
+  const { httpsEnabled } = useAppConfig();
+  const domain = project.services.flatMap(service => service.domains)[0]?.hostname;
+  return <Card className="transition-colors hover:border-primary/50"><CardHeader className="pb-3"><div className="flex items-center justify-between gap-2"><CardTitle className="text-base"><Link className="hover:text-primary" to="/projects/$projectId/overview" params={{ projectId: project.id }}>{project.name}</Link></CardTitle><Badge variant="outline">{project.status}</Badge></div><p className="truncate text-xs text-muted-foreground">{project.repoFullName ?? project.gitRepo} · {project.gitBranch}</p></CardHeader><CardContent className="space-y-4"><p className="text-sm text-muted-foreground">{project.services.length} services · Latest release: {project.releases[0]?.status ?? "none"}</p>{domain ? <a href={`${httpsEnabled ? "https" : "http"}://${domain}`} target="_blank" rel="noreferrer" className="inline-flex max-w-full items-center gap-1 text-sm text-primary hover:underline"><span className="truncate">{domain}</span><ExternalLink className="size-3 shrink-0" /></a> : <p className="text-sm text-muted-foreground">No custom domains</p>}<div><Button asChild variant="outline" size="sm"><Link to="/projects/$projectId/overview" params={{ projectId: project.id }}>Open project</Link></Button></div></CardContent></Card>;
 }
 
 export function ProjectsPage() {
   const [open, setOpen] = useState(false);
-  const [justReleasedId, setJustReleasedId] = useState<string | null>(null);
+  const navigate = useNavigate();
   const projects = useQuery({
     queryKey: ["projects"],
     queryFn: () => apiGet<ProjectRow[]>("/api/projects"),
@@ -1122,7 +936,10 @@ export function ProjectsPage() {
           ) : undefined
         }
       />
-      <CreateProjectDialog open={open} onOpenChange={setOpen} onReleased={setJustReleasedId} />
+      <CreateProjectDialog open={open} onOpenChange={setOpen} onReleased={(projectId, releaseId) => {
+        if (releaseId) void navigate({ to: "/projects/$projectId/releases/$releaseId", params: { projectId, releaseId } });
+        else void navigate({ to: "/projects/$projectId/settings", params: { projectId } });
+      }} />
       {projects.isError ? <p className="text-destructive">Could not load projects.</p> : null}
       {projects.data?.length === 0 ? (
         <EmptyState
@@ -1134,7 +951,7 @@ export function ProjectsPage() {
       ) : null}
       <div className="grid gap-4 xl:grid-cols-2">
         {projects.data?.map((project) => (
-          <ProjectCard key={project.id} project={project} canEdit={isAdmin(me)} justReleased={justReleasedId === project.id} />
+          <ProjectCard key={project.id} project={project} />
         ))}
       </div>
     </div>

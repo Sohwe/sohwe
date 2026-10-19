@@ -533,6 +533,42 @@ describe("API routes", { skip }, () => {
       assert.equal(adminDetail.statusCode, 200);
     });
 
+    it("paginates release summaries, protects selected build logs and keeps history scoped", async () => {
+      const cookie = await signIn();
+      const created = await app.inject({ method: "POST", url: "/api/projects", headers: { cookie }, payload: fleet });
+      const project = created.json() as { id: string; services: { id: string }[] };
+      const releases = [];
+      for (let index = 0; index < 3; index++) releases.push(await prisma.projectRelease.create({ data: { projectId: project.id, status: "success", createdAt: new Date(1700000000000 + index * 1000), serviceDeployments: { create: { serviceId: project.services[0]!.id, status: "success", buildLogs: "admin-only-build-output" } } }, include: { serviceDeployments: true } }));
+      const memberCookie = await signInAs("member");
+      const headers = { cookie: memberCookie };
+      const page = await app.inject({ method: "GET", url: `/api/projects/${project.id}/releases?limit=2`, headers });
+      assert.equal(page.statusCode, 200);
+      assert.deepEqual(page.json().releases.map((row: { id: string }) => row.id), [releases[2]!.id, releases[1]!.id]);
+      assert.ok(!page.body.includes("admin-only-build-output"));
+      const older = await app.inject({ method: "GET", url: `/api/projects/${project.id}/releases?limit=2&cursor=${page.json().nextCursor}`, headers });
+      assert.deepEqual(older.json().releases.map((row: { id: string }) => row.id), [releases[0]!.id]);
+      assert.equal(older.json().nextCursor, null);
+      const release = releases[0]!;
+      const summary = await app.inject({ method: "GET", url: `/api/projects/${project.id}/releases/${release.id}`, headers });
+      assert.equal(summary.statusCode, 200); assert.ok(!summary.body.includes("admin-only-build-output"));
+      const path = `/api/projects/${project.id}/releases/${release.id}/services/${project.services[0]!.id}/build-logs`;
+      assert.equal((await app.inject({ method: "GET", url: path, headers })).statusCode, 403);
+      assert.equal((await app.inject({ method: "GET", url: path, headers: { cookie } })).json().buildLogs, "admin-only-build-output");
+      for (let index = 0; index < 4; index++) await prisma.serviceLog.create({ data: { projectId: project.id, serviceId: project.services[0]!.id, releaseId: release.id, serviceDeploymentId: release.serviceDeployments[0]!.id, stream: index % 2 ? "stderr" : "stdout", level: index % 2 ? "error" : "info", message: `line-${index}`, createdAt: new Date(1700000000000 + index * 1000) } });
+      const latest = await app.inject({ method: "GET", url: `/api/projects/${project.id}/log-history?limit=2`, headers });
+      assert.deepEqual(latest.json().logs.map((row: { message: string }) => row.message), ["line-2", "line-3"]);
+      const before = await app.inject({ method: "GET", url: `/api/projects/${project.id}/log-history?before=${latest.json().logs[0].id}&limit=2`, headers });
+      assert.deepEqual(before.json().logs.map((row: { message: string }) => row.message), ["line-0", "line-1"]);
+      const range = new URLSearchParams({ from: new Date(1700000001000).toISOString(), to: new Date(1700000003000).toISOString(), level: "error" });
+      const filtered = await app.inject({ method: "GET", url: `/api/projects/${project.id}/log-history?${range}`, headers });
+      assert.deepEqual(filtered.json().logs.map((row: { message: string }) => row.message), ["line-1", "line-3"]);
+      const other = await prisma.organization.create({ data: { name: "Other", slug: "other-projects" } });
+      const foreign = await prisma.project.create({ data: { organizationId: other.id, name: "Private", slug: "private", gitRepo: fleet.gitRepo } });
+      const foreignPath = path.replace(project.id, foreign.id);
+      assert.equal((await app.inject({ method: "GET", url: foreignPath, headers: { cookie } })).statusCode, 404);
+      assert.equal((await app.inject({ method: "GET", url: `/api/projects/${foreign.id}/log-history`, headers: { cookie } })).statusCode, 404);
+    });
+
     it("binds one datastore consistently to selected project services", async () => {
       const cookie = await signIn();
       const created = await app.inject({

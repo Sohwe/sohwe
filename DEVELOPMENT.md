@@ -85,3 +85,11 @@ That value is baked into the GitHub App's webhook and redirect URLs when GitHub 
 ## Upcoming work
 
 See [`UPCOMING_PLANS.md`](./UPCOMING_PLANS.md) for the active Phase 9 checklist and later plans.
+
+## Isolated dashboard checks
+
+Set `SOHWE_DEV_API_URL=http://127.0.0.1:4301` when starting Vite to proxy a
+separate local API instead of the default port 3001. This is development-only
+and does not change production routing. Point that API and `TEST_DATABASE_URL`
+at disposable databases for destructive route tests; use an isolated Redis URL
+for queue-producing checks.

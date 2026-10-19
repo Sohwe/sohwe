@@ -9,6 +9,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "test": "node --import tsx --test src/build-log.test.ts src/build-failure.test.ts src/container-spec.test.ts src/project-container-spec.test.ts src/service-logs.test.ts src/datastore-spec.test.ts src/stats.test.ts src/crash-watch.test.ts src/runtime-logs.test.ts src/docker-ops.test.ts src/image-source.test.ts",
+    "test:routing": "node --import tsx --test src/project-routing.integration.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

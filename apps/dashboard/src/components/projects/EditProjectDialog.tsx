@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BuildArgsPatchSchema,
@@ -236,11 +236,20 @@ function hasPatch(patch: {
   return Object.keys(patch.set ?? {}).length > 0 || (patch.unset?.length ?? 0) > 0;
 }
 
+function ProjectEditorFrame({ inline, open, onOpenChange, name, children }: {
+  inline: boolean; open: boolean; onOpenChange: (open: boolean) => void; name: string; children: ReactNode;
+}) {
+  if (inline) return <section className="space-y-5 rounded-xl border bg-card p-5"><div><h2 className="text-base font-semibold">Project and service settings</h2><p className="mt-1 text-sm text-muted-foreground">Changes apply on the next coordinated release. Expand a service to edit its build, runtime, dependencies and health checks.</p></div>{children}</section>;
+  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl"><DialogHeader><DialogTitle>Edit {name}</DialogTitle><DialogDescription>Changes apply on the next coordinated release. Project and service slugs stay fixed.</DialogDescription></DialogHeader>{children}</DialogContent></Dialog>;
+}
+
 export function EditProjectDialog({
   project,
   open,
-  onOpenChange
+  onOpenChange,
+  inline = false
 }: {
+  inline?: boolean;
   project: ProjectRow;
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -254,6 +263,12 @@ export function EditProjectDialog({
   const [services, setServices] = useState<ServiceDraft[]>(() =>
     project.services.map(draftFrom)
   );
+  const serviceIds = project.services.map(service => service.id).join(",");
+  const [knownServiceIds, setKnownServiceIds] = useState(serviceIds);
+  if (knownServiceIds !== serviceIds) {
+    setKnownServiceIds(serviceIds);
+    setServices(current => project.services.map(service => current.find(draft => draft.id === service.id) ?? draftFrom(service)));
+  }
   const [inputMode, setInputMode] = useState<"form" | "json">("form");
   const [jsonConfig, setJsonConfig] = useState(() => jsonConfigFrom(project));
   const [jsonPreviewsLoaded, setJsonPreviewsLoaded] = useState(false);
@@ -484,31 +499,31 @@ export function EditProjectDialog({
             method: "PATCH",
             body: JSON.stringify(servicePatch)
           });
-          await api(`/api/services/${service.id}/domains`, {
-            method: "PUT",
-            body: JSON.stringify(domains)
-          });
+          const savedDomains = project.services.find(saved => saved.id === service.id)?.domains.map(domain => domain.hostname) ?? [];
+          if (JSON.stringify(savedDomains) !== JSON.stringify(domains.domains)) {
+            await api(`/api/services/${service.id}/domains`, {
+              method: "PUT",
+              body: JSON.stringify(domains)
+            });
+          }
         })
       );
     },
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: ["projects"] });
+      void client.invalidateQueries({ queryKey: ["project"] });
+      void client.invalidateQueries({ queryKey: ["project-configuration"] });
       onOpenChange(false);
       toast.success("Project configuration saved");
     },
-    onError: (error) => toast.error(jsonConfigError(error))
+    onError: (error) => {
+      void client.invalidateQueries({ queryKey: ["project"] });
+      toast.error(`${jsonConfigError(error)} Some changes may already be saved; review the configuration before retrying.`);
+    }
   });
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl">
-        <DialogHeader>
-          <DialogTitle>Edit {project.name}</DialogTitle>
-          <DialogDescription>
-            Changes apply to the next coordinated release. The project and service slugs stay fixed
-            because they identify the private network and its services.
-          </DialogDescription>
-        </DialogHeader>
+    <ProjectEditorFrame inline={inline} open={open} onOpenChange={onOpenChange} name={project.name}>
         <div className="grid grid-cols-2 gap-2 rounded-lg bg-muted p-1">
           <Button
             type="button"
@@ -573,7 +588,7 @@ export function EditProjectDialog({
 
           <div className="space-y-4">
             {services.map((service) => (
-              <details key={service.id} className="rounded-lg border p-4" open>
+              <details key={service.id} className="rounded-lg border p-4">
                 <summary className="cursor-pointer text-sm font-medium">
                   {service.name} ({service.kind})
                 </summary>
@@ -876,22 +891,20 @@ export function EditProjectDialog({
               </div>
             </div>
           )}
-          {inputMode === "form" ? <ProjectDatastoreBindings project={project} /> : null}
+          {inputMode === "form" && !inline ? <ProjectDatastoreBindings project={project} /> : null}
+          {save.isError ? <p role="alert" className="text-sm text-destructive">{jsonConfigError(save.error)} Some changes may already be saved. Review the configuration before retrying.</p> : null}
           <div className="flex justify-end gap-2">
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-              Cancel
-            </Button>
+            {!inline ? <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button> : null}
             <Button type="submit" disabled={save.isPending}>
               {save.isPending ? "Saving…" : "Save configuration"}
             </Button>
           </div>
         </form>
-      </DialogContent>
-    </Dialog>
+    </ProjectEditorFrame>
   );
 }
 
-function ProjectDatastoreBindings({ project }: { project: ProjectRow }) {
+export function ProjectDatastoreBindings({ project }: { project: ProjectRow }) {
   const client = useQueryClient();
   const projectQuery = useQuery({
     queryKey: ["project-configuration", project.id],
@@ -924,6 +937,7 @@ function ProjectDatastoreBindings({ project }: { project: ProjectRow }) {
   const refresh = () => {
     void client.invalidateQueries({ queryKey: ["project-configuration", project.id] });
     void client.invalidateQueries({ queryKey: ["projects"] });
+    void client.invalidateQueries({ queryKey: ["project"] });
     void client.invalidateQueries({ queryKey: ["datastores"] });
   };
   const bind = useMutation({

@@ -23,7 +23,7 @@ import type Docker from "dockerode";
 import { LogSink } from "./build-log";
 import { resolveRoutingConfig } from "./container-spec";
 import {
-  connectHttpServiceToRoutingNetwork,
+  promoteProjectHttpContainer,
   disconnectUnboundProjectDatastores,
   ensureProjectNetwork,
   stopAndRemoveProjectContainers
@@ -220,6 +220,7 @@ export function createProjectDeployer(deps: {
           }
         });
         id = created.id.toString();
+        event.createdAt = created.createdAt;
       } catch (error) {
         const code =
           error && typeof error === "object" && "code" in error
@@ -288,6 +289,7 @@ export function createProjectDeployer(deps: {
       }
     });
     event.id = created.id.toString();
+    event.createdAt = created.createdAt;
     const json = JSON.stringify({ type: "line", ...event });
     await Promise.all([
       deps.publish(serviceLogChannelName(event.serviceId), json),
@@ -587,6 +589,7 @@ export function createProjectDeployer(deps: {
         service: (typeof project.services)[number];
         deploymentId: string;
         container: Docker.Container;
+        routedSpec: Docker.ContainerCreateOptions;
         secrets: string[];
       }> = [];
       try {
@@ -602,21 +605,26 @@ export function createProjectDeployer(deps: {
             ...readVars(service.envVarsEncrypted),
             ...datastoreEnvFor(service.id)
           };
+          const specInput = {
+            project,
+            service: service as ProjectServiceSpec,
+            releaseId: release.id,
+            serviceDeploymentId: deployment.id,
+            imageTag: current.imageTag,
+            envList: toDockerEnvList(vars),
+            routing
+          };
           const container = await deps.docker.createContainer(
-            buildProjectServiceContainerSpec({
-              project,
-              service: service as ProjectServiceSpec,
-              releaseId: release.id,
-              serviceDeploymentId: deployment.id,
-              imageTag: current.imageTag,
-              envList: toDockerEnvList(vars),
-              routing
-            })
+            buildProjectServiceContainerSpec(specInput)
           );
           candidates.push({
             service,
             deploymentId: deployment.id,
             container,
+            routedSpec: buildProjectServiceContainerSpec({
+              ...specInput,
+              routeReady: true
+            }),
             secrets: [
               ...Object.values(vars),
               ...Object.values(readVars(service.buildArgsEncrypted))
@@ -696,19 +704,57 @@ export function createProjectDeployer(deps: {
         }
         await Promise.all(candidates.map(ensureReady));
 
-        // Traefik cannot see candidates while they are being checked. Attach
-        // routed services only after the whole release is ready, then retire
-        // the old containers below.
+        // Every private probe has passed initial readiness. Traefik must see
+        // both networks on the first routed start event; network-connect alone
+        // does not refresh its cached backend. Keep the old release until all
+        // routed instances and dependents pass readiness again.
+        const promotions = await Promise.allSettled(
+          candidates.filter((candidate) => candidate.service.kind === "http").map(async (candidate) => {
+            const since = Math.floor(Date.now() / 1000) - 1;
+            serviceLogs.stop(candidate.deploymentId);
+            candidate.container = await promoteProjectHttpContainer(
+              deps.docker,
+              candidate.container,
+              candidate.routedSpec
+            );
+            await prisma.serviceDeployment.update({
+              where: { id: candidate.deploymentId },
+              data: { containerId: candidate.container.id }
+            });
+            await candidate.container.start();
+            await serviceLogs.start(
+              {
+                projectId: project.id,
+                serviceId: candidate.service.id,
+                releaseId: release.id,
+                serviceDeploymentId: candidate.deploymentId,
+                containerId: candidate.container.id
+              },
+              candidate.container,
+              candidate.secrets,
+              since
+            );
+            await waitForCandidateReady(candidate.container, candidate.service);
+            await systemLog(
+              {
+                projectId: project.id,
+                serviceId: candidate.service.id,
+                releaseId: release.id,
+                serviceDeploymentId: candidate.deploymentId,
+                containerId: candidate.container.id,
+                restartNumber: 0
+              },
+              "[sohwe] HTTP routing refreshed; service is ready on the proxy network"
+            );
+          })
+        );
+        const failedPromotion = promotions.find(result => result.status === "rejected");
+        if (failedPromotion?.status === "rejected") throw failedPromotion.reason;
+        // Dependents must also remain stable while HTTP candidates refresh.
         await Promise.all(
-          candidates
-            .filter((candidate) => candidate.service.kind === "http")
-            .map((candidate) =>
-              connectHttpServiceToRoutingNetwork(
-                deps.docker,
-                routing.network,
-                candidate.container.id
-              )
-            )
+          candidates.map(candidate =>
+            waitForCandidateReady(candidate.container, candidate.service)
+          )
         );
       } catch (error) {
         for (const candidate of candidates) {

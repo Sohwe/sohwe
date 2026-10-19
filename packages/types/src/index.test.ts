@@ -874,3 +874,12 @@ describe("isApexHostname", () => {
     assert.equal(isApexHostname("a.b.c.example.com"), false);
   });
 });
+
+it("bounds project release pages and validates log time ranges", async () => {
+  const { ProjectReleasesQuerySchema, ServiceLogsQuerySchema } = await import("./index");
+  assert.equal(ProjectReleasesQuerySchema.parse({}).limit, 20);
+  assert.equal(ProjectReleasesQuerySchema.safeParse({ limit: 51 }).success, false);
+  assert.equal(ProjectReleasesQuerySchema.safeParse({ cursor: "invalid" }).success, false);
+  assert.equal(ServiceLogsQuerySchema.safeParse({ from: "2026-10-19T12:00:00Z", to: "2026-10-19T11:00:00Z" }).success, false);
+  assert.equal(ServiceLogsQuerySchema.safeParse({ from: "2026-10-19T11:00:00Z", to: "2026-10-19T12:00:00Z" }).success, true);
+});

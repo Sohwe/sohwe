@@ -8,7 +8,7 @@ import {
   type ProjectServiceSpec
 } from "./project-container-spec";
 import { orderRuntimeServices, waitForCandidateReady } from "./project-deploy";
-import { disconnectUnboundProjectDatastores } from "./project-docker-ops";
+import { disconnectUnboundProjectDatastores, promoteProjectHttpContainer } from "./project-docker-ops";
 
 const PROJECT = {
   id: "11111111-2222-3333-4444-555555555555",
@@ -59,7 +59,8 @@ describe("project service container specs", () => {
   it("routes only HTTP services and labels every identity dimension", () => {
     const result = spec(service({}));
     assert.equal(result.HostConfig?.NetworkMode, projectInternalNetworkName(PROJECT.id));
-    assert.equal(result.Labels?.["traefik.enable"], "true");
+    assert.equal(result.Labels?.["traefik.enable"], "false");
+    assert.equal(result.NetworkingConfig?.EndpointsConfig?.[ROUTING.network], undefined);
     assert.equal(result.Labels?.["sohwe.project"], PROJECT.id);
     assert.equal(result.Labels?.["sohwe.service-kind"], "http");
     assert.equal(result.Labels?.["sohwe.release"], RELEASE);
@@ -203,5 +204,21 @@ describe("project datastore network reconciliation", () => {
       new Set(["ds-keep"])
     );
     assert.deepEqual(disconnected, ["remove"]);
+  });
+});
+
+describe("project HTTP routing promotion", () => {
+  it("does not create a public container if removing the private probe fails", async () => {
+    const events: string[] = [];
+    const docker = { createContainer: async () => { events.push("create"); } };
+    const probe = { stop: async () => { events.push("stop"); }, remove: async () => { events.push("remove"); throw new Error("removal failed"); } };
+    await assert.rejects(promoteProjectHttpContainer(docker as never, probe as never, {}), /removal failed/);
+    assert.deepEqual(events, ["stop", "remove"]);
+  });
+  it("enables routing with the proxy network already attached on the final container", () => {
+    const routed = buildProjectServiceContainerSpec({ project: PROJECT, service: service({}), releaseId: RELEASE, serviceDeploymentId: DEPLOYMENT, imageTag: "test", envList: [], routing: ROUTING, routeReady: true });
+    assert.equal(routed.Labels?.["traefik.enable"], "true");
+    assert.ok(routed.NetworkingConfig?.EndpointsConfig?.[ROUTING.network]);
+    assert.deepEqual(routed.NetworkingConfig?.EndpointsConfig?.[projectInternalNetworkName(PROJECT.id)]?.Aliases, ["api"]);
   });
 });
