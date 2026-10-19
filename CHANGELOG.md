@@ -10,6 +10,8 @@ write-ups.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-19
+
 ### Added
 
 - Projects have full Overview, Releases, Logs, Domains, Variables, Datastores, and Settings pages, with deep links, release history and rollback, per-service URLs, domain add/remove/primary and DNS inspection, encrypted variable management, datastore bindings, and a service creation form.
@@ -20,7 +22,6 @@ write-ups.
 
 - Project HTTP probes stay private and disabled in Traefik until initial readiness passes. Promotion creates routed instances with both networks attached before startup, then rechecks HTTP and dependent-service readiness before retiring the previous release. This prevents a successful release from keeping an unreachable project-private backend cached in Traefik.
 - Project log-history queries start at the newest retained events and support older cursors and validated date ranges. Live log events include their persisted timestamp for consistent history and streaming display.
-
 
 ## [0.12.0] - 2026-10-03
 
